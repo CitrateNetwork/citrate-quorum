@@ -82,6 +82,17 @@ run "typecheck" "no package.json yet (design prototype, QRM-S2D)" "$HAS_NODE" np
 run "vitest"    "no package.json yet (design prototype, QRM-S2D)" "$HAS_NODE" npm test --silent
 run "build"     "no package.json yet (design prototype, QRM-S2D)" "$HAS_NODE" npm run --silent build
 
+# ---- generated-code drift -------------------------------------------------
+# WP-S1.5: the committed RBAC bindings must match a fresh generation from the
+# chain ABIs. Skips (not fails) if the chain repo isn't checked out alongside.
+echo
+echo "generated code"
+GEN="$ROOT/scripts/gen_rbac_bindings.py"
+if command -v uv >/dev/null 2>&1; then PYRUN=(uv run python3); else PYRUN=(python3); fi
+run "rbac bindings drift" "chain repo not alongside, or no python runner" \
+    "[ -f '$GEN' ] && { [ -d '$ROOT/../citrate-chain/contracts/out' ] || [ -n \"\${CITRATE_CHAIN_DIR:-}\" ]; }" \
+    "${PYRUN[@]}" "$GEN" --check
+
 # ---- agentile ratchets ----------------------------------------------------
 echo
 echo "agentile ratchets"

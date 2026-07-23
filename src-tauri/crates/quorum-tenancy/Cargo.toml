@@ -1,0 +1,17 @@
+# WP-S1.4 — the tenancy spine. Multi-tenancy as a day-one property (Q20).
+[package]
+name = "quorum-tenancy"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "citrate-quorum tenancy spine — TenantContext, the type-level gate that makes a tenant-less domain call a compile error, and per-(tenant,principal) scoping."
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+# trybuild drives the compile-fail proof (WP-S1.4 acceptance): a domain call
+# made without a TenantContext must NOT compile.
+trybuild = "1"

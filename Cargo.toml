@@ -1,0 +1,22 @@
+# citrate-quorum — backend workspace root.
+# The Tauri binary crate (src-tauri) lands in WP-S1.3 alongside the app skeleton;
+# until then this workspace carries the freeze-independent crates (tenancy,
+# license, rbac bindings) so S1.4/S1.5/S1.6 proceed without touching citrate-core.
+[workspace]
+resolver = "2"
+members = [
+    "src-tauri/crates/quorum-tenancy",
+    "src-tauri/crates/quorum-license",
+    "src-tauri/crates/quorum-rbac",
+]
+
+[workspace.package]
+edition = "2021"
+license = "BUSL-1.1"
+authors = ["Citrate Network"]
+rust-version = "1.80"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"

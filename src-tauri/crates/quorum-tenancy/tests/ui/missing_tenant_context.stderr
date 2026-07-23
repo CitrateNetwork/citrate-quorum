@@ -1,0 +1,15 @@
+error[E0061]: this method takes 1 argument but 0 arguments were supplied
+  --> tests/ui/missing_tenant_context.rs:19:15
+   |
+19 |     let _ = d.list();
+   |               ^^^^-- argument #1 of type `&TenantContext` is missing
+   |
+note: method defined here
+  --> tests/ui/missing_tenant_context.rs:10:8
+   |
+10 |     fn list<'a>(&self, ctx: &'a TenantContext) -> &'a TenantId {
+   |        ^^^^            ----------------------
+help: provide the argument
+   |
+19 |     let _ = d.list(/* &TenantContext */);
+   |                    ++++++++++++++++++++
