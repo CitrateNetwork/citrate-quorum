@@ -1,0 +1,56 @@
+# created: 2026-07-22 | branch: main
+# author: Claude Opus 4.8 (1M context), directed by @SaulBuilds
+# status: active
+#
+# Honest CI: this repo is a scaffold with no source code yet, so only the docs
+# checks run. The Rust + Node jobs (fmt, clippy -D warnings, test, cargo audit,
+# typecheck, vitest) and the Agentile ratchets land in the same PR as the code
+# they check — WP-S1.7. Adding them now would mean green checks that verify
+# nothing, which is the CI form of a mock.
+name: docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  frontmatter:
+    name: docs (frontmatter, links)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Every markdown doc has YAML frontmatter (Rule 12)
+        run: |
+          set -euo pipefail
+          fail=0
+          while IFS= read -r f; do
+            if [ "$(head -c 4 "$f")" != "---" ]; then
+              echo "::error file=$f::missing YAML frontmatter (created/branch/author/status)"
+              fail=1
+            fi
+          done < <(find . -name '*.md' -not -path './node_modules/*' -not -path './.git/*')
+          exit $fail
+
+      - name: Relative links resolve
+        run: |
+          set -euo pipefail
+          fail=0
+          while IFS= read -r f; do
+            # bare relative paths referenced in backticks that look like repo files
+            grep -oE '`[A-Za-z0-9_./-]+\.(md|toml|rs|ts|tsx|yml)`' "$f" 2>/dev/null \
+              | tr -d '`' | sort -u | while read -r ref; do
+                case "$ref" in
+                  */*) ;;
+                  *) continue ;;
+                esac
+                # only check refs that are clearly in-repo (start with . or .agentile)
+                case "$ref" in
+                  ./*|.agentile/*|src/*|src-tauri/*)
+                    [ -e "$ref" ] || { echo "::warning file=$f::unresolved reference $ref"; }
+                    ;;
+                esac
+              done
+          done < <(find . -name '*.md' -not -path './node_modules/*' -not -path './.git/*')
+          exit $fail
