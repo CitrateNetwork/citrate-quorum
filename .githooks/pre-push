@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# citrate-quorum pre-push hook — runs the check gate (WP-S1.7).
+# Install:  git config core.hooksPath .githooks
+# Bypass is possible with --no-verify; if you use it, say so in the PR body.
+exec "$(git rev-parse --show-toplevel)/scripts/check.sh"
