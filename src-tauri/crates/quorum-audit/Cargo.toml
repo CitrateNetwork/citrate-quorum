@@ -1,0 +1,17 @@
+# WP-S4 core — the HIC evidence spine: decision records + BLAKE3 hash chain +
+# Merkle anchor. Every agent action becomes a tamper-evident, anchorable record.
+[package]
+name = "quorum-audit"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "citrate-quorum audit evidence spine — DecisionRecord + a contiguity-provable BLAKE3 hash chain + Merkle roots for the nightly AnchorRegistry commit."
+
+[dependencies]
+quorum-tenancy = { path = "../quorum-tenancy" }
+blake3 = "1"
+
+[lints]
+workspace = true

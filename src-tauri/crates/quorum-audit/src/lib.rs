@@ -1,0 +1,451 @@
+//! citrate-quorum — the audit evidence spine (WP-S4 core, HIC §4).
+//!
+//! Every governed action becomes a [`DecisionRecord`]; records are appended to a
+//! per-tenant [`HashChain`] whose contiguity is provable with BLAKE3; and the
+//! day's records are committed as a [`merkle_root`] to `AnchorRegistry` (the
+//! `NightlyMerkle` anchor kind). Together these are the difference between a
+//! dashboard and *evidence*: an auditor can pick any record, recompute its hash
+//! locally, and check it against what was anchored on chain.
+//!
+//! Two properties this crate exists to guarantee:
+//!
+//! 1. **Tamper-evidence.** Editing, reordering, inserting, or dropping any record
+//!    changes the chain head. A chain that verifies is a chain no one altered
+//!    after the fact ([`HashChain::verify`]).
+//! 2. **`ungoverned` is first-class.** A record with no live grant behind it is
+//!    marked [`Verdict::Ungoverned`] and carries no `grant_id` — it is never
+//!    silently dropped and never silently allowed. It is recorded, and it counts
+//!    ([`HashChain::ungoverned_count`]).
+//!
+//! Pure and deterministic (no clock, no I/O) so the whole spine is exhaustively
+//! testable; timestamps are supplied by the caller.
+
+#![forbid(unsafe_code)]
+
+use quorum_tenancy::TenantId;
+
+/// The verdict a policy check produced for an action.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Verdict {
+    Allow,
+    RequireApproval,
+    Deny,
+    /// No live grant stood behind this action. Recorded and alerted, never
+    /// silently allowed or dropped (the HIC-X state).
+    Ungoverned,
+}
+
+impl Verdict {
+    fn tag(self) -> u8 {
+        match self {
+            Verdict::Allow => 0,
+            Verdict::RequireApproval => 1,
+            Verdict::Deny => 2,
+            Verdict::Ungoverned => 3,
+        }
+    }
+}
+
+/// The HIC level in force for a recorded action (HIC-0..3, or X = ungoverned).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum HicLevel {
+    Observed,
+    ApproveEach,
+    Budgeted,
+    PostHoc,
+    Ungoverned,
+}
+
+impl HicLevel {
+    fn tag(self) -> u8 {
+        match self {
+            HicLevel::Observed => 0,
+            HicLevel::ApproveEach => 1,
+            HicLevel::Budgeted => 2,
+            HicLevel::PostHoc => 3,
+            HicLevel::Ungoverned => 0xFF,
+        }
+    }
+}
+
+/// One recorded governed action — the HIC evidence unit. Every field an auditor
+/// needs to walk the action back to a human authority, or to see it flagged
+/// `ungoverned`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DecisionRecord {
+    /// The acting agent's `AgentSBT` id (or a human principal id for a human act).
+    pub agent: String,
+    /// The accountable human principal, if any. `None` iff `ungoverned`.
+    pub principal: Option<String>,
+    /// The capability grant that authorized the action, if any. `None` iff
+    /// `ungoverned`.
+    pub grant_id: Option<String>,
+    /// The action class (e.g. `repo.write`, `spend`, `calendar.write`).
+    pub action_class: String,
+    /// keccak/blake of the ABI-encoded params — the *what*, without the payload.
+    pub params_hash: [u8; 32],
+    pub verdict: Verdict,
+    pub hic: HicLevel,
+    /// Which model (+ LoRA) produced the action — so "which model recommended
+    /// this" is answerable.
+    pub model_id: String,
+    /// Correlation id threading related actions (meeting → grant → actions → PR).
+    pub correlation_id: String,
+    /// Caller-supplied timestamp (epoch-ms). No ambient clock here.
+    pub timestamp_ms: i64,
+}
+
+impl DecisionRecord {
+    /// Is this record governed — i.e. does a live human authority stand behind
+    /// it? An `ungoverned` verdict and the presence of `principal`+`grant_id`
+    /// must agree; [`DecisionRecord::is_consistent`] checks that.
+    pub fn is_governed(&self) -> bool {
+        self.verdict != Verdict::Ungoverned
+    }
+
+    /// The invariant that keeps `ungoverned` honest: a record is `Ungoverned`
+    /// **iff** it has no principal and no grant. You cannot record an ungoverned
+    /// action that secretly names an authority, nor a governed one with none.
+    pub fn is_consistent(&self) -> bool {
+        let has_authority = self.principal.is_some() && self.grant_id.is_some();
+        match self.verdict {
+            Verdict::Ungoverned => {
+                self.principal.is_none()
+                    && self.grant_id.is_none()
+                    && self.hic == HicLevel::Ungoverned
+            }
+            _ => has_authority,
+        }
+    }
+
+    /// Canonical, length-prefixed bytes for hashing. Deterministic across
+    /// machines: every field is framed so no two distinct records share an
+    /// encoding (no field-boundary ambiguity).
+    fn canonical(&self) -> Vec<u8> {
+        // Length-prefix each variable-length field so no two distinct records
+        // share an encoding (no field-boundary ambiguity).
+        fn frame(b: &mut Vec<u8>, bytes: &[u8]) {
+            b.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+            b.extend_from_slice(bytes);
+        }
+        let mut b = Vec::new();
+        frame(&mut b, self.agent.as_bytes());
+        frame(&mut b, self.principal.as_deref().unwrap_or("").as_bytes());
+        frame(&mut b, self.grant_id.as_deref().unwrap_or("").as_bytes());
+        frame(&mut b, self.action_class.as_bytes());
+        frame(&mut b, &self.params_hash);
+        b.push(self.verdict.tag());
+        b.push(self.hic.tag());
+        frame(&mut b, self.model_id.as_bytes());
+        frame(&mut b, self.correlation_id.as_bytes());
+        b.extend_from_slice(&self.timestamp_ms.to_be_bytes());
+        b
+    }
+
+    /// The record's own content hash (independent of chain position).
+    pub fn content_hash(&self) -> [u8; 32] {
+        *blake3::hash(&self.canonical()).as_bytes()
+    }
+}
+
+/// A per-tenant, append-only, tamper-evident chain of decision records. Each
+/// entry's hash chains the previous head: `h_i = BLAKE3(h_{i-1} ++ record_i)`.
+#[derive(Debug)]
+pub struct HashChain {
+    tenant: TenantId,
+    entries: Vec<(DecisionRecord, [u8; 32])>,
+    head: [u8; 32],
+}
+
+impl HashChain {
+    /// A fresh chain for `tenant`, seeded with a genesis hash bound to the tenant
+    /// id (so two tenants' empty chains never share a head).
+    pub fn new(tenant: TenantId) -> Self {
+        let genesis = *blake3::hash(tenant.as_str().as_bytes()).as_bytes();
+        Self {
+            tenant,
+            entries: Vec::new(),
+            head: genesis,
+        }
+    }
+
+    /// Append a record, returning its chained hash. Rejects an inconsistent
+    /// record (the `ungoverned`↔authority invariant) so a malformed record can
+    /// never enter the evidence chain.
+    pub fn append(&mut self, record: DecisionRecord) -> Result<[u8; 32], AuditError> {
+        if !record.is_consistent() {
+            return Err(AuditError::InconsistentRecord);
+        }
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&self.head);
+        hasher.update(&record.canonical());
+        let h = *hasher.finalize().as_bytes();
+        self.entries.push((record, h));
+        self.head = h;
+        Ok(h)
+    }
+
+    /// The current chain head — the single value that commits to the entire
+    /// history. Anchor this (or a Merkle root) to prove the log on chain.
+    pub fn head(&self) -> [u8; 32] {
+        self.head
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Recompute the chain from genesis and confirm every stored hash — proves no
+    /// record was edited, reordered, inserted, or removed after the fact.
+    pub fn verify(&self) -> bool {
+        let mut prev = *blake3::hash(self.tenant.as_str().as_bytes()).as_bytes();
+        for (record, stored) in &self.entries {
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(&prev);
+            hasher.update(&record.canonical());
+            let h = *hasher.finalize().as_bytes();
+            if &h != stored {
+                return false;
+            }
+            prev = h;
+        }
+        prev == self.head
+    }
+
+    /// How many recorded actions were `ungoverned`. This is a headline number,
+    /// not a hidden gap — the ledger surfaces it and an auditor samples it.
+    pub fn ungoverned_count(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|(r, _)| !r.is_governed())
+            .count()
+    }
+
+    /// The records, in order.
+    pub fn records(&self) -> impl Iterator<Item = &DecisionRecord> {
+        self.entries.iter().map(|(r, _)| r)
+    }
+
+    /// The Merkle root over this chain's record content hashes — the value
+    /// committed to `AnchorRegistry` as the day's `NightlyMerkle` anchor. Anyone
+    /// with the records can recompute it and verify inclusion.
+    pub fn merkle_root(&self) -> [u8; 32] {
+        merkle_root(
+            &self
+                .entries
+                .iter()
+                .map(|(r, _)| r.content_hash())
+                .collect::<Vec<_>>(),
+        )
+    }
+}
+
+/// A binary Merkle root over `leaves` (each already a 32-byte hash). An empty set
+/// hashes to the zero root; an odd level duplicates its last node (standard).
+/// Domain-separated (leaf vs node) so a leaf can't be reinterpreted as a node.
+pub fn merkle_root(leaves: &[[u8; 32]]) -> [u8; 32] {
+    if leaves.is_empty() {
+        return [0u8; 32];
+    }
+    let mut level: Vec<[u8; 32]> = leaves
+        .iter()
+        .map(|l| {
+            let mut h = blake3::Hasher::new();
+            h.update(b"\x00leaf");
+            h.update(l);
+            *h.finalize().as_bytes()
+        })
+        .collect();
+    while level.len() > 1 {
+        let mut next = Vec::with_capacity(level.len().div_ceil(2));
+        for pair in level.chunks(2) {
+            let left = pair[0];
+            let right = if pair.len() == 2 { pair[1] } else { pair[0] };
+            let mut h = blake3::Hasher::new();
+            h.update(b"\x01node");
+            h.update(&left);
+            h.update(&right);
+            next.push(*h.finalize().as_bytes());
+        }
+        level = next;
+    }
+    level[0]
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum AuditError {
+    /// The record violates the `ungoverned`↔authority invariant.
+    InconsistentRecord,
+}
+
+impl core::fmt::Display for AuditError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            AuditError::InconsistentRecord => {
+                write!(
+                    f,
+                    "decision record violates the ungoverned/authority invariant"
+                )
+            }
+        }
+    }
+}
+impl std::error::Error for AuditError {}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    fn tenant() -> TenantId {
+        TenantId::new("bca").unwrap()
+    }
+    fn governed(class: &str, corr: &str, ts: i64) -> DecisionRecord {
+        DecisionRecord {
+            agent: "sbt-41".into(),
+            principal: Some("R. Ortiz".into()),
+            grant_id: Some("G-2201".into()),
+            action_class: class.into(),
+            params_hash: [7u8; 32],
+            verdict: Verdict::Allow,
+            hic: HicLevel::Budgeted,
+            model_id: "claude-sonnet-4-5+gov-lora".into(),
+            correlation_id: corr.into(),
+            timestamp_ms: ts,
+        }
+    }
+    fn ungoverned(ts: i64) -> DecisionRecord {
+        DecisionRecord {
+            agent: "sbt-55".into(),
+            principal: None,
+            grant_id: None,
+            action_class: "net.egress".into(),
+            params_hash: [9u8; 32],
+            verdict: Verdict::Ungoverned,
+            hic: HicLevel::Ungoverned,
+            model_id: "swe-1.5".into(),
+            correlation_id: "X-7104".into(),
+            timestamp_ms: ts,
+        }
+    }
+
+    #[test]
+    fn appends_and_verifies() {
+        let mut c = HashChain::new(tenant());
+        c.append(governed("repo.write", "X-1", 1)).unwrap();
+        c.append(governed("pr.open", "X-1", 2)).unwrap();
+        c.append(ungoverned(3)).unwrap();
+        assert_eq!(c.len(), 3);
+        assert!(c.verify());
+        assert_eq!(c.ungoverned_count(), 1);
+    }
+
+    #[test]
+    fn head_changes_per_append() {
+        let mut c = HashChain::new(tenant());
+        let empty = c.head();
+        let h1 = c.append(governed("repo.write", "X-1", 1)).unwrap();
+        assert_ne!(empty, h1);
+        let h2 = c.append(governed("repo.write", "X-1", 2)).unwrap();
+        assert_ne!(h1, h2);
+        assert_eq!(c.head(), h2);
+    }
+
+    #[test]
+    fn tampering_with_a_record_breaks_verification() {
+        let mut c = HashChain::new(tenant());
+        c.append(governed("repo.write", "X-1", 1)).unwrap();
+        c.append(governed("spend", "X-1", 2)).unwrap();
+        assert!(c.verify());
+        // Silently edit a stored record's action class.
+        c.entries[0].0.action_class = "repo.delete".into();
+        assert!(!c.verify(), "an edited record must break the chain");
+    }
+
+    #[test]
+    fn reordering_records_breaks_verification() {
+        let mut c = HashChain::new(tenant());
+        c.append(governed("a", "X-1", 1)).unwrap();
+        c.append(governed("b", "X-1", 2)).unwrap();
+        c.entries.swap(0, 1);
+        assert!(!c.verify(), "reordering must break the chain");
+    }
+
+    #[test]
+    fn two_tenants_have_distinct_genesis_and_heads() {
+        let a = HashChain::new(TenantId::new("t-a").unwrap());
+        let b = HashChain::new(TenantId::new("t-b").unwrap());
+        assert_ne!(
+            a.head(),
+            b.head(),
+            "empty chains of different tenants must differ"
+        );
+    }
+
+    #[test]
+    fn inconsistent_records_are_rejected() {
+        let mut c = HashChain::new(tenant());
+        // Ungoverned verdict but names an authority — forbidden.
+        let mut bad = ungoverned(1);
+        bad.principal = Some("R. Ortiz".into());
+        assert_eq!(c.append(bad), Err(AuditError::InconsistentRecord));
+        // Governed verdict with no grant — forbidden.
+        let mut bad2 = governed("repo.write", "X-1", 1);
+        bad2.grant_id = None;
+        assert_eq!(c.append(bad2), Err(AuditError::InconsistentRecord));
+        assert!(c.is_empty());
+    }
+
+    #[test]
+    fn content_hash_is_deterministic_and_sensitive() {
+        let r = governed("repo.write", "X-1", 1);
+        assert_eq!(r.content_hash(), r.content_hash());
+        let mut r2 = r.clone();
+        r2.timestamp_ms = 2;
+        assert_ne!(r.content_hash(), r2.content_hash());
+    }
+
+    #[test]
+    fn canonical_encoding_has_no_field_boundary_ambiguity() {
+        // ("ab","c") vs ("a","bc") on adjacent string fields must not collide.
+        let mut x = governed("x", "y", 1);
+        x.agent = "ab".into();
+        x.action_class = "c".into();
+        let mut z = governed("x", "y", 1);
+        z.agent = "a".into();
+        z.action_class = "bc".into();
+        assert_ne!(x.content_hash(), z.content_hash());
+    }
+
+    #[test]
+    fn merkle_root_is_deterministic_empty_and_single() {
+        assert_eq!(merkle_root(&[]), [0u8; 32]);
+        let one = [[1u8; 32]];
+        assert_eq!(merkle_root(&one), merkle_root(&one));
+        // single != raw leaf (leaf is domain-separated)
+        assert_ne!(merkle_root(&one), [1u8; 32]);
+    }
+
+    #[test]
+    fn merkle_root_changes_if_any_leaf_changes() {
+        let a = merkle_root(&[[1u8; 32], [2u8; 32], [3u8; 32]]);
+        let b = merkle_root(&[[1u8; 32], [2u8; 32], [4u8; 32]]);
+        assert_ne!(a, b);
+        // order matters
+        let c = merkle_root(&[[2u8; 32], [1u8; 32], [3u8; 32]]);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn chain_merkle_root_tracks_its_records() {
+        let mut c = HashChain::new(tenant());
+        c.append(governed("repo.write", "X-1", 1)).unwrap();
+        let r1 = c.merkle_root();
+        c.append(governed("pr.open", "X-1", 2)).unwrap();
+        let r2 = c.merkle_root();
+        assert_ne!(r1, r2, "adding a record changes the anchor root");
+    }
+}
