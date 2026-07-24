@@ -25,7 +25,7 @@ export function createTauriBridge(): BridgeContract {
     wallet: { summary: na("wallet.summary") },
     node: { peers: na("node.peers"), logs: naStream("node.logs"), blocks: na("node.blocks") },
     agents: { list: na("agents.list"), grants: na("agents.grants") },
-    rooms: { list: na("rooms.list"), events: naStream("rooms.events") },
+    rooms: { list: na("rooms.list"), roster: na("rooms.roster"), events: naStream("rooms.events") },
     ledger: {
       query: na("ledger.query"),
       stream: naStream("ledger.stream"),

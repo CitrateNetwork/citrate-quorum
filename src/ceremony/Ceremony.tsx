@@ -1,0 +1,262 @@
+// =====================================================================
+// citrate-quorum — the Signature Ceremony (QRM-S2D)
+//
+// Ported from design/CitrateQuorum.dc.html §CEREMONY. THE single
+// human-in-the-loop signing surface (design brief §3.3). Any surface that
+// needs a signature calls useCeremony().request(intent) and awaits the
+// outcome — it NEVER performs the action itself and NEVER fabricates a
+// settled state. Charter register, always (signing is a document act).
+//
+// Properties enforced here, which are HIC security expressed as UI:
+//  · decoded intent (key/value rows), never a raw hex blob by default
+//  · raw/undecodable calldata is blocked behind an explicit ack
+//  · one approval → one signature; a queue is worked head-first
+//  · multisig envelopes show who signed, the threshold, and the expiry
+//  · phases review → signing → broadcasting → settled | rejected
+//
+// The sim resolves signing/broadcasting on timers; the Tauri adapter will
+// drive the same phases from the real kit ceremony (config/custody/auth/
+// ceremony are already live in citrate-core-kit — WP-S1.3).
+// =====================================================================
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import type { CeremonyPhase, SignatureIntent } from "../bridge";
+import { LoaderMark } from "../components/LoaderMark";
+
+export interface CeremonyResult {
+  outcome: "settled" | "rejected";
+  /** A short human-readable settlement note (tx hash / decision id / anchor). */
+  note?: string;
+}
+
+interface Pending {
+  intent: SignatureIntent;
+  resolve: (r: CeremonyResult) => void;
+}
+
+interface CeremonyApi {
+  /** Queue a signature request; resolves when it settles or is rejected. */
+  request: (intent: SignatureIntent) => Promise<CeremonyResult>;
+}
+
+const Ctx = createContext<CeremonyApi | null>(null);
+
+/** Surfaces call this to route a signed action through the one ceremony. */
+export function useCeremony(): CeremonyApi {
+  const api = useContext(Ctx);
+  if (!api) throw new Error("useCeremony must be used within <CeremonyProvider>");
+  return api;
+}
+
+const ORIGIN_COLOR: Record<string, string> = {
+  user: "var(--accent-text)",
+  "agent:claude-code": "var(--z-cyan)",
+  "agent:codex": "var(--z-indigo)",
+  "agent:hermes": "var(--z-amber)",
+  "agent:devin": "var(--z-magenta)",
+};
+
+const PHASES: { key: CeremonyPhase; label: string }[] = [
+  { key: "review", label: "Review" },
+  { key: "signing", label: "Signing" },
+  { key: "broadcasting", label: "Broadcasting" },
+  { key: "settled", label: "On record" },
+];
+
+export function CeremonyProvider({ children }: { children: ReactNode }) {
+  const [queue, setQueue] = useState<Pending[]>([]);
+  const [phase, setPhase] = useState<CeremonyPhase>("review");
+  const [ack, setAck] = useState(false);
+  const [settledNote, setSettledNote] = useState<string>("");
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  const head = queue[0] ?? null;
+
+  const request = useCallback((intent: SignatureIntent) => {
+    return new Promise<CeremonyResult>((resolve) => {
+      setQueue((q) => [...q, { intent, resolve }]);
+    });
+  }, []);
+
+  const api = useMemo<CeremonyApi>(() => ({ request }), [request]);
+
+  const clearTimers = () => {
+    timers.current.forEach(clearTimeout);
+    timers.current = [];
+  };
+
+  const finish = (outcome: "settled" | "rejected", note?: string) => {
+    if (!head) return;
+    head.resolve({ outcome, note });
+    clearTimers();
+    setQueue((q) => q.slice(1));
+    setPhase("review");
+    setAck(false);
+    setSettledNote("");
+  };
+
+  const onSign = () => {
+    if (!head) return;
+    if (head.intent.rawUnverified && !ack) return; // Sign is gated on the ack
+    setPhase("signing");
+    // signing → broadcasting → settled. Broadcasting compresses the real
+    // checkpoint-finality wait (~25s / 50 blocks, BFT 67%); the Tauri adapter
+    // keeps this loader and reports real progress (DESIGN_NOTES TODO(wire)).
+    timers.current.push(
+      setTimeout(() => setPhase("broadcasting"), 1000),
+      setTimeout(() => {
+        setPhase("settled");
+        setSettledNote(
+          head.intent.kind === "deploy"
+            ? `deployed at ${head.intent.create2 ?? "0x…"} · anchored`
+            : "recorded → AgentDecisionRegistryV2 · anchored",
+        );
+      }, 2400),
+    );
+  };
+
+  const onReject = () => finish("rejected");
+  const onNext = () => {
+    // head resolves on close/next; advancing settles the current one.
+    finish("settled", settledNote);
+  };
+
+  if (!head) {
+    return <Ctx.Provider value={api}>{children}</Ctx.Provider>;
+  }
+
+  const intent = head.intent;
+  const originColor = ORIGIN_COLOR[intent.origin] ?? "var(--tx-2)";
+  const phaseIdx = PHASES.findIndex((p) => p.key === (phase === "rejected" ? "review" : phase));
+  const inReview = phase === "review";
+  const isBusy = phase === "signing" || phase === "broadcasting";
+  const isSettled = phase === "settled";
+  const signDisabled = Boolean(intent.rawUnverified) && !ack;
+  const signersMet =
+    intent.signers && intent.threshold
+      ? intent.signers.filter((s) => s.signed).length + 1 >= intent.threshold
+      : true;
+
+  return (
+    <Ctx.Provider value={api}>
+      {children}
+      <div
+        style={{ position: "fixed", inset: 0, background: "rgba(14,15,12,.5)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Signature ceremony"
+      >
+        <div data-register="charter" style={{ width: 640, maxHeight: "90vh", overflow: "auto", background: "#ffffff", color: "var(--tx-1)", borderRadius: 12, boxShadow: "0 24px 64px rgba(14,15,12,.35)", display: "flex", flexDirection: "column" }}>
+          {/* header */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "16px 20px", borderBottom: "2px solid var(--line-strong)" }}>
+            <img src="/src/assets/brand/citrate_mark_black.svg" alt="" style={{ width: 20, height: 20 }} />
+            <span className="mono" style={{ fontSize: 11, fontWeight: 500, letterSpacing: ".16em", textTransform: "uppercase" }}>Signature ceremony</span>
+            {queue.length > 1 && (
+              <span className="mono tabular" style={{ fontSize: 9.5, color: "var(--tx-3)", border: "1px solid var(--line-2)", padding: "1px 7px", borderRadius: 999 }}>queue {queue.length}</span>
+            )}
+            <div style={{ flex: 1 }} />
+            <span className="mono" style={{ fontSize: 9.5, letterSpacing: ".1em", textTransform: "uppercase", color: originColor, border: `1px solid ${originColor}`, padding: "2px 8px" }}>{intent.origin}</span>
+          </div>
+          {/* phase strip */}
+          <div style={{ display: "flex", borderBottom: "1px solid var(--line-1)" }}>
+            {PHASES.map((p, i) => {
+              const active = i === phaseIdx;
+              const done = i < phaseIdx;
+              return (
+                <div key={p.key} className="mono" style={{ flex: 1, textAlign: "center", fontSize: 9, letterSpacing: ".13em", textTransform: "uppercase", padding: "8px 4px", color: active ? "var(--tx-1)" : done ? "var(--ok)" : "var(--tx-3)", borderBottom: `2px solid ${active ? "var(--accent)" : done ? "var(--ok)" : "transparent"}` }}>{p.label}</div>
+              );
+            })}
+          </div>
+          {/* body */}
+          <div style={{ padding: "18px 20px", display: "flex", flexDirection: "column", gap: 14 }}>
+            <div style={{ fontFamily: "var(--font-display)", fontWeight: 440, fontSize: 20, letterSpacing: "-0.008em" }}>{intent.title}</div>
+
+            {intent.rawUnverified && (
+              <div style={{ border: "1px solid var(--danger)", background: "var(--danger-bg)", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
+                <span className="mono" style={{ fontSize: 10, letterSpacing: ".13em", textTransform: "uppercase", color: "var(--danger)" }}>Calldata could not be decoded</span>
+                <p style={{ fontSize: 13, lineHeight: 1.5, margin: 0 }}>This request carries raw calldata that matches no known contract ABI. Quorum cannot tell you what it does. Signing it is signing something unread.</p>
+                <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12.5, cursor: "pointer" }}>
+                  <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} style={{ marginTop: 2 }} disabled={!inReview} />
+                  <span>I understand this calldata is raw and unverified, and I accept responsibility for what it executes.</span>
+                </label>
+              </div>
+            )}
+
+            {/* decoded intent rows */}
+            <div style={{ border: "1px solid var(--line-1)" }}>
+              {intent.rows.map((r, i) => (
+                <div key={i} style={{ display: "grid", gridTemplateColumns: "150px 1fr", borderBottom: i < intent.rows.length - 1 ? "1px solid var(--line-1)" : "none" }}>
+                  <span className="mono" style={{ fontSize: 9.5, letterSpacing: ".12em", textTransform: "uppercase", color: "var(--tx-3)", padding: "8px 12px", background: "var(--srf-inset)" }}>{r.k}</span>
+                  <span className="mono" style={{ fontSize: 11.5, padding: "8px 12px", wordBreak: "break-all" }}>{r.v}</span>
+                </div>
+              ))}
+              {intent.create2 && (
+                <div style={{ display: "grid", gridTemplateColumns: "150px 1fr", borderTop: "1px solid var(--line-1)" }}>
+                  <span className="mono" style={{ fontSize: 9.5, letterSpacing: ".12em", textTransform: "uppercase", color: "var(--accent-text)", padding: "8px 12px", background: "var(--accent-wash)" }}>Address (CREATE2)</span>
+                  <span className="mono" style={{ fontSize: 11.5, padding: "8px 12px", wordBreak: "break-all", color: "var(--accent-text)" }}>{intent.create2}</span>
+                </div>
+              )}
+            </div>
+
+            {/* multisig envelope */}
+            {intent.signers && intent.threshold && (
+              <div style={{ display: "flex", flexDirection: "column", border: "1px solid var(--line-1)" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "var(--srf-inset)", borderBottom: "1px solid var(--line-1)" }}>
+                  <span className="mono" style={{ fontSize: 9.5, letterSpacing: ".12em", textTransform: "uppercase", color: "var(--tx-3)" }}>Signer envelope · {intent.threshold}-of-{intent.signers.length + 1}</span>
+                </div>
+                {[{ name: "You (Rachel Ortiz)", signed: !inReview, you: true }, ...intent.signers.map((s) => ({ ...s, you: false }))].map((sg, i) => (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderBottom: "1px solid var(--line-1)", background: sg.you ? "var(--srf-1)" : "transparent" }}>
+                    <span style={{ width: 8, height: 8, borderRadius: 999, background: sg.signed ? "var(--ok)" : "var(--line-2)", flexShrink: 0 }} />
+                    <span style={{ fontSize: 13, fontWeight: sg.you ? 600 : 400 }}>{sg.name}</span>
+                    {sg.you && <span className="mono" style={{ fontSize: 9, letterSpacing: ".1em", color: "var(--accent-text)" }}>YOU</span>}
+                    <div style={{ flex: 1 }} />
+                    <span className="mono" style={{ fontSize: 10, color: sg.signed ? "var(--ok)" : "var(--tx-3)" }}>{sg.signed ? "signed" : "awaiting"}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {isSettled && (
+              <div className="cc-stamp" style={{ display: "flex", alignItems: "center", gap: 12, border: "1px solid var(--ok)", background: "var(--ok-bg)", padding: 14 }}>
+                <span style={{ width: 28, height: 28, borderRadius: 999, border: "1.5px solid var(--ok)", color: "var(--ok)", display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M5 12 L10 17 L19 8" /></svg>
+                </span>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 500 }}>On record</div>
+                  <div className="mono" style={{ fontSize: 10.5, color: "var(--tx-2)" }}>{settledNote}</div>
+                </div>
+              </div>
+            )}
+            {isBusy && (
+              <div style={{ display: "flex", alignItems: "center", gap: 14, border: "1px solid var(--line-1)", padding: "12px 14px" }}>
+                <div style={{ width: 34, height: 34, flexShrink: 0 }}><LoaderMark size={34} /></div>
+                <span className="mono" style={{ fontSize: 11, color: "var(--tx-2)" }}>{phase === "signing" ? "signing — keystore in OS keyring" : "broadcasting · awaiting checkpoint finality"}</span>
+              </div>
+            )}
+          </div>
+          {/* footer */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 20px", borderTop: "1px solid var(--line-1)" }}>
+            <span className="mono" style={{ fontSize: 9, letterSpacing: ".1em", textTransform: "uppercase", color: "var(--tx-3)" }}>One approval · one signature · nothing is remembered</span>
+            <div style={{ flex: 1 }} />
+            {inReview && (
+              <>
+                <button className="btn btn-ghost" onClick={onReject}>Reject</button>
+                <button className="btn btn-primary" onClick={onSign} disabled={signDisabled || !signersMet}>Sign</button>
+              </>
+            )}
+            {isSettled && (
+              <button className="btn btn-primary" onClick={onNext}>{queue.length > 1 ? `Next in queue (${queue.length - 1})` : "Close"}</button>
+            )}
+          </div>
+        </div>
+      </div>
+    </Ctx.Provider>
+  );
+}

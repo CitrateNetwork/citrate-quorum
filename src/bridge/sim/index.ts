@@ -57,6 +57,7 @@ export function createSimBridge(): BridgeContract {
     },
     rooms: {
       list: () => delay(150, D.ROOMS),
+      roster: () => delay(120, D.ROSTER),
       events: timeline<RoomEvent>(D.ROOM_TIMELINE, false),
     },
     ledger: {

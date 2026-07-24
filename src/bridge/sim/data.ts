@@ -32,7 +32,6 @@ import type {
   SpecClause,
   StandupBrief,
   TenancyNode,
-  Vendor,
   Wallet,
 } from "../types";
 
@@ -43,13 +42,7 @@ export const SESSION: Session = {
   chain: { id: 40204, height: 1284067, relay: "relay-wichita-2", anchorRoot: "0x7c1fa2…90de" },
 };
 
-export const VENDORS: Record<string, Vendor> = {
-  anthropic: { name: "Anthropic", color: "var(--z-cyan)" },
-  openai: { name: "OpenAI", color: "var(--z-indigo)" },
-  cognition: { name: "Cognition", color: "var(--z-magenta)" },
-  nous: { name: "Nous", color: "var(--z-amber)" },
-  internal: { name: "Internal", color: "var(--z-silver)" },
-};
+export { VENDORS } from "../../theme/vendors";
 
 export const AGENTS: Agent[] = [
   { id: "claude-code", name: "claude-code", vendor: "anthropic", sbt: "AgentSBT #41", hic: 2, grants: 4, budgetUsed: 312, budgetCap: 500, lastActive: "2m ago", disputeRate: "0.4% / 1,204", status: "active", did: "did:citrate:a:0x41aa…19be", pubkey: "0x04c1…88f2", org: "Line-4 Automation", model: "claude-sonnet-4-5", lora: "gov-lora v2.3", transport: "MCP", sandbox: "firecracker · healthy", egress: "PRT-004 allowlist", capsules: [{ name: "repo-surgeon", hash: "b3:9c41…e0a2", verified: true }, { name: "test-author", hash: "b3:77d0…14cc", verified: true }], reputation: { dispute: ["0.4%", "5 / 1,204 actions"], contradiction: ["0.2%", "2 / 890 claims"], escalation: ["3.1%", "37 / 1,204"], budget: ["98.7%", "within envelope"], grader: ["0.91", "412 graded claims"] } },

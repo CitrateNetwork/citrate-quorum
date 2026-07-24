@@ -30,6 +30,7 @@ import type {
   Repo,
   Room,
   RoomEvent,
+  RosterMember,
   Session,
   Simulation,
   SpecClause,
@@ -63,6 +64,8 @@ export interface AgentsDomain {
 
 export interface RoomsDomain {
   list(): Promise<Room[]>;
+  /** The members of a room (humans + agents, cryptographic peers). */
+  roster(roomId: string): Promise<RosterMember[]>;
   /** The live transcript stream for a room. */
   events: Subscribe<RoomEvent>;
   // TODO(wire): open/join/post/invite; stt.start() consent + local transcription.

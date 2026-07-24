@@ -7,8 +7,10 @@ import { useEffect, useState } from "react";
 import { bridge } from "../bridge";
 import type { Session } from "../bridge";
 import { NAV, NAV_ITEMS, type NavItem } from "./nav";
-import { Dashboard } from "../surfaces/Dashboard";
+import { SURFACES } from "../surfaces/registry";
 import { Placeholder } from "../surfaces/Placeholder";
+import { CommandPalette } from "./CommandPalette";
+import { EscalationToast } from "./EscalationToast";
 
 function routeFromHash(): string {
   const h = window.location.hash.replace(/^#\/?/, "");
@@ -26,12 +28,18 @@ export function Shell() {
   const [route, setRoute] = useState<string>(routeFromHash());
   const [session, setSession] = useState<Session | null>(null);
   const [hicOpen, setHicOpen] = useState(false);
+  const [palOpen, setPalOpen] = useState(false);
 
   useEffect(() => {
     bridge.session.current().then(setSession);
     const onHash = () => setRoute(routeFromHash());
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setPalOpen((v) => !v); }
+      if (e.key === "Escape") setPalOpen(false);
+    };
     window.addEventListener("hashchange", onHash);
-    return () => window.removeEventListener("hashchange", onHash);
+    window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("hashchange", onHash); window.removeEventListener("keydown", onKey); };
   }, []);
 
   const go = (id: string) => {
@@ -100,7 +108,7 @@ export function Shell() {
           </button>
           <div style={{ fontFamily: "var(--font-display)", fontWeight: 460, fontSize: 17, letterSpacing: "-0.008em" }}>{active.label}</div>
           <div style={{ flex: 1 }} />
-          <button className="mono" style={{ fontSize: 10, color: "var(--tx-3)", background: "transparent", border: "1px solid var(--line-1)", borderRadius: "var(--r-1)", padding: "4px 9px", cursor: "pointer" }}>⌘K</button>
+          <button className="mono" onClick={() => setPalOpen(true)} style={{ fontSize: 10, color: "var(--tx-3)", background: "transparent", border: "1px solid var(--line-1)", borderRadius: "var(--r-1)", padding: "4px 9px", cursor: "pointer" }}>⌘K</button>
           <button className="mono" onClick={() => setHicOpen((v) => !v)} style={{ fontSize: 10.5, fontWeight: 500, letterSpacing: ".1em", color: hicColor, background: "transparent", border: `1px solid ${hicColor}`, borderRadius: 999, padding: "4px 11px", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 7 }}>
             <span style={{ width: 7, height: 7, borderRadius: 999, background: hicColor }} />{session?.hic.label ?? "HIC"}
           </button>
@@ -115,7 +123,7 @@ export function Shell() {
 
         {/* surface */}
         <div style={{ minHeight: 0, overflow: "auto", position: "relative" }}>
-          {active.id === "dashboard" ? <Dashboard onGo={go} /> : <Placeholder item={active} />}
+          {SURFACES[active.id] ? SURFACES[active.id]({ onGo: go }) : <Placeholder item={active} />}
         </div>
 
         {/* status rail */}
@@ -127,6 +135,8 @@ export function Shell() {
           <span>{active.built ? "surface: live (sim)" : "surface: being ported"}</span>
         </div>
       </div>
+      <CommandPalette open={palOpen} onClose={() => setPalOpen(false)} onGo={go} />
+      <EscalationToast onGo={go} />
     </div>
   );
 }
