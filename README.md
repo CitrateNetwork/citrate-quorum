@@ -17,7 +17,7 @@ tier: T1
 **Tier:** T1 — money, keys, identity, governance, binary distribution. Full audit
 before release.
 
-## Honest current status (2026-07-22)
+## Honest current status (2026-07-24)
 
 **This repo is a scaffold. No application code exists yet.** What is here:
 
@@ -27,7 +27,7 @@ before release.
 | A booting **Tauri app skeleton** consuming `citrate-core-kit` | The design-prototype frontend (arrives QRM-S2D) |
 | The shared **SignatureCeremony** signing surface (from the kit) | quorum's own domains (rooms, meetings, governance, agents, …) |
 | Backend crates: `quorum-tenancy`, `quorum-license`, `quorum-rbac` | Real chain / relay / identity / model wiring |
-| Local check gate (`scripts/check.sh`) + pre-push hook | Hosted CI (Actions down org-wide; local-first for now) |
+| Local check gate + pre-push hook; **unsigned bundles build** (deb/rpm/AppImage) | Hosted CI (Actions down org-wide); **code-signing + auto-updater (QRM-S9, @rule8)** |
 
 The Tauri backend + the shared signing spine are real and tested; the governance
 UI is an honest "under construction" placeholder until the design prototype lands.
