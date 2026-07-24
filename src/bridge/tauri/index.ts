@@ -29,10 +29,23 @@ import {
 } from "../types";
 import {
   actionEvaluateAndRecord,
+  actionReject,
   ledgerRecords,
   tenantActive,
   tenantSet,
+  type DecisionResult,
 } from "./commands";
+
+/** The Rust DTO is snake_case; the bridge contract is camelCase. */
+const toGate = (d: DecisionResult): GateDecision => ({
+  decisionId: d.decision_id,
+  verdict: d.verdict,
+  hic: d.hic as HicLevel,
+  grantId: d.grant_id,
+  reason: d.reason,
+  chainHead: d.chain_head,
+  ungoverned: d.ungoverned,
+});
 
 const na = (op: string) => (): never => {
   throw new Unavailable(op);
@@ -58,30 +71,26 @@ export function createTauriBridge(): BridgeContract {
     policy: {
       // LIVE: quorum-policy evaluate → quorum-audit DecisionRecord → the
       // tenant's hash chain. `action_evaluate_and_record` in backend.rs.
-      evaluate: async (action: GovernedAction): Promise<GateDecision> => {
-        const d = await actionEvaluateAndRecord({
-          agent: action.agent,
-          principal: action.principal ?? null,
-          class: action.actionClass,
-          classification: action.classification,
-          cost: action.cost ?? 0,
-          hic1_cost_threshold: action.hic1CostThreshold ?? 0,
-          mandatory_hic1: action.mandatoryHic1 ?? false,
-          // Stays empty until the agent adapters (S4) supply real tool
-          // parameters to commit to. An empty hash claims nothing.
-          params_hash: "",
-          model_id: action.modelId ?? "",
-          correlation_id: action.correlationId ?? "",
-        });
-        return {
-          verdict: d.verdict,
-          hic: d.hic as HicLevel,
-          grantId: d.grant_id,
-          reason: d.reason,
-          chainHead: d.chain_head,
-          ungoverned: d.ungoverned,
-        };
-      },
+      evaluate: async (action: GovernedAction): Promise<GateDecision> =>
+        toGate(
+          await actionEvaluateAndRecord({
+            agent: action.agent,
+            principal: action.principal ?? null,
+            class: action.actionClass,
+            classification: action.classification,
+            cost: action.cost ?? 0,
+            hic1_cost_threshold: action.hic1CostThreshold ?? 0,
+            mandatory_hic1: action.mandatoryHic1 ?? false,
+            // Stays empty until the agent adapters (S4) supply real tool
+            // parameters to commit to. An empty hash claims nothing.
+            params_hash: "",
+            model_id: action.modelId ?? "",
+            correlation_id: action.correlationId ?? "",
+          }),
+        ),
+      // LIVE: refunds the charge and records the refusal (`action_reject`).
+      reject: async (decisionId: number): Promise<GateDecision> =>
+        toGate(await actionReject(decisionId)),
     },
     wallet: { summary: na("wallet.summary") },
     node: { peers: na("node.peers"), logs: naStream("node.logs"), blocks: na("node.blocks") },

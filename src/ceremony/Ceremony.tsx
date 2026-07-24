@@ -69,6 +69,7 @@ const VERDICT_STYLE: Record<GateDecision["verdict"], { label: string; color: str
   "require-approval": { label: "Requires your approval", color: "var(--warn)" },
   deny: { label: "Denied by policy", color: "var(--danger)" },
   ungoverned: { label: "Ungoverned", color: "var(--danger)" },
+  rejected: { label: "Refused by a human", color: "var(--danger)" },
 };
 
 const Ctx = createContext<CeremonyApi | null>(null);
@@ -142,6 +143,15 @@ export function CeremonyProvider({ children }: { children: ReactNode }) {
 
   const finish = (outcome: "settled" | "rejected", note?: string) => {
     if (!head) return;
+    // A refusal is an act of governance, not an absence of one: tell the
+    // backend, which refunds what the decision charged and records the "no".
+    if (outcome === "rejected") {
+      void bridge.policy.reject(head.gate.decisionId).catch(() => {
+        // The refusal still stands for the caller; the backend error surfaces
+        // through the ledger's own honest error path rather than being swallowed
+        // into a fake success here.
+      });
+    }
     head.resolve({ outcome, note, gate: head.gate });
     clearTimers();
     setQueue((q) => q.slice(1));

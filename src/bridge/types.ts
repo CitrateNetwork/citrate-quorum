@@ -265,7 +265,8 @@ export interface InterviewTurn {
 }
 
 // ---- ledger ---------------------------------------------------------
-export type Verdict = "allow" | "require-approval" | "deny" | "ungoverned";
+/** `deny` = the rules said no. `rejected` = the human said no. Different facts. */
+export type Verdict = "allow" | "require-approval" | "deny" | "ungoverned" | "rejected";
 export interface Decision {
   id: string;
   time: string;
@@ -465,7 +466,10 @@ export interface GovernedAction {
  * evidence chain the decision was appended to — none of it is inferred by the UI.
  */
 export interface GateDecision {
-  verdict: "allow" | "require-approval" | "deny" | "ungoverned";
+  /** This decision's index in the tenant's chain — the handle `policy.reject`
+   *  refers back to when the human refuses. */
+  decisionId: number;
+  verdict: "allow" | "require-approval" | "deny" | "ungoverned" | "rejected";
   hic: HicLevel;
   grantId: string | null;
   reason: string;

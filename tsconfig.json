@@ -20,7 +20,9 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
+  // Tests are typechecked too: they pin the bridge contract and the Rust<->TS
+  // mapping, so a contract change that invalidates a test must fail the gate
+  // rather than pass unchecked.
   "include": ["src"],
-  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

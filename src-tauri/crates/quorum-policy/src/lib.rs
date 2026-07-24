@@ -107,6 +107,15 @@ impl CapabilityGrant {
         Ok(())
     }
 
+    /// Give back `units` previously taken by [`Self::consume`] — used when the
+    /// human the action was escalated to rejects it, so an approval that never
+    /// happened does not silently eat the agent's envelope. Saturating: a refund
+    /// can never push `consumed` below zero, and callers must only refund what a
+    /// recorded charge says was taken.
+    pub fn refund(&mut self, units: u64) {
+        self.consumed = self.consumed.saturating_sub(units);
+    }
+
     /// Revoke immediately (CG-2). Idempotent.
     pub fn revoke(&mut self) {
         self.revoked = true;
@@ -318,6 +327,43 @@ mod tests {
         assert_eq!(g.consumed, 60); // unchanged
         assert!(g.consume(40).is_ok());
         assert_eq!(g.remaining(), 0);
+    }
+
+    #[test]
+    fn refund_gives_back_exactly_what_was_taken() {
+        let mut g = grant(
+            &["spend"],
+            Classification::Cui,
+            100,
+            GrantHic::Budgeted,
+            FUTURE,
+        );
+        assert!(g.consume(60).is_ok());
+        g.refund(60);
+        assert_eq!(
+            g.consumed, 0,
+            "a refused approval must not eat the envelope"
+        );
+        assert_eq!(g.remaining(), 100);
+    }
+
+    #[test]
+    fn refund_cannot_manufacture_budget() {
+        let mut g = grant(
+            &["spend"],
+            Classification::Cui,
+            100,
+            GrantHic::Budgeted,
+            FUTURE,
+        );
+        assert!(g.consume(10).is_ok());
+        g.refund(9_999);
+        assert_eq!(g.consumed, 0, "saturates at zero");
+        assert_eq!(
+            g.remaining(),
+            100,
+            "a refund can never raise the ceiling above budget_units"
+        );
     }
 
     #[test]

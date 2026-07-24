@@ -136,6 +136,7 @@ pub fn run() {
             backend::tenant_set,
             backend::tenant_active,
             backend::action_evaluate_and_record,
+            backend::action_reject,
             backend::ledger_records,
             backend::ledger_head,
             backend::ledger_merkle_root,

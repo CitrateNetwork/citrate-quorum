@@ -33,6 +33,11 @@ pub enum Verdict {
     /// No live grant stood behind this action. Recorded and alerted, never
     /// silently allowed or dropped (the HIC-X state).
     Ungoverned,
+    /// A human the action was escalated to REFUSED it. Distinct from `Deny`
+    /// (which is policy refusing) because "the person said no" is a different
+    /// fact about the organisation than "the rules said no", and an auditor
+    /// needs to tell them apart.
+    Rejected,
 }
 
 impl Verdict {
@@ -42,6 +47,7 @@ impl Verdict {
             Verdict::RequireApproval => 1,
             Verdict::Deny => 2,
             Verdict::Ungoverned => 3,
+            Verdict::Rejected => 4,
         }
     }
 }
@@ -114,6 +120,12 @@ impl DecisionRecord {
                     && self.grant_id.is_none()
                     && self.hic == HicLevel::Ungoverned
             }
+            // A rejection is meaningful whether or not the refused action named
+            // an authority: a human can refuse an ungoverned action too, and
+            // that refusal is exactly the evidence worth keeping. Constraining
+            // it to `has_authority` would make the most important record in the
+            // system the one we could not write.
+            Verdict::Rejected => true,
             _ => has_authority,
         }
     }
@@ -447,5 +459,41 @@ mod tests {
         c.append(governed("pr.open", "X-1", 2)).unwrap();
         let r2 = c.merkle_root();
         assert_ne!(r1, r2, "adding a record changes the anchor root");
+    }
+
+    #[test]
+    fn a_human_rejection_is_recordable_with_or_without_authority() {
+        // Governed action refused by the human it was escalated to.
+        let mut governed_rejection = governed("spend", "X-9", 5);
+        governed_rejection.verdict = Verdict::Rejected;
+        governed_rejection.hic = HicLevel::ApproveEach;
+        assert!(governed_rejection.is_consistent());
+
+        // The same refusal of an action that had no grant behind it. This must
+        // also be recordable — it is the most telling record of the two.
+        let mut ungoverned_rejection = governed("spend", "X-9", 5);
+        ungoverned_rejection.verdict = Verdict::Rejected;
+        ungoverned_rejection.hic = HicLevel::ApproveEach;
+        ungoverned_rejection.principal = None;
+        ungoverned_rejection.grant_id = None;
+        assert!(ungoverned_rejection.is_consistent());
+
+        let mut c = HashChain::new(tenant());
+        assert!(c.append(governed_rejection).is_ok());
+        assert!(c.append(ungoverned_rejection).is_ok());
+        assert!(c.verify());
+    }
+
+    #[test]
+    fn a_rejection_does_not_collide_with_any_other_verdict() {
+        let mut deny = governed("spend", "X-9", 5);
+        deny.verdict = Verdict::Deny;
+        let mut rejected = governed("spend", "X-9", 5);
+        rejected.verdict = Verdict::Rejected;
+        assert_ne!(
+            deny.content_hash(),
+            rejected.content_hash(),
+            "policy saying no and a human saying no must not hash alike"
+        );
     }
 }

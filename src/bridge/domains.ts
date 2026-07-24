@@ -61,6 +61,12 @@ export interface SessionDomain {
  */
 export interface PolicyDomain {
   evaluate(action: GovernedAction): Promise<GateDecision>;
+  /**
+   * The human refused. Refunds what the decision charged its grant — exactly
+   * once — and records the refusal as its own decision, because "the person
+   * said no" is evidence in a way that a missing record is not.
+   */
+  reject(decisionId: number): Promise<GateDecision>;
 }
 
 export interface WalletDomain {

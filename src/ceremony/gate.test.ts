@@ -15,6 +15,7 @@ const ACTION: GovernedAction = {
 };
 
 const decision = (over: Partial<GateDecision> = {}): GateDecision => ({
+  decisionId: 0,
   verdict: "allow",
   hic: "2",
   grantId: "G-2291",

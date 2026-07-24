@@ -11,6 +11,9 @@
 //!   `ledger_ungoverned_count`) — back the Ledger surface + the Verify affordance
 //!   from the real hash chain.
 //! - **Grant + allowance management** (`grant_issue`, `grant_revoke`, `vote_cast`).
+//! - **The budget** — a governed action charges its grant (`max(1, cost)`), and
+//!   `action_reject` refunds exactly that when the human refuses, recording the
+//!   refusal as its own `Rejected` decision.
 //! - **Session resolution** (`session_resolve`) — `quorum_session` /
 //!   `quorum_clearance` producing the fail-closed `EffectiveGrant`.
 //!
@@ -39,7 +42,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use quorum_audit::{DecisionRecord, HashChain, Verdict};
+use quorum_audit::{DecisionRecord, HashChain, HicLevel, Verdict};
 use quorum_policy::{evaluate, Action, CapabilityGrant, VoteAllowance};
 use quorum_session::{ClearanceInputs, Entitlement};
 use quorum_tenancy::TenantId;
@@ -49,8 +52,24 @@ use quorum_tenancy::TenantId;
 // agree by construction rather than by two parallel match arms.
 use crate::store::{
     classification_from_str, classification_str, grant_hic_from_str, hex32, hex_encode, hic_str,
-    verdict_str, EvidenceStore, StoreError,
+    verdict_str, Charge, EvidenceStore, StoreError,
 };
+
+/// What one governed action costs its grant.
+///
+/// A spend charges its magnitude; everything else charges one unit. The floor
+/// matters: if some actions were free, an agent could run unattended forever
+/// inside a "budgeted" envelope, and HIC-2 would mean nothing. Charging at
+/// least 1 guarantees every grant depletes and every unattended run eventually
+/// returns to a human.
+///
+/// The denomination follows the grant's scope — a grant over `spend` is
+/// denominated in the spend unit, one over work classes is denominated in
+/// actions. The same number is used for the coverage check and the charge, so
+/// `covers()` and `consume()` can never disagree.
+fn charge_for(cost: u64) -> u64 {
+    cost.max(1)
+}
 
 // ---- input / output DTOs --------------------------------------------
 
@@ -99,8 +118,11 @@ pub struct AllowanceInput {
     pub expires_at_ms: i64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub struct DecisionDto {
+    /// This decision's index in the tenant's chain — the handle a rejection
+    /// refers back to (`action_reject`).
+    pub decision_id: u64,
     pub verdict: String,
     pub hic: String,
     pub grant_id: Option<String>,
@@ -150,6 +172,9 @@ pub struct QuorumBackend {
     /// Allowances keyed by `(tenant, allowance id)` — the same isolation the
     /// grants have. An allowance id is meaningless outside its tenant.
     allowances: HashMap<(String, String), VoteAllowance>,
+    /// Outstanding charges by `(tenant, decision index)` — what each decision
+    /// took from its grant, so a rejection refunds exactly that and only once.
+    charges: HashMap<(String, u64), Charge>,
     /// Where evidence actually lives. `None` only in unit tests of the pure
     /// state logic; the running app always has one.
     store: Option<EvidenceStore>,
@@ -184,11 +209,13 @@ impl QuorumBackend {
             let chain = store.load_chain(&id).map_err(|e| e.to_string())?;
             let grants = store.load_grants(&key).map_err(|e| e.to_string())?;
             let allowances = store.load_allowances(&key).map_err(|e| e.to_string())?;
+            let charges = store.load_charges(&key).map_err(|e| e.to_string())?;
 
             // Replace, never merge: re-establishing a scope must not duplicate
             // what is already in memory for it.
             self.grants.retain(|(t, _), _| t != &key);
             self.allowances.retain(|(t, _), _| t != &key);
+            self.charges.retain(|(t, _), _| t != &key);
             self.chains.insert(key.clone(), chain);
             for g in grants {
                 self.grants
@@ -198,6 +225,9 @@ impl QuorumBackend {
             }
             for a in allowances {
                 self.allowances.insert((key.clone(), a.id.clone()), a);
+            }
+            for c in charges {
+                self.charges.insert((key.clone(), c.decision), c);
             }
             store.save_scope(Some(&key)).map_err(|e| e.to_string())?;
         }
@@ -252,6 +282,21 @@ impl QuorumBackend {
             .map_err(|e| self.degrade(e))
     }
 
+    fn persist_charges(&mut self, tenant: &str) -> Result<(), String> {
+        let Some(store) = self.store.clone() else {
+            return Ok(());
+        };
+        let charges: Vec<Charge> = self
+            .charges
+            .iter()
+            .filter(|((t, _), _)| t == tenant)
+            .map(|(_, c)| c.clone())
+            .collect();
+        store
+            .save_charges(tenant, &charges)
+            .map_err(|e| self.degrade(e))
+    }
+
     fn persist_allowances(&mut self, tenant: &str) -> Result<(), String> {
         let Some(store) = self.store.clone() else {
             return Ok(());
@@ -296,10 +341,13 @@ impl QuorumBackend {
         self.check_not_degraded()?;
         let classification = classification_from_str(&input.classification)
             .ok_or_else(|| format!("unknown classification: {}", input.classification))?;
+        // One number for both the coverage check and the charge, so a grant can
+        // never be found to "cover" an action it cannot actually pay for.
+        let charge = charge_for(input.cost);
         let action = Action {
             class: input.class.clone(),
             classification,
-            cost: input.cost,
+            cost: charge,
             hic1_cost_threshold: input.hic1_cost_threshold,
             mandatory_hic1: input.mandatory_hic1,
         };
@@ -309,6 +357,15 @@ impl QuorumBackend {
         let decision = evaluate(&action, grants, now_ms);
 
         let ungoverned = decision.verdict == Verdict::Ungoverned;
+        // I-4: a governed record must name the accountable human. Without one
+        // there is no authority to walk the action back to, so say that plainly
+        // rather than emitting a record the chain will reject as inconsistent.
+        if !ungoverned && input.principal.is_none() {
+            return Err(
+                "a governed action must name an accountable principal — no identity resolved"
+                    .to_string(),
+            );
+        }
         let record = DecisionRecord {
             agent: input.agent.clone(),
             principal: if ungoverned {
@@ -329,10 +386,40 @@ impl QuorumBackend {
             correlation_id: input.correlation_id.clone(),
             timestamp_ms: now_ms,
         };
-        let head = self
-            .chain_for(tenant)
-            .append(record.clone())
-            .map_err(|e| e.to_string())?;
+        let chain = self.chain_for(tenant);
+        let head = chain.append(record.clone()).map_err(|e| e.to_string())?;
+        let decision_id = (chain.len() - 1) as u64;
+
+        // Spend the envelope. Both Allow and RequireApproval charge: escalating
+        // to a human is itself use of the grant, and an escalation that cost
+        // nothing would let an agent queue unlimited approvals. A rejection
+        // gives it back (`reject_decision`).
+        if let Some(grant_id) = decision.grant_id.clone() {
+            let tenant_key = tenant.as_str().to_string();
+            if let Some(gs) = self
+                .grants
+                .get_mut(&(tenant_key.clone(), input.agent.clone()))
+            {
+                if let Some(g) = gs.iter_mut().find(|g| g.id == grant_id) {
+                    // `covers()` already proved the budget is there; this cannot
+                    // fail, and if it somehow did we must not report success.
+                    g.consume(charge).map_err(|e| {
+                        format!("grant {grant_id} could not be charged {charge}: {e:?}")
+                    })?;
+                }
+            }
+            self.charges.insert(
+                (tenant_key.clone(), decision_id),
+                Charge {
+                    decision: decision_id,
+                    agent: input.agent.clone(),
+                    grant_id,
+                    units: charge,
+                },
+            );
+            self.persist_grants(&tenant_key)?;
+            self.persist_charges(&tenant_key)?;
+        }
 
         // Durable BEFORE we report success. A decision the operator is told was
         // recorded, but which would vanish on restart, is not evidence.
@@ -343,12 +430,82 @@ impl QuorumBackend {
         }
 
         Ok(DecisionDto {
+            decision_id,
             verdict: verdict_str(decision.verdict).to_string(),
             hic: hic_str(decision.hic).to_string(),
             grant_id: decision.grant_id,
             reason: decision.reason.to_string(),
             chain_head: hex_encode(&head),
             ungoverned,
+        })
+    }
+
+    /// The human refused. Give the grant back exactly what this decision took,
+    /// exactly once, and record the refusal — "the person said no" is a
+    /// different fact from "the rules said no", and both belong in the evidence.
+    ///
+    /// Rejecting an ungoverned decision refunds nothing (it charged nothing) but
+    /// still records the refusal.
+    pub fn reject_decision(
+        &mut self,
+        tenant: &TenantId,
+        decision_id: u64,
+        now_ms: i64,
+    ) -> Result<DecisionDto, String> {
+        self.check_not_degraded()?;
+        let tenant_key = tenant.as_str().to_string();
+
+        // The decision being refused must exist in this tenant's chain.
+        let original = self
+            .chains
+            .get(&tenant_key)
+            .and_then(|c| c.records().nth(decision_id as usize).cloned())
+            .ok_or_else(|| format!("no decision {decision_id} in this tenant's ledger"))?;
+
+        // Refund, once. Taking the charge out of the map first means a repeated
+        // rejection cannot pay out twice.
+        if let Some(charge) = self.charges.remove(&(tenant_key.clone(), decision_id)) {
+            if let Some(gs) = self
+                .grants
+                .get_mut(&(tenant_key.clone(), charge.agent.clone()))
+            {
+                if let Some(g) = gs.iter_mut().find(|g| g.id == charge.grant_id) {
+                    g.refund(charge.units);
+                }
+            }
+            self.persist_grants(&tenant_key)?;
+            self.persist_charges(&tenant_key)?;
+        }
+
+        let record = DecisionRecord {
+            agent: original.agent.clone(),
+            principal: original.principal.clone(),
+            grant_id: original.grant_id.clone(),
+            action_class: original.action_class.clone(),
+            params_hash: original.params_hash,
+            verdict: Verdict::Rejected,
+            hic: HicLevel::ApproveEach,
+            model_id: original.model_id.clone(),
+            correlation_id: original.correlation_id.clone(),
+            timestamp_ms: now_ms,
+        };
+        let chain = self.chain_for(tenant);
+        let head = chain.append(record.clone()).map_err(|e| e.to_string())?;
+        let new_id = (chain.len() - 1) as u64;
+        if let Some(store) = self.store.clone() {
+            store
+                .append_record(tenant.as_str(), &record, head)
+                .map_err(|e| self.degrade(e))?;
+        }
+
+        Ok(DecisionDto {
+            decision_id: new_id,
+            verdict: verdict_str(Verdict::Rejected).to_string(),
+            hic: hic_str(HicLevel::ApproveEach).to_string(),
+            grant_id: original.grant_id,
+            reason: "RC-300 refused by the human it was escalated to".to_string(),
+            chain_head: hex_encode(&head),
+            ungoverned: false,
         })
     }
 
@@ -567,6 +724,15 @@ pub fn action_evaluate_and_record(
     let mut b = lock(&backend)?;
     let tenant = b.require_tenant()?;
     b.evaluate_and_record(&input, &tenant, now_ms())
+}
+
+/// The human refused this decision: refund what it charged and record the
+/// refusal. Idempotent on the refund — a second call cannot pay out twice.
+#[tauri::command]
+pub fn action_reject(backend: Backend<'_>, decision_id: u64) -> Result<DecisionDto, String> {
+    let mut b = lock(&backend)?;
+    let tenant = b.require_tenant()?;
+    b.reject_decision(&tenant, decision_id, now_ms())
 }
 
 #[tauri::command]
@@ -925,6 +1091,150 @@ mod tests {
         assert_eq!(b.require_tenant().unwrap().as_str(), "bca");
     }
 
+    // ---- the budget actually depletes --------------------------------
+
+    #[test]
+    fn every_governed_action_costs_at_least_one_unit() {
+        let mut b = QuorumBackend::default();
+        // Budget of 3, and repo.write declares no cost at all.
+        b.issue_grant(&grant("sbt-41", &["repo.write"], "CUI", 3, "2"), &t("bca"))
+            .unwrap();
+        for i in 0..3 {
+            let d = b
+                .evaluate_and_record(
+                    &action("sbt-41", "repo.write", "Public", 0),
+                    &t("bca"),
+                    1000,
+                )
+                .unwrap();
+            assert_eq!(
+                d.verdict, "allow",
+                "action {i} should be inside the envelope"
+            );
+        }
+        // Fourth: the envelope is spent, so there is no longer a covering grant.
+        let d = b
+            .evaluate_and_record(
+                &action("sbt-41", "repo.write", "Public", 0),
+                &t("bca"),
+                1000,
+            )
+            .unwrap();
+        assert_eq!(
+            d.verdict, "ungoverned",
+            "a budget that never depletes is not a budget"
+        );
+    }
+
+    #[test]
+    fn a_spend_charges_its_magnitude() {
+        let mut b = QuorumBackend::default();
+        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 500, "2"), &t("bca"))
+            .unwrap();
+        b.evaluate_and_record(&action("sbt-41", "spend", "Public", 300), &t("bca"), 1000)
+            .unwrap();
+        // 300 spent of 500; a second 300 no longer fits.
+        let d = b
+            .evaluate_and_record(&action("sbt-41", "spend", "Public", 300), &t("bca"), 1000)
+            .unwrap();
+        assert_eq!(
+            d.verdict, "ungoverned",
+            "the remaining 200 cannot cover 300"
+        );
+        // But 200 exactly still fits.
+        let d = b
+            .evaluate_and_record(&action("sbt-41", "spend", "Public", 200), &t("bca"), 1000)
+            .unwrap();
+        assert_eq!(d.verdict, "allow");
+    }
+
+    #[test]
+    fn an_escalation_to_a_human_also_spends_the_envelope() {
+        let mut b = QuorumBackend::default();
+        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 400, "2"), &t("bca"))
+            .unwrap();
+        let mut a = action("sbt-41", "spend", "Public", 220);
+        a.hic1_cost_threshold = 150;
+        let d = b.evaluate_and_record(&a, &t("bca"), 1000).unwrap();
+        assert_eq!(d.verdict, "require-approval");
+        // 220 of 400 is now committed, so a second 220 escalation cannot fit.
+        let d2 = b.evaluate_and_record(&a, &t("bca"), 1000).unwrap();
+        assert_eq!(
+            d2.verdict, "ungoverned",
+            "escalations must consume, or an agent can queue unlimited approvals"
+        );
+    }
+
+    #[test]
+    fn a_rejection_refunds_exactly_once_and_is_recorded() {
+        let mut b = QuorumBackend::default();
+        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 400, "2"), &t("bca"))
+            .unwrap();
+        let mut a = action("sbt-41", "spend", "Public", 220);
+        a.hic1_cost_threshold = 150;
+        let d = b.evaluate_and_record(&a, &t("bca"), 1000).unwrap();
+
+        let rejection = b.reject_decision(&t("bca"), d.decision_id, 2000).unwrap();
+        assert_eq!(rejection.verdict, "rejected");
+        assert_eq!(rejection.hic, "1");
+        assert_eq!(b.ledger_rows("bca").len(), 2, "the refusal is evidence too");
+
+        // Refunded: the same 220 escalation fits again.
+        let again = b.evaluate_and_record(&a, &t("bca"), 3000).unwrap();
+        assert_eq!(again.verdict, "require-approval", "the refund gave it back");
+
+        // Rejecting the SAME decision again must not pay out a second time.
+        b.reject_decision(&t("bca"), d.decision_id, 4000).unwrap();
+        b.reject_decision(&t("bca"), d.decision_id, 5000).unwrap();
+        let third = b.evaluate_and_record(&a, &t("bca"), 6000).unwrap();
+        assert_eq!(
+            third.verdict, "ungoverned",
+            "a repeated rejection must not manufacture budget"
+        );
+    }
+
+    #[test]
+    fn rejecting_an_ungoverned_decision_records_it_and_refunds_nothing() {
+        let mut b = QuorumBackend::default();
+        let d = b
+            .evaluate_and_record(&action("sbt-9", "repo.write", "Public", 1), &t("bca"), 1000)
+            .unwrap();
+        assert!(d.ungoverned);
+        let r = b.reject_decision(&t("bca"), d.decision_id, 2000).unwrap();
+        assert_eq!(r.verdict, "rejected");
+        assert_eq!(b.ledger_rows("bca").len(), 2);
+        assert!(b.ledger_verify("bca"));
+    }
+
+    #[test]
+    fn rejecting_a_decision_that_does_not_exist_fails_closed() {
+        let mut b = QuorumBackend::default();
+        let err = b
+            .reject_decision(&t("bca"), 41, 1000)
+            .expect_err("there is no decision 41");
+        assert!(err.contains("no decision 41"), "honest error: {err}");
+    }
+
+    #[test]
+    fn a_governed_action_without_a_principal_is_refused_not_recorded() {
+        let mut b = QuorumBackend::default();
+        b.issue_grant(
+            &grant("sbt-41", &["repo.write"], "CUI", 100, "2"),
+            &t("bca"),
+        )
+        .unwrap();
+        let mut a = action("sbt-41", "repo.write", "Public", 1);
+        a.principal = None;
+        let err = b
+            .evaluate_and_record(&a, &t("bca"), 1000)
+            .expect_err("a governed record must name its authority (I-4)");
+        assert!(err.contains("accountable principal"), "honest error: {err}");
+        assert!(
+            b.ledger_rows("bca").is_empty(),
+            "nothing half-recorded on the way out"
+        );
+    }
+
     // ---- durability: what survives a restart -------------------------
     //
     // These drive the backend the way the commands do, drop it, and build a
@@ -1037,6 +1347,34 @@ mod tests {
         assert!(
             b.cast_vote(&t("bca"), "VA-1", "standup", 1, 2000).is_err(),
             "the cap is not a cap if restarting refills it"
+        );
+    }
+
+    #[test]
+    fn a_charge_can_still_be_refunded_after_a_restart() {
+        let root = TempRoot::new("charges");
+        let decision_id;
+        {
+            let mut b = root.boot();
+            b.set_active_tenant("bca").unwrap();
+            b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 400, "2"), &t("bca"))
+                .unwrap();
+            let mut a = action("sbt-41", "spend", "Public", 220);
+            a.hic1_cost_threshold = 150;
+            decision_id = b
+                .evaluate_and_record(&a, &t("bca"), 1000)
+                .unwrap()
+                .decision_id;
+        }
+        // The human comes back tomorrow and rejects it.
+        let mut b = root.boot();
+        b.reject_decision(&t("bca"), decision_id, 2000).unwrap();
+        let mut a = action("sbt-41", "spend", "Public", 220);
+        a.hic1_cost_threshold = 150;
+        assert_eq!(
+            b.evaluate_and_record(&a, &t("bca"), 3000).unwrap().verdict,
+            "require-approval",
+            "the refund must know what yesterday's decision charged"
         );
     }
 

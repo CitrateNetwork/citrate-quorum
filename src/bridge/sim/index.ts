@@ -44,11 +44,17 @@ const SIM_GRANTED: Record<string, { grantId: string; hic: "1" | "2" | "3" }> = {
   user: { grantId: "G-1000", hic: "1" },
 };
 let simChainSeq = 0x4a71;
+let simDecisionSeq = 0;
+/** Decisions the scripted gate has issued, so `reject` has something to name. */
+const simIssued = new Map<number, GateDecision>();
+
 function simGate(a: GovernedAction): GateDecision {
   const head = `0x${(simChainSeq++ * 2654435761).toString(16).padStart(16, "0").slice(0, 16)}…`;
+  const decisionId = simDecisionSeq++;
   const g = SIM_GRANTED[a.agent];
   if (!g) {
     return {
+      decisionId,
       verdict: "ungoverned",
       hic: "X",
       grantId: null,
@@ -60,6 +66,7 @@ function simGate(a: GovernedAction): GateDecision {
   const overCost = (a.hic1CostThreshold ?? 0) > 0 && (a.cost ?? 0) > (a.hic1CostThreshold ?? 0);
   if (a.mandatoryHic1 || overCost) {
     return {
+      decisionId,
       verdict: "require-approval",
       hic: "1",
       grantId: g.grantId,
@@ -69,6 +76,7 @@ function simGate(a: GovernedAction): GateDecision {
     };
   }
   return {
+    decisionId,
     verdict: "allow",
     hic: g.hic,
     grantId: g.grantId,
@@ -112,7 +120,23 @@ export function createSimBridge(): BridgeContract {
         return delay(40, undefined);
       },
     },
-    policy: { evaluate: (a: GovernedAction) => delay(220, simGate(a)) },
+    policy: {
+      evaluate: (a: GovernedAction) => {
+        const d = simGate(a);
+        simIssued.set(d.decisionId, d);
+        return delay(220, d);
+      },
+      // The prototype has no budget to refund; it records the refusal so the
+      // shape of the flow matches the real adapter.
+      reject: (decisionId: number) =>
+        delay(180, {
+          ...(simIssued.get(decisionId) ?? simGate({ actionClass: "unknown", classification: "Public", agent: "user" })),
+          decisionId: simDecisionSeq++,
+          verdict: "rejected" as const,
+          hic: "1" as const,
+          reason: "RC-300 refused by the human it was escalated to",
+        }),
+    },
     wallet: { summary: () => delay(150, D.WALLET) },
     node: {
       peers: () => delay(120, D.NODE_PEERS),

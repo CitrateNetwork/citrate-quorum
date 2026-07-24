@@ -71,6 +71,7 @@ export interface ActionInput {
   correlation_id?: string;
 }
 export interface DecisionResult {
+  decision_id: number;
   verdict: Verdict;
   hic: string;
   grant_id: string | null;
@@ -83,6 +84,11 @@ export interface DecisionResult {
  *  tenant's chain. This is the HIC evidence loop: policy → decision → chain. */
 export function actionEvaluateAndRecord(input: ActionInput): Promise<DecisionResult> {
   return invoke<DecisionResult>("action_evaluate_and_record", { input });
+}
+
+/** Refund a refused decision's charge (once) and record the refusal. */
+export function actionReject(decisionId: number): Promise<DecisionResult> {
+  return invoke<DecisionResult>("action_reject", { decisionId });
 }
 
 // ---- capability grants ---------------------------------------------

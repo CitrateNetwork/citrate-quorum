@@ -62,6 +62,7 @@ pub fn verdict_str(v: Verdict) -> &'static str {
         Verdict::RequireApproval => "require-approval",
         Verdict::Deny => "deny",
         Verdict::Ungoverned => "ungoverned",
+        Verdict::Rejected => "rejected",
     }
 }
 pub fn verdict_from_str(s: &str) -> Option<Verdict> {
@@ -70,6 +71,7 @@ pub fn verdict_from_str(s: &str) -> Option<Verdict> {
         "require-approval" => Some(Verdict::RequireApproval),
         "deny" => Some(Verdict::Deny),
         "ungoverned" => Some(Verdict::Ungoverned),
+        "rejected" => Some(Verdict::Rejected),
         _ => None,
     }
 }
@@ -226,6 +228,17 @@ struct StoredAllowance {
 #[derive(Serialize, Deserialize, Default)]
 struct StoredScope {
     active_tenant: Option<String>,
+}
+
+/// What one decision took from its grant's budget. Kept so a rejection refunds
+/// exactly what was charged, exactly once — never a free "give me budget" call.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct Charge {
+    /// Index of the decision in the tenant's chain.
+    pub decision: u64,
+    pub agent: String,
+    pub grant_id: String,
+    pub units: u64,
 }
 
 // ---- the store -------------------------------------------------------
@@ -458,6 +471,25 @@ impl EvidenceStore {
             .collect();
         let body = serde_json::to_vec(&stored).map_err(|e| StoreError::Io(e.to_string()))?;
         write_atomic(&dir.join("allowances.json"), &body)
+    }
+
+    // ---- outstanding charges ------------------------------------------
+
+    pub fn save_charges(&self, tenant: &str, charges: &[Charge]) -> Result<(), StoreError> {
+        let dir = self.ensure_tenant_dir(tenant)?;
+        let body = serde_json::to_vec(charges).map_err(|e| StoreError::Io(e.to_string()))?;
+        write_atomic(&dir.join("charges.json"), &body)
+    }
+
+    pub fn load_charges(&self, tenant: &str) -> Result<Vec<Charge>, StoreError> {
+        let path = self.tenant_dir(tenant).join("charges.json");
+        let Ok(raw) = fs::read_to_string(&path) else {
+            return Ok(Vec::new());
+        };
+        serde_json::from_str(&raw).map_err(|e| StoreError::Corrupt {
+            line: 0,
+            detail: format!("charges.json does not parse ({e})"),
+        })
     }
 
     pub fn load_allowances(&self, tenant: &str) -> Result<Vec<VoteAllowance>, StoreError> {
@@ -714,6 +746,38 @@ mod tests {
         assert_eq!(root.store().load_scope().as_deref(), Some("bca"));
         store.save_scope(None).unwrap();
         assert!(root.store().load_scope().is_none());
+    }
+
+    #[test]
+    fn outstanding_charges_round_trip() {
+        let root = TempRoot::new();
+        let store = root.store();
+        assert!(store.load_charges("bca").unwrap().is_empty());
+        let charges = vec![Charge {
+            decision: 3,
+            agent: "sbt-41".into(),
+            grant_id: "G-1".into(),
+            units: 220,
+        }];
+        store.save_charges("bca", &charges).unwrap();
+        assert_eq!(store.load_charges("bca").unwrap(), charges);
+    }
+
+    #[test]
+    fn a_human_rejection_survives_the_round_trip() {
+        let root = TempRoot::new();
+        let store = root.store();
+        let mut chain = HashChain::new(t("bca"));
+        let mut r = rec("spend", 1000);
+        r.verdict = Verdict::Rejected;
+        r.hic = HicLevel::ApproveEach;
+        append(&store, &mut chain, "bca", r);
+
+        let back = store.load_chain(&t("bca")).unwrap();
+        assert_eq!(back.len(), 1);
+        let stored = back.records().next().unwrap();
+        assert_eq!(stored.verdict, Verdict::Rejected);
+        assert_eq!(back.head(), chain.head());
     }
 
     #[test]

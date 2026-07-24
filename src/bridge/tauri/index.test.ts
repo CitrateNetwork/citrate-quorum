@@ -18,6 +18,7 @@ describe("tauri adapter — policy gate", () => {
 
   it("maps the recorded decision onto the bridge contract", async () => {
     invoke.mockResolvedValue({
+      decision_id: 7,
       verdict: "require-approval",
       hic: "1",
       grant_id: "G-2291",
@@ -35,6 +36,7 @@ describe("tauri adapter — policy gate", () => {
     });
 
     expect(gate).toEqual({
+      decisionId: 7,
       verdict: "require-approval",
       hic: "1",
       grantId: "G-2291",
@@ -46,6 +48,7 @@ describe("tauri adapter — policy gate", () => {
 
   it("sends the action to Rust in the shape the command expects", async () => {
     invoke.mockResolvedValue({
+      decision_id: 0,
       verdict: "allow",
       hic: "2",
       grant_id: "G-1",
@@ -74,6 +77,22 @@ describe("tauri adapter — policy gate", () => {
     });
     // The frontend must not be able to name the tenant it writes to (Rule 6).
     expect(args.input).not.toHaveProperty("tenant");
+  });
+
+  it("routes a human refusal to the refund command with the right decision", async () => {
+    invoke.mockResolvedValue({
+      decision_id: 8,
+      verdict: "rejected",
+      hic: "1",
+      grant_id: "G-2291",
+      reason: "RC-300 refused by the human it was escalated to",
+      chain_head: "0xbeef",
+      ungoverned: false,
+    });
+    const gate = await createTauriBridge().policy.reject(7);
+    expect(invoke).toHaveBeenCalledWith("action_reject", { decisionId: 7 });
+    expect(gate.verdict).toBe("rejected");
+    expect(gate.decisionId).toBe(8);
   });
 
   it("propagates a backend refusal instead of swallowing it (fail closed)", async () => {

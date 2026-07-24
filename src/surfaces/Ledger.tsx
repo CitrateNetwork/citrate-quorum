@@ -9,6 +9,9 @@ import type { CorrelationEvent, Decision, DecisionDetail } from "../bridge";
 type View = "ribbon" | "decision" | "correlation";
 const VERDICT_COLOR: Record<string, string> = {
   allow: "var(--ok)", "require-approval": "var(--warn)", deny: "var(--danger)", ungoverned: "var(--danger)",
+  // A human refusing is not the same event as policy refusing — it reads as a
+  // deliberate act, not a failure.
+  rejected: "var(--info)",
 };
 const HIC_COLOR: Record<string, string> = { "1": "var(--ok)", "2": "var(--info)", "3": "var(--warn)", X: "var(--danger)" };
 const hicLabel = (h: string) => (h === "X" ? "HIC-X" : `HIC-${h}`);
@@ -114,7 +117,7 @@ export function Ledger() {
               <input type="checkbox" checked={ungOnly} onChange={(e) => setUngOnly(e.target.checked)} />Ungoverned only
             </label>
             <select className="mono" value={verdict} onChange={(e) => setVerdict(e.target.value)} style={{ fontSize: 10, background: "var(--srf-1)", color: "var(--tx-2)", border: "1px solid var(--line-2)", padding: "4px 8px", borderRadius: "var(--r-1)" }}>
-              <option value="all">All verdicts</option><option value="allow">allow</option><option value="require-approval">require-approval</option><option value="deny">deny</option>
+              <option value="all">All verdicts</option><option value="allow">allow</option><option value="require-approval">require-approval</option><option value="rejected">rejected</option><option value="deny">deny</option>
             </select>
           </div>
           <div className="mono" style={{ display: "grid", gridTemplateColumns: "70px 90px 110px 120px 1fr 60px 100px 70px", gap: 8, padding: "6px 14px", fontSize: 9, letterSpacing: ".12em", textTransform: "uppercase", color: "var(--tx-3)", borderBottom: "1px solid var(--line-1)" }}>
