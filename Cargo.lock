@@ -3208,6 +3208,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "quorum-clearance"
+version = "0.0.0"
+dependencies = [
+ "citrate-core-kit",
+ "hex",
+ "quorum-rbac",
+ "quorum-session",
+ "quorum-tenancy",
+ "serde_json",
+]
+
+[[package]]
 name = "quorum-license"
 version = "0.0.0"
 

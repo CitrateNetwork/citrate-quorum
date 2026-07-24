@@ -10,6 +10,7 @@ members = [
     "src-tauri/crates/quorum-license",
     "src-tauri/crates/quorum-rbac",
     "src-tauri/crates/quorum-session",
+    "src-tauri/crates/quorum-clearance",
 ]
 
 [workspace.package]
