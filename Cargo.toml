@@ -5,6 +5,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "src-tauri",
     "src-tauri/crates/quorum-tenancy",
     "src-tauri/crates/quorum-license",
     "src-tauri/crates/quorum-rbac",

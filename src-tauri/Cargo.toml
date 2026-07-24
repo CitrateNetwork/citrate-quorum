@@ -1,0 +1,43 @@
+# citrate-quorum — the Tauri desktop app (backend). WP-S1.3.
+#
+# Consumes citrate-core-kit (the shared signing/custody/oidc/supervisor spine) so
+# the SignatureCeremony — the single HITL signing path — is ONE implementation
+# across the federation, never forked. See EXTRACTION_PLAN.md.
+[package]
+name = "citrate-quorum"
+version = "0.0.0"
+description = "citrate-quorum — governance for agents (Tauri desktop app). T1."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "citrate_quorum_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# The shared spine. LOCAL DEV: a path dep to the sibling checkout — works today,
+# no SSH alias needed. PRODUCTION/CI: switch to the pinned SSH git dep once a
+# `github-citrate-core` alias + read-only deploy key are provisioned (owner infra,
+# mirroring citrate-agent-runtime's citrate-wallet-core dep). Pin target:
+# citrate-core main @ 5a1b5c3 (the PR #82 merge — the kit's first shipped rev).
+#   citrate-core-kit = { git = "ssh://git@github-citrate-core/CitrateNetwork/citrate-core", rev = "5a1b5c3" }
+citrate-core-kit = { path = "../../citrate-core/kit" }
+
+# Quorum's own backend crates (freeze-independent, WP-S1.4/1.5/1.6).
+quorum-tenancy = { path = "crates/quorum-tenancy" }
+quorum-license = { path = "crates/quorum-license" }
+quorum-rbac = { path = "crates/quorum-rbac" }
+
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-store = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lints]
+workspace = true

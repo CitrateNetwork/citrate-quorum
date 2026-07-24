@@ -23,13 +23,17 @@ before release.
 
 | Present | Not present |
 |---|---|
-| Repo governance (this file, `CLAUDE.md`, `AUDIT_TIER.md`) | Any Rust or TypeScript source |
-| Agent entry point (`.agentile/AGENT_ENTRY.md`) | The Tauri app |
-| The QRM-S1 sprint scope | `citrate-core-kit` (extraction is S1's main work package) |
-| Docs CI (frontmatter + link checks) | Code CI (lands with the code in S1) |
+| Repo governance (`CLAUDE.md`, `AUDIT_TIER.md`) | The governance surfaces (Rooms, Meetings, Governance, Agents, Ledger, …) |
+| A booting **Tauri app skeleton** consuming `citrate-core-kit` | The design-prototype frontend (arrives QRM-S2D) |
+| The shared **SignatureCeremony** signing surface (from the kit) | quorum's own domains (rooms, meetings, governance, agents, …) |
+| Backend crates: `quorum-tenancy`, `quorum-license`, `quorum-rbac` | Real chain / relay / identity / model wiring |
+| Local check gate (`scripts/check.sh`) + pre-push hook | Hosted CI (Actions down org-wide; local-first for now) |
 
-Nothing in this repo currently talks to a chain, a relay, an identity provider,
-or a model. When it does, this table changes in the same PR. (Rule 1.)
+The Tauri backend + the shared signing spine are real and tested; the governance
+UI is an honest "under construction" placeholder until the design prototype lands.
+The `citrate-core-kit` dependency is a **local path dep** to the sibling checkout
+for now — production/CI switches to a pinned SSH git dep once a `github-citrate-core`
+alias + deploy key are provisioned (owner infra). Nothing fabricates data (Rule 1).
 
 ## Canonical truth
 
