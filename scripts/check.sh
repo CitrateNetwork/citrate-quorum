@@ -116,8 +116,12 @@ run "no invoke in surfaces" "no src/surfaces yet (design prototype)" "$HAS_SRC" 
     bash -c '! grep -rn "from \"@tauri-apps/api" src/surfaces src/components 2>/dev/null'
 run "no sim data outside bridge" "no src/surfaces yet (design prototype)" "$HAS_SRC" \
     bash -c '! grep -rln "FIXTURE\|MOCK_\|fakeData" src/surfaces src/components 2>/dev/null'
+# Surfaces + components MUST use semantic tokens (var(--...)), never literal hex.
+# src/shell is excluded: the sidebar is fixed evergreen brand chrome that
+# hardcodes the same on-dark palette as citrate-core's Sidebar.tsx (no semantic
+# token exists for sidebar-on-evergreen text).
 run "no hardcoded hex" "no src/surfaces yet (design prototype)" "$HAS_SRC" \
-    bash -c '! grep -rnE "#[0-9a-fA-F]{6}\b" src/surfaces src/components src/shell 2>/dev/null'
+    bash -c '! grep -rnE "#[0-9a-fA-F]{6}\b" src/surfaces src/components 2>/dev/null'
 
 # ---- @rule8: no signing / updater key material -----------------------------
 # WP-S1.8: the installer skeleton is UNSIGNED and has NO auto-updater. Signing

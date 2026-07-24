@@ -1,0 +1,2254 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="_ds/citrate-design-system-244c4cdf-0fbf-406e-9d19-bc9db7d7b48a/styles.css">
+<link rel="stylesheet" href="citrate-core-tokens.css">
+<script src="_ds/citrate-design-system-244c4cdf-0fbf-406e-9d19-bc9db7d7b48a/_ds_bundle.js"></script>
+<style>
+  html, body { height: 100%; margin: 0; }
+  body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+</style>
+</helmet>
+<div style="font-family:var(--font-sans);color:var(--tx-1);height:100vh;overflow:hidden;background:var(--srf-0);--dpad:{{ dpad }};" data-register="charter">
+
+<!-- ============================ ONBOARDING ============================ -->
+<sc-if value="{{ ob }}" hint-placeholder-val="{{ true }}">
+<div data-register="charter" data-screen-label="Onboarding" style="height:100vh;display:flex;flex-direction:column;background:var(--srf-0);overflow:auto;">
+
+  <sc-if value="{{ obSign }}" hint-placeholder-val="{{ true }}">
+  <div class="lattice-dots" data-screen-label="Sign in" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:24px;padding:48px 24px;text-align:center;">
+    <div style="width:160px;height:160px;"><dc-import name="LoaderMark" size="160" hint-size="160px,160px"></dc-import></div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <img src="assets/citrate_marquee_black.svg" alt="Citrate" style="height:18px;">
+      <span class="mono" style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--tx-2);border:1px solid var(--line-2);padding:2px 8px;">Quorum</span>
+    </div>
+    <div style="max-width:560px;display:flex;flex-direction:column;gap:12px;align-items:center;">
+      <div style="font-family:var(--font-display);font-weight:380;font-size:44px;line-height:1.08;letter-spacing:-0.02em;">A ledger you can hold a meeting inside.</div>
+      <p style="font-size:15.5px;line-height:1.55;color:var(--tx-2);margin:0;max-width:480px;">Humans in control and agents from every vendor, meeting under governance that is written in plain English and enforced on chain.</p>
+    </div>
+    <button class="btn btn-primary btn-lg" onClick="{{ onObSign }}">Continue with Meridian SSO · Okta</button>
+    <div class="eyebrow">Federated identity · clearance resolves from chain · chain 40204</div>
+    <a href="#" onClick="{{ onObReduced }}" style="font-size:12px;">View the reduced-access state</a>
+  </div>
+  </sc-if>
+
+  <sc-if value="{{ obResolve }}" hint-placeholder-val="{{ false }}">
+  <div style="flex:1;display:flex;align-items:center;justify-content:center;padding:32px;">
+    <div class="surface" style="width:460px;padding:28px;display:flex;flex-direction:column;gap:18px;">
+      <div style="display:flex;align-items:center;gap:16px;">
+        <div style="width:44px;height:44px;flex-shrink:0;"><dc-import name="LoaderMark" size="44" hint-size="44px,44px"></dc-import></div>
+        <div>
+          <div style="font-size:15px;font-weight:500;">Resolving your clearance</div>
+          <div class="mono" style="font-size:10.5px;color:var(--tx-3);">nothing is granted by default — access is computed, then shown</div>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:9px;border-top:1px solid var(--line-1);padding-top:14px;">
+        <sc-for list="{{ obChecks }}" as="ck" hint-placeholder-count="4">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span style="width:18px;height:18px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;background:{{ ck.bg }};border:1px solid {{ ck.bd }};color:{{ ck.fg }};flex-shrink:0;">
+              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M5 12 L10 17 L19 8"></path></svg>
+            </span>
+            <span class="mono" style="font-size:11.5px;color:{{ ck.tx }};">{{ ck.label }}</span>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <sc-if value="{{ obTour }}" hint-placeholder-val="{{ false }}">
+  <div style="flex:1;display:flex;align-items:center;justify-content:center;padding:32px;">
+    <div class="surface cc-fade-up" style="width:560px;padding:34px;display:flex;flex-direction:column;gap:18px;border-top:2px solid var(--line-strong);">
+      <div class="eyebrow">Human in control · {{ tour.step }} of 4</div>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <span class="mono" style="font-size:13px;font-weight:500;padding:4px 10px;border:1px solid {{ tour.color }};color:{{ tour.color }};">{{ tour.badge }}</span>
+        <div style="font-family:var(--font-display);font-weight:420;font-size:26px;letter-spacing:-0.01em;">{{ tour.title }}</div>
+      </div>
+      <p style="font-size:15px;line-height:1.6;color:var(--tx-2);margin:0;">{{ tour.body }}</p>
+      <div style="display:flex;align-items:center;gap:14px;border-top:1px solid var(--line-1);padding-top:16px;">
+        <div style="display:flex;gap:6px;">
+          <sc-for list="{{ tourDots }}" as="d" hint-placeholder-count="4">
+            <span style="width:8px;height:8px;border-radius:999px;background:{{ d.bg }};border:1px solid var(--line-2);"></span>
+          </sc-for>
+        </div>
+        <div style="flex:1;"></div>
+        <button class="btn btn-primary" onClick="{{ onTourNext }}">{{ tour.cta }}</button>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <sc-if value="{{ obReducedV }}" hint-placeholder-val="{{ false }}">
+  <div style="flex:1;display:flex;align-items:center;justify-content:center;padding:32px;">
+    <div class="surface" style="width:520px;padding:30px;display:flex;flex-direction:column;gap:14px;border-top:2px solid var(--warn);">
+      <div class="eyebrow" style="color:var(--warn);">Access changed</div>
+      <div style="font-family:var(--font-display);font-weight:420;font-size:26px;">Your clearance was reduced</div>
+      <p style="font-size:14.5px;line-height:1.6;color:var(--tx-2);margin:0;">Your CUI entitlement expired on 2026-07-20 and has not been renewed by your identity provider. Quorum fails closed: you are signed in at <span class="mono">PUBLIC</span> clearance. Rooms, documents, and decisions above Public show a redaction plate naming what is required.</p>
+      <div class="mono" style="font-size:11px;color:var(--tx-3);border:1px solid var(--line-1);padding:10px 12px;background:var(--srf-inset);">Who can restore it — Meridian IdP admin (SCIM group aero-cui) · deprovision SLA 15 min · source: identity federation, not this app</div>
+      <div><button class="btn btn-ghost" onClick="{{ onObBack }}">Back to sign in</button></div>
+    </div>
+  </div>
+  </sc-if>
+</div>
+</sc-if>
+
+<!-- ============================ SHELL ============================ -->
+<sc-if value="{{ shell }}" hint-placeholder-val="{{ false }}">
+<div style="height:100vh;display:grid;grid-template-columns:224px 1fr;min-width:0;">
+
+  <!-- sidebar -->
+  <div style="background:#0f2a1a;color:#cde7d6;display:flex;flex-direction:column;min-height:0;">
+    <div style="display:flex;align-items:center;gap:9px;padding:16px 14px 12px;">
+      <img src="assets/citrate_mark_white.svg" alt="" style="width:22px;height:22px;">
+      <img src="assets/citrate_marquee_white.svg" alt="Citrate" style="height:12px;">
+      <div style="flex:1;"></div>
+      <span class="mono" style="font-size:8.5px;letter-spacing:.18em;color:rgba(205,231,214,.6);">QUORUM</span>
+    </div>
+    <div style="flex:1;overflow:auto;padding:4px 8px;display:flex;flex-direction:column;gap:2px;">
+      <sc-for list="{{ nav }}" as="g" hint-placeholder-count="4">
+        <div class="mono" style="font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:rgba(205,231,214,.45);padding:12px 8px 5px;">{{ g.label }}</div>
+        <sc-for list="{{ g.items }}" as="it" hint-placeholder-count="3">
+          <div onClick="{{ it.onClick }}" style="display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:var(--r-1);cursor:pointer;background:{{ it.bg }};color:{{ it.fg }};" style-hover="background:{{ it.hbg }};">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="{{ it.p1 }}"></path><path d="{{ it.p2 }}"></path></svg>
+            <span style="font-size:13px;font-weight:500;flex:1;">{{ it.label }}</span>
+            <sc-if value="{{ it.badge }}" hint-placeholder-val="{{ false }}">
+              <span class="mono tabular" style="font-size:10px;background:var(--citrate-yellow,#ffbd10);color:#0e0f0c;border-radius:999px;padding:1px 6px;">{{ it.badge }}</span>
+            </sc-if>
+            <sc-if value="{{ it.liveDot }}" hint-placeholder-val="{{ false }}">
+              <span style="width:7px;height:7px;border-radius:999px;background:#8ecc09;animation:ccPulse 1.6s infinite;"></span>
+            </sc-if>
+            <sc-if value="{{ it.amberDot }}" hint-placeholder-val="{{ false }}">
+              <span style="width:7px;height:7px;border-radius:999px;background:#ffbd10;"></span>
+            </sc-if>
+          </div>
+        </sc-for>
+      </sc-for>
+    </div>
+    <div style="border-top:1px solid rgba(205,231,214,.14);padding:12px 14px;display:flex;flex-direction:column;gap:10px;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="width:30px;height:30px;border-radius:999px;background:rgba(142,204,9,.18);border:1px solid rgba(142,204,9,.5);display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:#8ecc09;flex-shrink:0;">RO</span>
+        <div style="min-width:0;">
+          <div style="font-size:12.5px;font-weight:500;color:#e9efe7;">Rachel Ortiz</div>
+          <div class="mono" style="font-size:9px;letter-spacing:.08em;color:rgba(205,231,214,.55);">HumanSBT #12 · Line-4 Automation</div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span class="mono" style="font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--warn);border:1px solid var(--warn);padding:1px 6px;">CUI</span>
+        <div style="flex:1;"></div>
+        <span style="width:7px;height:7px;border-radius:999px;background:{{ nodeDot }};animation:{{ nodeAnim }};"></span>
+        <span class="mono" style="font-size:9px;color:rgba(205,231,214,.55);">{{ nodeLabel }}</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- main -->
+  <div style="display:grid;grid-template-rows:52px 1fr 30px;min-width:0;min-height:0;background:var(--srf-0);color:var(--tx-1);" data-register="{{ register }}">
+    <!-- topbar -->
+    <div style="display:flex;align-items:center;gap:14px;padding:0 18px;border-bottom:1px solid var(--line-1);background:var(--srf-1);position:relative;">
+      <button class="mono" onClick="{{ onScope }}" style="font-size:10px;letter-spacing:.06em;color:var(--tx-2);background:transparent;border:1px solid var(--line-2);border-radius:var(--r-1);padding:4px 9px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:340px;direction:rtl;"><span style="direction:ltr;unicode-bidi:isolate;">{{ tenantChip }}</span></button>
+      <div style="font-family:var(--font-display);font-weight:460;font-size:17px;letter-spacing:-0.008em;">{{ surfaceTitle }}</div>
+      <div style="flex:1;"></div>
+      <button class="mono" onClick="{{ onPalOpen }}" style="font-size:10px;color:var(--tx-3);background:transparent;border:1px solid var(--line-1);border-radius:var(--r-1);padding:4px 9px;cursor:pointer;">⌘K</button>
+      <button class="mono" onClick="{{ onDensity }}" title="Density" style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx-2);background:transparent;border:1px solid var(--line-2);border-radius:var(--r-1);padding:4px 9px;cursor:pointer;">{{ densityLabel }}</button>
+      <button class="mono" onClick="{{ onHic }}" style="font-size:10.5px;font-weight:500;letter-spacing:.1em;color:{{ hicColor }};background:transparent;border:1px solid {{ hicColor }};border-radius:999px;padding:4px 11px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;">
+        <span style="width:7px;height:7px;border-radius:999px;background:{{ hicColor }};"></span>HIC-2
+      </button>
+      <sc-if value="{{ hicOpen }}" hint-placeholder-val="{{ false }}">
+        <div data-register="charter" class="surface" style="color:var(--tx-1);position:absolute;top:48px;right:18px;width:340px;padding:16px;z-index:60;box-shadow:0 12px 32px rgba(14,15,12,.18);border-radius:var(--r-2);">
+          <div class="eyebrow" style="margin-bottom:8px;">HIC-2 · Budgeted autonomy</div>
+          <p style="font-size:13px;line-height:1.55;color:var(--tx-2);margin:0 0 10px;">Agents in this scope act inside granted envelopes. Spends and writes above the protocol threshold pause for a signature.</p>
+          <div class="mono" style="font-size:10px;color:var(--tx-3);border-top:1px solid var(--line-1);padding-top:8px;">Set by PRT-004 · ratified 2026-06-30 · Rachel Ortiz + M. Okonkwo</div>
+        </div>
+      </sc-if>
+    </div>
+
+    <!-- surface -->
+    <div style="min-height:0;overflow:auto;position:relative;">
+
+      <sc-if value="{{ connBanner }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;align-items:center;gap:10px;padding:8px 18px;background:{{ connBg }};border-bottom:1px solid {{ connBd }};">
+          <span style="width:8px;height:8px;border-radius:999px;background:{{ connBd }};"></span>
+          <span style="font-size:12.5px;font-weight:500;">{{ connText }}</span>
+          <span class="mono" style="font-size:10px;color:var(--tx-3);">{{ connSub }}</span>
+        </div>
+      </sc-if>
+
+      <!-- ======================= DASHBOARD ======================= -->
+      <sc-if value="{{ rDash }}" hint-placeholder-val="{{ true }}">
+      <div data-screen-label="Dashboard" style="padding:18px;display:flex;flex-direction:column;gap:16px;">
+        <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;">
+          <sc-for list="{{ statTiles }}" as="st" hint-placeholder-count="6">
+            <div class="surface" onClick="{{ st.onClick }}" style="padding:12px 14px;display:flex;flex-direction:column;gap:6px;cursor:pointer;border-top:2px solid {{ st.top }};">
+              <span class="mono" style="font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:var(--tx-3);">{{ st.label }}</span>
+              <span class="tabular" style="font-family:var(--font-display);font-weight:460;font-size:24px;color:{{ st.color }};">{{ st.value }}</span>
+              <span class="mono" style="font-size:9.5px;color:var(--tx-3);">{{ st.sub }}</span>
+            </div>
+          </sc-for>
+        </div>
+
+        <div class="surface" style="display:flex;flex-direction:column;">
+          <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line-1);">
+            <span class="eyebrow">Needs you</span>
+            <span class="mono tabular" style="font-size:10px;color:var(--warn);">{{ needsCount }}</span>
+          </div>
+          <sc-if value="{{ needsEmpty }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:22px 14px;display:flex;align-items:center;gap:12px;">
+              <span style="width:22px;height:22px;border-radius:999px;background:var(--ok-bg);border:1px solid var(--ok);color:var(--ok);display:inline-flex;align-items:center;justify-content:center;"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 12 L10 17 L19 8"></path></svg></span>
+              <span style="font-size:13.5px;color:var(--tx-2);">Nothing is waiting on you. Every agent is inside its envelope — this is the state the system is designed to hold.</span>
+            </div>
+          </sc-if>
+          <sc-for list="{{ needsYou }}" as="ny" hint-placeholder-count="2">
+            <div onClick="{{ ny.onClick }}" style="display:flex;align-items:center;gap:12px;padding:var(--dpad) 14px;border-bottom:1px solid var(--line-1);cursor:pointer;" style-hover="background:var(--srf-1);">
+              <span class="mono" style="font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:{{ ny.color }};border:1px solid {{ ny.color }};padding:2px 7px;flex-shrink:0;">{{ ny.tag }}</span>
+              <span style="font-size:13px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ ny.text }}</span>
+              <span class="mono" style="font-size:10px;color:var(--tx-3);flex-shrink:0;">{{ ny.meta }}</span>
+            </div>
+          </sc-for>
+        </div>
+
+        <div class="surface" style="display:flex;flex-direction:column;min-height:0;">
+          <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line-1);">
+            <span class="eyebrow">Live decisions</span>
+            <span style="width:7px;height:7px;border-radius:999px;background:var(--accent);animation:ccPulse 1.6s infinite;"></span>
+            <div style="flex:1;"></div>
+            <a href="#" onClick="{{ goLedger }}" class="mono" style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;">Open ledger →</a>
+          </div>
+          <div class="mono" style="display:grid;grid-template-columns:70px 90px 110px 120px 1fr 60px 70px;gap:8px;padding:6px 14px;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--tx-3);border-bottom:1px solid var(--line-1);">
+            <span>Time</span><span>Decision</span><span>Principal</span><span>Agent</span><span>Action class</span><span>HIC</span><span>Verdict</span>
+          </div>
+          <sc-for list="{{ ribbon }}" as="rw" hint-placeholder-count="8">
+            <div class="mono tabular {{ rw.cls }}" style="display:grid;grid-template-columns:70px 90px 110px 120px 1fr 60px 70px;gap:8px;padding:var(--dpad) 14px;font-size:11px;border-bottom:1px solid var(--line-1);background:{{ rw.bg }};">
+              <span style="color:var(--tx-3);">{{ rw.time }}</span>
+              <span>{{ rw.id }}</span>
+              <span style="color:var(--tx-2);">{{ rw.principal }}</span>
+              <span style="color:{{ rw.vcolor }};">{{ rw.agent }}</span>
+              <span style="color:var(--tx-2);">{{ rw.actionCls }}</span>
+              <span style="color:{{ rw.hicColor }};">{{ rw.hic }}</span>
+              <span style="color:{{ rw.verdictColor }};">{{ rw.verdict }}</span>
+            </div>
+          </sc-for>
+          <div class="mono" style="font-size:9.5px;letter-spacing:.08em;color:var(--tx-3);padding:7px 14px;">Read from ledger.stream() → AgentDecisionRegistryV2 → chain 40204 @ block {{ chainH }}</div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">
+          <sc-for list="{{ risks }}" as="rk" hint-placeholder-count="4">
+            <div class="surface" style="padding:12px 14px;display:flex;flex-direction:column;gap:6px;border-left:none;border-top:2px solid {{ rk.color }};">
+              <span class="mono" style="font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:{{ rk.color }};">{{ rk.label }}</span>
+              <span style="font-size:12.5px;line-height:1.45;color:var(--tx-2);">{{ rk.text }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ======================= ROOMS ======================= -->
+      <sc-if value="{{ rRooms }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Rooms" style="height:100%;display:flex;flex-direction:column;min-height:0;">
+
+        <sc-if value="{{ roomList }}" hint-placeholder-val="{{ false }}">
+        <div style="padding:18px;display:flex;flex-direction:column;gap:10px;">
+          <sc-for list="{{ roomRows }}" as="rm" hint-placeholder-count="3">
+            <div class="surface" onClick="{{ rm.onClick }}" style="display:flex;align-items:center;gap:14px;padding:14px 16px;cursor:pointer;" style-hover="border-color:var(--tx-2);">
+              <sc-if value="{{ rm.live }}" hint-placeholder-val="{{ false }}"><span style="width:8px;height:8px;border-radius:999px;background:var(--accent);animation:ccPulse 1.5s infinite;"></span></sc-if>
+              <sc-if value="{{ rm.notLive }}" hint-placeholder-val="{{ false }}"><span style="width:8px;height:8px;border-radius:999px;background:var(--line-2);"></span></sc-if>
+              <span style="font-size:14px;font-weight:500;flex:1;">{{ rm.name }}</span>
+              <span class="mono" style="font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:{{ rm.clsColor }};border:1px solid {{ rm.clsColor }};padding:2px 7px;">{{ rm.classification }}</span>
+              <span class="mono tabular" style="font-size:10.5px;color:var(--tx-3);">{{ rm.meta }}</span>
+            </div>
+          </sc-for>
+          <div class="mono" style="font-size:9.5px;color:var(--tx-3);">Read from rooms.list() → relay-wichita-2 · rooms are E2E-encrypted; the relay sees ciphertext</div>
+        </div>
+        </sc-if>
+
+        <sc-if value="{{ inRoom }}" hint-placeholder-val="{{ false }}">
+        <div style="flex:1;display:grid;grid-template-columns:216px 1fr 288px;min-height:0;">
+
+          <!-- roster -->
+          <div style="border-right:1px solid var(--line-1);display:flex;flex-direction:column;min-height:0;background:var(--srf-1);">
+            <div style="padding:12px 12px 8px;display:flex;flex-direction:column;gap:2px;">
+              <span style="font-size:13.5px;font-weight:500;">Weekly Standup — Line-4</span>
+              <div style="display:flex;align-items:center;gap:6px;">
+                <span class="mono" style="font-size:8.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--info);border:1px solid var(--info);padding:1px 5px;">Proprietary</span>
+                <span class="mono" style="font-size:9px;color:var(--tx-3);">since 09:00</span>
+              </div>
+            </div>
+            <div style="flex:1;overflow:auto;padding:4px 8px;display:flex;flex-direction:column;gap:2px;">
+              <sc-for list="{{ roster }}" as="ro" hint-placeholder-count="6">
+                <div style="display:flex;align-items:center;gap:8px;padding:6px 6px;border-radius:var(--r-1);" title="{{ ro.tip }}">
+                  <span style="width:24px;height:24px;border-radius:999px;background:{{ ro.avBg }};border:1px solid {{ ro.avBd }};color:{{ ro.avFg }};display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:600;flex-shrink:0;">{{ ro.initials }}</span>
+                  <div style="min-width:0;flex:1;">
+                    <div style="display:flex;align-items:center;gap:5px;">
+                      <span style="font-size:12px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ ro.name }}</span>
+                      <sc-if value="{{ ro.speaking }}" hint-placeholder-val="{{ false }}">
+                        <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="var(--accent)" stroke-width="2" style="animation:ccPulse 1.2s infinite;flex-shrink:0;"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z M19 10v2a7 7 0 0 1-14 0v-2"></path></svg>
+                      </sc-if>
+                    </div>
+                    <div class="mono" style="font-size:8.5px;color:{{ ro.subColor }};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ ro.sub }}</div>
+                  </div>
+                  <sc-if value="{{ ro.hicChip }}" hint-placeholder-val="{{ false }}">
+                    <span class="mono" style="font-size:8px;color:{{ ro.hicColor }};flex-shrink:0;">{{ ro.hicChip }}</span>
+                  </sc-if>
+                </div>
+              </sc-for>
+            </div>
+            <div style="padding:10px;display:flex;flex-direction:column;gap:6px;border-top:1px solid var(--line-1);">
+              <button class="btn btn-ghost btn-sm" style="width:100%;">Call an agent…</button>
+              <button class="btn btn-danger btn-sm" onClick="{{ onRevokeAll }}" style="width:100%;">Revoke all — this room</button>
+            </div>
+          </div>
+
+          <!-- transcript -->
+          <div style="display:flex;flex-direction:column;min-height:0;">
+            <sc-if value="{{ needConsent }}" hint-placeholder-val="{{ false }}">
+              <div style="flex:1;display:flex;align-items:center;justify-content:center;padding:24px;">
+                <div class="surface" style="width:420px;padding:22px;display:flex;flex-direction:column;gap:12px;border-top:2px solid var(--info);">
+                  <span class="eyebrow">Before you join</span>
+                  <div style="font-size:15px;font-weight:500;">Audio is transcribed locally</div>
+                  <p style="font-size:13px;line-height:1.55;color:var(--tx-2);margin:0;">Push-to-talk speech is transcribed on this machine and posted as attributed text. Raw audio is never stored and never leaves this device. The transcript is part of the room record.</p>
+                  <div style="display:flex;gap:8px;">
+                    <button class="btn btn-primary btn-sm" onClick="{{ onConsent }}">I consent — join with voice</button>
+                    <button class="btn btn-ghost btn-sm" onClick="{{ onConsentText }}">Join text-only</button>
+                  </div>
+                </div>
+              </div>
+            </sc-if>
+            <sc-if value="{{ hasTranscript }}" hint-placeholder-val="{{ false }}">
+            <div style="flex:1;overflow:auto;padding:14px 18px;display:flex;flex-direction:column;gap:10px;">
+              <sc-for list="{{ transcript }}" as="ev" hint-placeholder-count="6">
+                <div>
+                  <sc-if value="{{ ev.isSystem }}" hint-placeholder-val="{{ false }}">
+                    <div class="mono" style="border-top:1px solid var(--line-2);border-bottom:1px solid var(--line-2);padding:7px 2px;display:flex;align-items:baseline;gap:10px;">
+                      <span style="font-size:10.5px;letter-spacing:.06em;color:{{ ev.sysColor }};">{{ ev.text }}</span>
+                      <span style="font-size:9px;color:var(--tx-3);">{{ ev.meta }}</span>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ ev.isMsg }}" hint-placeholder-val="{{ false }}">
+                    <div style="display:flex;gap:10px;">
+                      <span class="mono" style="font-size:9.5px;color:{{ ev.whoColor }};border:1px solid {{ ev.whoColor }};padding:2px 7px;height:fit-content;flex-shrink:0;">{{ ev.who }}</span>
+                      <div style="min-width:0;">
+                        <p style="font-size:13px;line-height:1.5;margin:0;color:var(--tx-1);font-style:{{ ev.fstyle }};">{{ ev.text }}</p>
+                        <sc-for list="{{ ev.citeChips }}" as="c" hint-placeholder-count="0">
+                          <span onClick="{{ c.onClick }}" class="mono" style="display:inline-block;font-size:9.5px;color:var(--info);border:1px solid var(--info);padding:1px 7px;margin:5px 6px 0 0;cursor:pointer;" style-hover="background:var(--info-bg);">{{ c.label }}</span>
+                        </sc-for>
+                      </div>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ ev.isTool }}" hint-placeholder-val="{{ false }}">
+                    <div class="mono" style="display:flex;align-items:center;gap:10px;border:1px solid {{ ev.toolBd }};background:{{ ev.toolBg }};padding:6px 10px;font-size:10.5px;">
+                      <span style="color:{{ ev.whoColor }};">{{ ev.who }}</span>
+                      <span style="color:var(--tx-1);">{{ ev.tool }}</span>
+                      <span style="color:{{ ev.toolColor }};text-transform:uppercase;letter-spacing:.08em;font-size:9px;">{{ ev.verdict }}</span>
+                      <span style="color:var(--tx-3);">{{ ev.dur }}</span>
+                      <div style="flex:1;"></div>
+                      <span style="color:var(--tx-3);font-size:9.5px;">{{ ev.result }}</span>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ ev.isContra }}" hint-placeholder-val="{{ false }}">
+                    <div style="border:1.5px solid var(--warn);padding:12px 14px;display:flex;flex-direction:column;gap:8px;background:var(--warn-bg);">
+                      <span class="mono" style="font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--warn);">Contradiction — two attested sources disagree</span>
+                      <span style="font-size:13px;font-weight:500;">{{ ev.fact }}</span>
+                      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                        <div class="mono" style="font-size:10.5px;border:1px solid var(--line-2);padding:7px 9px;background:var(--srf-0);"><span style="color:var(--z-cyan);">{{ ev.a }}</span><br>{{ ev.va }}</div>
+                        <div class="mono" style="font-size:10.5px;border:1px solid var(--line-2);padding:7px 9px;background:var(--srf-0);"><span style="color:var(--z-indigo);">{{ ev.b }}</span><br>{{ ev.vb }}</div>
+                      </div>
+                      <span style="font-size:11.5px;color:var(--tx-2);">{{ ev.note }}</span>
+                      <div style="display:flex;gap:6px;">
+                        <button class="btn btn-ghost btn-sm">Escalate</button><button class="btn btn-ghost btn-sm">Resolve</button><button class="btn btn-ghost btn-sm">Withdraw</button>
+                      </div>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ ev.isCast }}" hint-placeholder-val="{{ false }}">
+                    <div class="mono" style="font-size:10px;color:var(--tx-3);padding-left:12px;">▸ {{ ev.who }} voted <span style="color:var(--tx-1);">{{ ev.choice }}</span> · weight {{ ev.weight }} <span style="color:var(--tx-3);">{{ ev.proof }}</span></div>
+                  </sc-if>
+                </div>
+              </sc-for>
+            </div>
+            <div style="display:flex;gap:8px;padding:10px 18px;border-top:1px solid var(--line-1);align-items:center;">
+              <input class="input" placeholder="Message the room — @agent to address one" style="flex:1;">
+              <button class="btn btn-ghost" title="Push to talk — hold">🎙 Hold to talk</button>
+              <span class="mono" style="font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx-3);">transcribing locally</span>
+            </div>
+            </sc-if>
+          </div>
+
+          <!-- work panel -->
+          <div style="border-left:1px solid var(--line-1);overflow:auto;display:flex;flex-direction:column;background:var(--srf-1);">
+            <div style="padding:12px 14px;border-bottom:1px solid var(--line-1);display:flex;flex-direction:column;gap:8px;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span class="eyebrow">Agenda</span><div style="flex:1;"></div>
+                <span onClick="{{ onVerifyAgenda }}" class="mono" style="font-size:9px;color:{{ vAgenda.color }};border:1px solid {{ vAgenda.bd }};padding:1px 7px;cursor:pointer;">{{ vAgenda.label }}</span>
+              </div>
+              <span class="mono" style="font-size:9.5px;color:var(--tx-3);">b3:aa17…90c2 · frozen at open</span>
+              <sc-for list="{{ agendaItems }}" as="ai" hint-placeholder-count="4">
+                <div style="display:flex;gap:8px;font-size:12px;color:var(--tx-2);"><span class="mono tabular" style="color:var(--tx-3);">{{ ai.n }}</span><span>{{ ai.text }}</span></div>
+              </sc-for>
+            </div>
+            <div style="padding:12px 14px;border-bottom:1px solid var(--line-1);display:flex;flex-direction:column;gap:8px;">
+              <span class="eyebrow">Approvals pending</span>
+              <sc-if value="{{ roomEscPending }}" hint-placeholder-val="{{ false }}">
+                <div onClick="{{ onEscGrant2 }}" style="border:1px solid var(--warn);background:var(--warn-bg);padding:8px 10px;cursor:pointer;display:flex;flex-direction:column;gap:3px;">
+                  <span class="mono" style="font-size:9.5px;color:var(--warn);">hermes · schedule.write</span>
+                  <span style="font-size:11.5px;color:var(--tx-2);">bounded grant requested — review →</span>
+                </div>
+              </sc-if>
+              <sc-if value="{{ roomEscNone }}" hint-placeholder-val="{{ false }}">
+                <span style="font-size:12px;color:var(--tx-3);">None. Asks land here the moment an agent is blocked.</span>
+              </sc-if>
+            </div>
+            <sc-if value="{{ voteShow }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:12px 14px;border-bottom:1px solid var(--line-1);display:flex;flex-direction:column;gap:8px;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span class="eyebrow">Live vote</span>
+                <sc-if value="{{ voteOpen }}" hint-placeholder-val="{{ false }}"><span style="width:6px;height:6px;border-radius:999px;background:var(--accent);animation:ccPulse 1.4s infinite;"></span></sc-if>
+              </div>
+              <span style="font-size:12.5px;line-height:1.45;">{{ voteQ }}</span>
+              <div style="display:flex;flex-direction:column;gap:5px;">
+                <div style="display:flex;align-items:center;gap:8px;"><span class="mono" style="font-size:9.5px;width:52px;color:var(--tx-3);">FOR</span><div style="flex:1;height:8px;background:var(--srf-inset);border:1px solid var(--line-1);"><div style="height:100%;width:{{ voteForPct }};background:var(--accent);"></div></div><span class="mono tabular" style="font-size:10px;">{{ voteFor }}</span></div>
+                <div style="display:flex;align-items:center;gap:8px;"><span class="mono" style="font-size:9.5px;width:52px;color:var(--tx-3);">ABSTAIN</span><div style="flex:1;height:8px;background:var(--srf-inset);border:1px solid var(--line-1);"><div style="height:100%;width:{{ voteAbstPct }};background:var(--z-silver);"></div></div><span class="mono tabular" style="font-size:10px;">{{ voteAbst }}</span></div>
+              </div>
+              <sc-for list="{{ voteCasts }}" as="vc" hint-placeholder-count="2">
+                <div class="mono" style="font-size:9.5px;color:var(--tx-3);display:flex;flex-direction:column;gap:1px;border-left:2px solid var(--line-2);padding-left:8px;">
+                  <span><span style="color:{{ vc.color }};">{{ vc.who }}</span> · {{ vc.choice }} · w{{ vc.weight }}</span>
+                  <sc-if value="{{ vc.proof }}" hint-placeholder-val="{{ false }}"><span style="display:flex;align-items:center;gap:6px;">{{ vc.proof }} <span onClick="{{ vc.onRevoke }}" style="color:var(--danger);cursor:pointer;">revoke allowance</span></span></sc-if>
+                </div>
+              </sc-for>
+              <sc-if value="{{ voteResult }}" hint-placeholder-val="{{ false }}">
+                <div class="cc-stamp mono" style="font-size:10.5px;color:var(--ok);border:1px solid var(--ok);background:var(--ok-bg);padding:6px 9px;">{{ voteResult }}</div>
+              </sc-if>
+            </div>
+            </sc-if>
+            <div style="padding:12px 14px;display:flex;flex-direction:column;gap:8px;">
+              <div style="display:flex;align-items:center;gap:8px;"><span class="eyebrow">Minutes</span><span class="mono" style="font-size:8.5px;letter-spacing:.1em;color:var(--warn);border:1px solid var(--warn);padding:1px 6px;">DRAFT</span></div>
+              <span style="font-size:12px;color:var(--tx-2);line-height:1.5;">Drafting live from the transcript — {{ minutesN }} record events so far. Ratification happens on Meetings after the room closes.</span>
+              <button class="btn btn-ghost btn-sm" onClick="{{ goMeetDetail }}" style="width:fit-content;">Open meeting record →</button>
+            </div>
+          </div>
+        </div>
+        </sc-if>
+      </div>
+      </sc-if>
+
+      <!-- ======================= MEETINGS ======================= -->
+      <sc-if value="{{ rMeetings }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Meetings" style="padding:22px 26px;display:flex;flex-direction:column;gap:16px;max-width:1080px;">
+
+        <sc-if value="{{ meetList }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <span class="eyebrow">The record — every meeting, planned and ratified</span>
+          <div style="flex:1;"></div>
+          <button class="btn btn-primary btn-sm">Schedule from template</button>
+        </div>
+        <div class="surface" style="display:flex;flex-direction:column;">
+          <div class="mono" style="display:grid;grid-template-columns:1fr 150px 130px 110px 120px 130px;gap:10px;padding:8px 16px;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--tx-3);border-bottom:1px solid var(--line-1);">
+            <span>Meeting</span><span>When</span><span>Template</span><span>Attendees</span><span>Class</span><span>State</span>
+          </div>
+          <sc-for list="{{ meetRows }}" as="m" hint-placeholder-count="6">
+            <div onClick="{{ m.onClick }}" style="display:grid;grid-template-columns:1fr 150px 130px 110px 120px 130px;gap:10px;padding:var(--dpad) 16px;border-bottom:1px solid var(--line-1);cursor:pointer;align-items:center;" style-hover="background:var(--srf-1);">
+              <span style="font-size:13px;font-weight:500;">{{ m.name }}</span>
+              <span class="mono tabular" style="font-size:10.5px;color:var(--tx-2);">{{ m.when }}</span>
+              <span style="font-size:12px;color:var(--tx-2);">{{ m.tpl }}</span>
+              <span class="mono tabular" style="font-size:10.5px;color:var(--tx-2);">{{ m.att }}</span>
+              <span class="mono" style="font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;color:{{ m.clsColor }};border:1px solid {{ m.clsColor }};padding:1px 6px;width:fit-content;">{{ m.classification }}</span>
+              <span class="mono" style="font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:{{ m.stColor }};">{{ m.stLabel }}</span>
+            </div>
+          </sc-for>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <sc-for list="{{ meetTpls }}" as="tp" hint-placeholder-count="5">
+            <span class="mono" style="font-size:10px;color:var(--tx-2);border:1px solid var(--line-2);padding:4px 10px;">{{ tp.name }} <span style="color:var(--tx-3);">· {{ tp.req }}</span></span>
+          </sc-for>
+        </div>
+        <div class="mono" style="font-size:9.5px;color:var(--tx-3);">Read from meetings.list() → MinutesRegistry + relay archive</div>
+        </sc-if>
+
+        <sc-if value="{{ meetDetailV }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:0;">
+          <a href="#" onClick="{{ backMeetings }}" class="mono" style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:14px;">← All meetings</a>
+          <div class="surface" style="padding:0;border-top:2px solid var(--line-strong);">
+            <div style="padding:22px 26px;border-bottom:1px solid var(--line-1);display:flex;flex-direction:column;gap:10px;">
+              <div style="display:flex;align-items:center;gap:12px;">
+                <div style="font-family:var(--font-display);font-weight:440;font-size:24px;letter-spacing:-0.012em;">Weekly Standup — Line-4</div>
+                <div style="flex:1;"></div>
+                <sc-if value="{{ ratified }}" hint-placeholder-val="{{ false }}">
+                  <span class="cc-stamp mono" style="font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--ok);border:1.5px solid var(--ok);padding:4px 10px;transform:rotate(-2deg);">Ratified</span>
+                </sc-if>
+                <sc-if value="{{ unratified }}" hint-placeholder-val="{{ false }}">
+                  <span class="mono" style="font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--warn);border:1px solid var(--warn);padding:4px 10px;">Awaiting ratification</span>
+                </sc-if>
+              </div>
+              <div class="mono" style="font-size:10.5px;color:var(--tx-2);display:flex;gap:16px;flex-wrap:wrap;">
+                <span>2026-07-16 09:00–09:26</span>
+                <span>Meridian › Aerostructures › Wichita › Line-4</span>
+                <span style="color:var(--info);">PROPRIETARY</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:10px;">
+                <span class="mono" style="font-size:10px;color:var(--tx-3);">agenda b3:aa17…90c2</span>
+                <span onClick="{{ onVerifyMeet }}" class="mono" style="font-size:9px;color:{{ vMeet.color }};border:1px solid {{ vMeet.bd }};padding:1px 7px;cursor:pointer;">{{ vMeet.label }}</span>
+                <sc-if value="{{ ratified }}" hint-placeholder-val="{{ false }}"><span class="mono" style="font-size:10px;color:var(--tx-3);">anchored block 1,281,940 · root 0x66d1…8c02</span></sc-if>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 300px;">
+              <div style="padding:20px 26px;display:flex;flex-direction:column;gap:18px;border-right:1px solid var(--line-1);">
+                <div>
+                  <div class="lbl">Agenda — frozen at open</div>
+                  <sc-for list="{{ meetAgenda }}" as="a" hint-placeholder-count="4">
+                    <div style="display:flex;gap:10px;padding:6px 0;border-bottom:1px solid var(--line-1);align-items:baseline;">
+                      <span class="mono tabular" style="font-size:10px;color:var(--tx-3);">{{ a.n }}</span>
+                      <span style="font-size:13px;flex:1;">{{ a.text }}</span>
+                      <span class="mono" style="font-size:9px;color:var(--tx-3);">{{ a.src }}</span>
+                    </div>
+                  </sc-for>
+                  <div class="mono" style="font-size:9px;color:var(--tx-3);margin-top:6px;">A changed agenda creates a linked successor meeting — this one has none.</div>
+                </div>
+                <div>
+                  <div class="lbl">Minutes</div>
+                  <sc-for list="{{ meetMinutes }}" as="mm" hint-placeholder-count="4">
+                    <p style="font-size:13.5px;line-height:1.6;margin:0 0 8px;color:var(--tx-1);">{{ mm.text }}</p>
+                  </sc-for>
+                </div>
+                <div>
+                  <div class="lbl">Dissent — first-class in the record</div>
+                  <div style="border-left:2px solid var(--warn);padding:6px 12px;">
+                    <span class="mono" style="font-size:10px;color:var(--z-amber);">hermes (delegated by M. Okonkwo)</span>
+                    <p style="font-size:13px;line-height:1.5;margin:3px 0 0;color:var(--tx-2);">Objects to using ci-minutes as the budget basis; wants action-count basis. Recorded, not adopted.</p>
+                  </div>
+                </div>
+                <sc-if value="{{ unratified }}" hint-placeholder-val="{{ false }}">
+                  <div style="display:flex;align-items:center;gap:12px;border:1px solid var(--warn);background:var(--warn-bg);padding:12px 14px;">
+                    <span style="font-size:13px;flex:1;">These minutes are a draft. Ratifying anchors them on chain — they become evidence a board member can verify.</span>
+                    <button class="btn btn-primary" onClick="{{ onRatify }}">Ratify — sign</button>
+                  </div>
+                </sc-if>
+              </div>
+              <div style="padding:20px 22px;display:flex;flex-direction:column;gap:16px;background:var(--srf-1);">
+                <div>
+                  <div class="lbl">Attendance — attested</div>
+                  <sc-for list="{{ meetAtt }}" as="at" hint-placeholder-count="6">
+                    <div style="display:flex;align-items:center;gap:8px;padding:4px 0;">
+                      <span style="width:7px;height:7px;border-radius:999px;background:{{ at.dot }};flex-shrink:0;"></span>
+                      <span style="font-size:12.5px;flex:1;color:{{ at.color }};">{{ at.name }}</span>
+                      <span class="mono" style="font-size:8.5px;color:var(--tx-3);">{{ at.tag }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+                <div>
+                  <div class="lbl">Decisions</div>
+                  <sc-for list="{{ meetDecisions }}" as="d" hint-placeholder-count="2">
+                    <div onClick="{{ d.onClick }}" style="display:flex;gap:8px;padding:5px 0;cursor:pointer;align-items:baseline;">
+                      <span class="mono" style="font-size:10px;color:var(--accent-text);">{{ d.id }}</span>
+                      <span style="font-size:12px;color:var(--tx-2);">{{ d.text }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+                <div class="mono" style="font-size:9px;color:var(--tx-3);border-top:1px solid var(--line-1);padding-top:10px;line-height:1.6;">Read from meetings.get() → MinutesRegistry · print-ready under @media print</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        </sc-if>
+      </div>
+      </sc-if>
+
+      <!-- ======================= GOVERNANCE ======================= -->
+      <sc-if value="{{ rGov }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Governance" style="padding:22px 26px;display:flex;flex-direction:column;gap:16px;max-width:1120px;">
+        <div style="display:flex;gap:0;border-bottom:1px solid var(--line-2);">
+          <sc-for list="{{ govTabs }}" as="gt" hint-placeholder-count="3">
+            <button onClick="{{ gt.onClick }}" class="mono" style="font-size:10px;letter-spacing:.13em;text-transform:uppercase;background:transparent;border:none;cursor:pointer;padding:8px 14px;color:{{ gt.color }};border-bottom:2px solid {{ gt.line }};margin-bottom:-1px;">{{ gt.label }}</button>
+          </sc-for>
+        </div>
+
+        <sc-if value="{{ govPipe }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:16px;">
+          <div style="display:flex;gap:0;">
+            <sc-for list="{{ govSteps }}" as="gs" hint-placeholder-count="8">
+              <div onClick="{{ gs.onClick }}" style="flex:1;display:flex;flex-direction:column;gap:4px;cursor:pointer;padding:6px 8px;border-top:2px solid {{ gs.line }};">
+                <span class="mono tabular" style="font-size:9px;color:{{ gs.color }};">{{ gs.n }}</span>
+                <span class="mono" style="font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:{{ gs.color }};">{{ gs.label }}</span>
+              </div>
+            </sc-for>
+          </div>
+
+          <sc-if value="{{ gs1 }}" hint-placeholder-val="{{ true }}">
+          <div style="display:flex;flex-direction:column;gap:12px;">
+            <div style="font-family:var(--font-display);font-weight:440;font-size:22px;">A stack of documents becomes law</div>
+            <div style="border:1.5px dashed var(--line-2);padding:26px;text-align:center;color:var(--tx-3);font-size:13px;">Drop board resolutions, legal policy, data exports — PDF, DOCX, MD, CSV, email</div>
+            <div class="surface" style="display:flex;flex-direction:column;">
+              <sc-for list="{{ ingestRows }}" as="f" hint-placeholder-count="4">
+                <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line-1);">
+                  <span style="font-size:13px;font-weight:500;min-width:0;flex:1;">{{ f.name }} <span class="mono" style="font-size:9.5px;color:var(--tx-3);">{{ f.size }}</span></span>
+                  <span class="mono" style="font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;color:{{ f.clsColor }};border:1px solid {{ f.clsColor }};padding:1px 6px;">{{ f.cls }}</span>
+                  <span class="mono" style="font-size:9.5px;color:{{ f.noteColor }};">{{ f.note }}</span>
+                  <span class="mono" style="font-size:9px;color:var(--tx-3);">{{ f.prov }}</span>
+                </div>
+              </sc-for>
+            </div>
+            <div style="display:flex;"><div style="flex:1;"></div><button class="btn btn-primary" onClick="{{ gNext }}">Continue to interview</button></div>
+          </div>
+          </sc-if>
+
+          <sc-if value="{{ gs2 }}" hint-placeholder-val="{{ false }}">
+          <div style="display:grid;grid-template-columns:1fr 340px;gap:16px;">
+            <div class="surface" style="display:flex;flex-direction:column;">
+              <div style="padding:10px 14px;border-bottom:1px solid var(--line-1);" class="eyebrow">Interview — the harness asks, you answer</div>
+              <div style="padding:14px;display:flex;flex-direction:column;gap:12px;">
+                <sc-for list="{{ interview }}" as="iv" hint-placeholder-count="5">
+                  <div style="display:flex;flex-direction:column;gap:5px;">
+                    <div style="display:flex;gap:8px;"><span class="mono" style="font-size:9px;color:var(--info);border:1px solid var(--info);padding:1px 6px;height:fit-content;flex-shrink:0;">HARNESS</span><span style="font-size:13px;color:var(--tx-2);">{{ iv.q }}</span></div>
+                    <div style="display:flex;gap:8px;"><span class="mono" style="font-size:9px;color:var(--accent-text);border:1px solid var(--accent-text);padding:1px 6px;height:fit-content;flex-shrink:0;">R. ORTIZ</span><span style="font-size:13px;">{{ iv.a }}</span></div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+            <div class="surface" style="display:flex;flex-direction:column;height:fit-content;border-top:2px solid var(--line-strong);">
+              <div style="padding:10px 14px;border-bottom:1px solid var(--line-1);" class="eyebrow">Structured summary — editable, the artifact</div>
+              <div style="padding:14px;display:flex;flex-direction:column;gap:8px;">
+                <sc-for list="{{ ivSummary }}" as="sv" hint-placeholder-count="6">
+                  <div style="display:grid;grid-template-columns:110px 1fr;gap:8px;border-bottom:1px solid var(--line-1);padding-bottom:6px;">
+                    <span class="mono" style="font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx-3);">{{ sv.k }}</span>
+                    <span style="font-size:12px;">{{ sv.v }}</span>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="padding:10px 14px;"><button class="btn btn-primary btn-sm" onClick="{{ gNext }}" style="width:100%;">Draft the spec →</button></div>
+            </div>
+          </div>
+          </sc-if>
+
+          <sc-if value="{{ gs3 }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;flex-direction:column;gap:12px;">
+            <div style="display:flex;align-items:center;gap:12px;">
+              <div style="font-family:var(--font-display);font-weight:440;font-size:20px;">SPEC-104 — Line-4 Operating Envelope v4</div>
+              <span class="mono" style="font-size:9px;color:var(--warn);border:1px solid var(--warn);padding:2px 7px;">1 CLAUSE UNMAPPED — DEPLOY BLOCKED</span>
+            </div>
+            <div style="display:grid;grid-template-columns:24px 1fr 1fr;gap:0;border:1px solid var(--line-2);">
+              <div class="mono" style="grid-column:2;font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:var(--tx-3);padding:8px 14px;border-bottom:1px solid var(--line-2);border-right:1px solid var(--line-2);">Plain English — what counsel reads</div>
+              <div class="mono" style="font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:var(--tx-3);padding:8px 14px;border-bottom:1px solid var(--line-2);">Machine-checkable — what the chain enforces</div>
+              <sc-for list="{{ specClauses }}" as="cl" hint-placeholder-count="5">
+                <div class="mono" style="grid-column:1;font-size:9.5px;color:{{ cl.nColor }};padding:12px 0 0 6px;border-bottom:1px solid var(--line-1);background:{{ cl.bg }};">{{ cl.n }}</div>
+                <div style="padding:11px 14px;border-bottom:1px solid var(--line-1);border-right:1px solid var(--line-2);background:{{ cl.bg }};">
+                  <p style="font-size:13px;line-height:1.55;margin:0;">{{ cl.en }}</p>
+                  <sc-if value="{{ cl.flag }}" hint-placeholder-val="{{ false }}">
+                    <div style="margin-top:8px;border:1px solid var(--warn);background:var(--warn-bg);padding:7px 10px;font-size:11.5px;color:var(--tx-1);"><span class="mono" style="font-size:9px;letter-spacing:.1em;color:var(--warn);">NO AUDITED TEMPLATE · </span>{{ cl.why }}</div>
+                  </sc-if>
+                </div>
+                <div class="mono" style="padding:11px 14px;border-bottom:1px solid var(--line-1);font-size:10.5px;line-height:1.6;color:{{ cl.ghColor }};white-space:pre-wrap;background:{{ cl.bg }};">{{ cl.gh }}<sc-if value="{{ cl.tpl }}" hint-placeholder-val="{{ false }}"><span style="display:block;margin-top:6px;font-size:8.5px;color:var(--tx-3);">↳ {{ cl.tpl }}</span></sc-if></div>
+              </sc-for>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px;">
+              <span class="mono" style="font-size:9.5px;color:var(--tx-3);">Clauses lock in scroll; an edit on either side marks the pair dirty. C4 will be excluded from compile — flagged, never dropped silently.</span>
+              <div style="flex:1;"></div><button class="btn btn-primary" onClick="{{ gNext }}">Compile (C4 excluded)</button>
+            </div>
+          </div>
+          </sc-if>
+
+          <sc-if value="{{ gs4 }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;flex-direction:column;gap:12px;max-width:720px;">
+            <div style="font-family:var(--font-display);font-weight:440;font-size:20px;">Compile — audited templates, exact parameters</div>
+            <div class="surface" style="display:flex;flex-direction:column;">
+              <sc-for list="{{ compileRows }}" as="cr" hint-placeholder-count="6">
+                <div style="display:grid;grid-template-columns:170px 1fr;border-bottom:1px solid var(--line-1);">
+                  <span class="mono" style="font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx-3);padding:9px 14px;background:var(--srf-inset);">{{ cr.k }}</span>
+                  <span class="mono" style="font-size:11px;padding:9px 14px;color:{{ cr.color }};">{{ cr.v }}</span>
+                </div>
+              </sc-for>
+            </div>
+            <div class="surface" style="padding:12px 14px;display:flex;flex-direction:column;gap:6px;">
+              <span class="eyebrow">Diff vs deployed PRT-004 v3</span>
+              <span class="mono" style="font-size:11px;color:var(--ok);">+ single-action ceiling 150 SALT → ceremony (C2)</span>
+              <span class="mono" style="font-size:11px;color:var(--ok);">+ calendar.write standing-grant requirement (C5)</span>
+              <span class="mono" style="font-size:11px;color:var(--danger);">− C4 retaliation protection (unmapped — excluded, T-request filed)</span>
+            </div>
+            <div style="display:flex;"><div style="flex:1;"></div><button class="btn btn-primary" onClick="{{ gNext }}">Simulate against the last 90 days</button></div>
+          </div>
+          </sc-if>
+
+          <sc-if value="{{ gs5 }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;flex-direction:column;gap:14px;">
+            <div style="display:flex;align-items:center;gap:14px;">
+              <div style="font-family:var(--font-display);font-weight:440;font-size:20px;">What this policy would have done</div>
+              <span class="mono" style="font-size:10px;color:var(--tx-3);">{{ simRange }}</span>
+              <div style="flex:1;"></div>
+              <sc-if value="{{ simIdle }}" hint-placeholder-val="{{ false }}"><button class="btn btn-primary" onClick="{{ onRunSim }}">Run simulation</button></sc-if>
+            </div>
+            <sc-if value="{{ simRunning }}" hint-placeholder-val="{{ false }}">
+              <div class="surface" style="display:flex;align-items:center;gap:16px;padding:18px;">
+                <div style="width:44px;height:44px;flex-shrink:0;"><dc-import name="LoaderMark" size="44" hint-size="44px,44px"></dc-import></div>
+                <span class="mono" style="font-size:11px;color:var(--tx-2);">replaying 14,208 recorded decisions through SPEC-104 · governance.simulate()</span>
+              </div>
+            </sc-if>
+            <sc-if value="{{ simDone }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;flex-direction:column;gap:14px;">
+              <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;">
+                <div class="surface" style="padding:14px;border-top:2px solid var(--danger);"><div class="eyebrow">Would have blocked</div><div class="tabular" style="font-family:var(--font-display);font-size:34px;font-weight:460;color:var(--danger);">96</div><div class="mono" style="font-size:9.5px;color:var(--tx-3);">0.7% of all decisions</div></div>
+                <div class="surface" style="padding:14px;border-top:2px solid var(--warn);"><div class="eyebrow">Would have paused for a human</div><div class="tabular" style="font-family:var(--font-display);font-size:34px;font-weight:460;color:var(--warn);">311</div><div class="mono" style="font-size:9.5px;color:var(--tx-3);">2.2% — median wait modeled 4m</div></div>
+                <div class="surface" style="padding:14px;border-top:2px solid var(--accent);"><div class="eyebrow">Unchanged</div><div class="tabular" style="font-family:var(--font-display);font-size:34px;font-weight:460;">13,801</div><div class="mono" style="font-size:9.5px;color:var(--tx-3);">97.1% — the envelope fits the work</div></div>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                <div class="surface" style="padding:14px;display:flex;flex-direction:column;gap:8px;">
+                  <span class="eyebrow">By action class — blocked · paused</span>
+                  <sc-for list="{{ simClasses }}" as="sc" hint-placeholder-count="5">
+                    <div style="display:flex;align-items:center;gap:10px;">
+                      <span class="mono" style="font-size:10px;width:110px;color:var(--tx-2);">{{ sc.name }}</span>
+                      <div style="flex:1;display:flex;height:10px;gap:1px;">
+                        <div style="width:{{ sc.bw }};background:var(--danger);"></div>
+                        <div style="width:{{ sc.aw }};background:var(--warn);"></div>
+                      </div>
+                      <span class="mono tabular" style="font-size:10px;color:var(--tx-3);width:60px;text-align:right;">{{ sc.nums }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+                <div class="surface" style="padding:14px;display:flex;flex-direction:column;gap:8px;">
+                  <span class="eyebrow">Who this would have inconvenienced</span>
+                  <sc-for list="{{ simWho }}" as="sw" hint-placeholder-count="4">
+                    <div style="display:flex;align-items:baseline;gap:10px;border-bottom:1px solid var(--line-1);padding-bottom:5px;">
+                      <span class="mono" style="font-size:11px;color:{{ sw.color }};width:110px;">{{ sw.name }}</span>
+                      <span class="tabular mono" style="font-size:12px;">{{ sw.n }}</span>
+                      <span style="font-size:11px;color:var(--tx-3);">{{ sw.note }}</span>
+                    </div>
+                  </sc-for>
+                  <span style="font-size:11.5px;color:var(--tx-2);line-height:1.5;">No human workflow loses more than 4 pauses/week. The cost lands on agents, where it belongs.</span>
+                </div>
+              </div>
+              <div class="surface" style="display:flex;flex-direction:column;">
+                <div style="padding:10px 14px;border-bottom:1px solid var(--line-1);" class="eyebrow">Specific decisions, with why</div>
+                <sc-for list="{{ simSamples }}" as="sm" hint-placeholder-count="3">
+                  <div style="display:grid;grid-template-columns:80px 110px 1fr 140px;gap:10px;padding:9px 14px;border-bottom:1px solid var(--line-1);align-items:baseline;">
+                    <span class="mono" style="font-size:10px;color:var(--accent-text);">{{ sm.id }}</span>
+                    <span class="mono" style="font-size:10px;color:var(--tx-2);">{{ sm.agent }}</span>
+                    <span style="font-size:12px;">{{ sm.action }} — <span style="color:var(--tx-3);">{{ sm.why }}</span></span>
+                    <span class="mono" style="font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:{{ sm.color }};text-align:right;">{{ sm.would }}</span>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="display:flex;"><div style="flex:1;"></div><button class="btn btn-primary" onClick="{{ gNext }}">Proceed to ceremony — 2 of 3 signers</button></div>
+            </div>
+            </sc-if>
+          </div>
+          </sc-if>
+
+          <sc-if value="{{ gs6 }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;flex-direction:column;gap:12px;max-width:640px;">
+            <div style="font-family:var(--font-display);font-weight:440;font-size:20px;">Ceremony — the moment of human authority</div>
+            <p style="font-size:13.5px;color:var(--tx-2);line-height:1.6;margin:0;">Deploying SPEC-104 needs 2 of 3 signatures. The contract address is CREATE2-derived — <span class="mono">0x9E44…2Aa7</span> — known now, before anyone signs. What you sign is what deploys.</p>
+            <div><button class="btn btn-primary btn-lg" onClick="{{ onDeploy }}">Open signature ceremony</button></div>
+            <sc-if value="{{ deployed }}" hint-placeholder-val="{{ false }}"><div class="cc-stamp mono" style="font-size:11px;color:var(--ok);border:1px solid var(--ok);background:var(--ok-bg);padding:10px 12px;width:fit-content;">settled — continue to deploy status</div></sc-if>
+          </div>
+          </sc-if>
+
+          <sc-if value="{{ gs7 }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;flex-direction:column;gap:12px;max-width:720px;">
+            <div style="font-family:var(--font-display);font-weight:440;font-size:20px;">Deployed</div>
+            <div class="surface" style="display:flex;flex-direction:column;">
+              <sc-for list="{{ deployRows }}" as="dr" hint-placeholder-count="5">
+                <div style="display:grid;grid-template-columns:150px 1fr;border-bottom:1px solid var(--line-1);">
+                  <span class="mono" style="font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx-3);padding:9px 14px;background:var(--srf-inset);">{{ dr.k }}</span>
+                  <span class="mono" style="font-size:11px;padding:9px 14px;color:{{ dr.color }};word-break:break-all;">{{ dr.v }}</span>
+                </div>
+              </sc-for>
+            </div>
+            <div style="display:flex;"><div style="flex:1;"></div><button class="btn btn-primary" onClick="{{ gNext }}">Bind — who this now governs</button></div>
+          </div>
+          </sc-if>
+
+          <sc-if value="{{ gs8 }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;flex-direction:column;gap:12px;max-width:820px;">
+            <div style="font-family:var(--font-display);font-weight:440;font-size:20px;">Bound — effective permissions, before and after</div>
+            <div class="surface" style="padding:12px 14px;display:flex;flex-direction:column;gap:5px;">
+              <span class="eyebrow">Now governs</span>
+              <span class="mono" style="font-size:11px;">repo.write · pr.open · ci.* · doc.draft · calendar.write · spend — tenant Line-4 Automation</span>
+              <span class="mono" style="font-size:10px;color:var(--ok);">policy reloaded: claude-code ✓ · codex ✓ · devin ✓ · hermes ✓ · windsurf-swe — quarantined, will load on release</span>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+              <div class="surface" style="padding:12px 14px;"><span class="eyebrow">Before — v3</span><p class="mono" style="font-size:10.5px;line-height:1.8;margin:6px 0 0;color:var(--tx-2);">spend ceiling: budget only<br>calendar.write: ungoverned ⚠<br>CUI egress: advisory</p></div>
+              <div class="surface" style="padding:12px 14px;border-top:2px solid var(--accent);"><span class="eyebrow">After — v4</span><p class="mono" style="font-size:10.5px;line-height:1.8;margin:6px 0 0;">spend &gt; 150 SALT: ceremony<br>calendar.write: standing grant required<br>CUI egress: blocked on chain</p></div>
+            </div>
+            <div class="mono" style="font-size:9.5px;color:var(--tx-3);">Read from governance.bind() → ProtocolRegistry → chain 40204</div>
+          </div>
+          </sc-if>
+        </div>
+        </sc-if>
+
+        <sc-if value="{{ govProt }}" hint-placeholder-val="{{ false }}">
+        <div class="surface" style="display:flex;flex-direction:column;">
+          <div class="mono" style="display:grid;grid-template-columns:80px 1fr 120px 190px 150px 110px;gap:10px;padding:8px 16px;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--tx-3);border-bottom:1px solid var(--line-1);">
+            <span>Id</span><span>Protocol</span><span>Version</span><span>Template · audit</span><span>Address</span><span>State</span>
+          </div>
+          <sc-for list="{{ protRows }}" as="p" hint-placeholder-count="3">
+            <div style="display:grid;grid-template-columns:80px 1fr 120px 190px 150px 110px;gap:10px;padding:var(--dpad) 16px;border-bottom:1px solid var(--line-1);align-items:center;">
+              <span class="mono" style="font-size:10.5px;color:var(--accent-text);">{{ p.id }}</span>
+              <span style="font-size:13px;font-weight:500;">{{ p.name }} <span style="font-size:11px;color:var(--tx-3);font-weight:400;">governs {{ p.governs }}</span></span>
+              <span class="mono" style="font-size:10.5px;color:var(--tx-2);">{{ p.version }}</span>
+              <span class="mono" style="font-size:9.5px;color:{{ p.auditColor }};">{{ p.template }}<br>{{ p.audit }}</span>
+              <span class="mono" style="font-size:10px;color:var(--tx-2);">{{ p.addr }}</span>
+              <span class="mono" style="font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:{{ p.stColor }};">{{ p.state }}</span>
+            </div>
+          </sc-for>
+          <div class="mono" style="font-size:9.5px;color:var(--tx-3);padding:8px 16px;">Amendment flow: propose → review window → vote → timelock 14d → migrate · plain-English diff at every step</div>
+        </div>
+        </sc-if>
+
+        <sc-if value="{{ govTpl }}" hint-placeholder-val="{{ false }}">
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;">
+          <sc-for list="{{ tplCards }}" as="tc" hint-placeholder-count="3">
+            <div class="surface" style="padding:14px;display:flex;flex-direction:column;gap:7px;border-top:2px solid {{ tc.top }};">
+              <span style="font-size:14px;font-weight:500;">{{ tc.name }}</span>
+              <span class="mono" style="font-size:9.5px;color:{{ tc.audColor }};">{{ tc.audit }}</span>
+              <span style="font-size:12px;color:var(--tx-2);line-height:1.5;">{{ tc.desc }}</span>
+            </div>
+          </sc-for>
+        </div>
+        </sc-if>
+      </div>
+      </sc-if>
+
+      <!-- ======================= AGENTS ======================= -->
+      <sc-if value="{{ rAgents }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Agents" style="padding:18px;display:flex;flex-direction:column;gap:14px;">
+        <div class="surface" style="display:flex;flex-direction:column;">
+          <div class="mono" style="display:grid;grid-template-columns:150px 90px 60px 60px 150px 100px 110px;gap:10px;padding:8px 14px;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--tx-3);border-bottom:1px solid var(--line-1);">
+            <span>Agent</span><span>SBT</span><span>HIC</span><span>Grants</span><span>Budget · SALT</span><span>Disputes</span><span>Status</span>
+          </div>
+          <sc-for list="{{ fleet }}" as="ag" hint-placeholder-count="5">
+            <div onClick="{{ ag.onClick }}" style="display:grid;grid-template-columns:150px 90px 60px 60px 150px 100px 110px;gap:10px;padding:var(--dpad) 14px;border-bottom:1px solid var(--line-1);cursor:pointer;align-items:center;background:{{ ag.bg }};" style-hover="background:var(--srf-1);">
+              <span style="display:flex;align-items:center;gap:7px;min-width:0;"><span style="width:8px;height:8px;border-radius:999px;background:{{ ag.vcolor }};flex-shrink:0;"></span><span style="font-size:13px;font-weight:500;">{{ ag.name }}</span></span>
+              <span class="mono" style="font-size:10px;color:var(--tx-3);">{{ ag.sbt }}</span>
+              <span class="mono" style="font-size:10px;color:{{ ag.hicColor }};">HIC-{{ ag.hic }}</span>
+              <span class="mono tabular" style="font-size:11px;">{{ ag.grants }}</span>
+              <span style="display:flex;align-items:center;gap:8px;"><div style="flex:1;height:7px;background:var(--srf-inset);border:1px solid var(--line-1);"><div style="height:100%;width:{{ ag.budgetPct }};background:{{ ag.budgetColor }};"></div></div><span class="mono tabular" style="font-size:9.5px;color:var(--tx-3);">{{ ag.budget }}</span></span>
+              <span class="mono tabular" style="font-size:10px;color:var(--tx-3);">{{ ag.disputeRate }}</span>
+              <span class="mono" style="font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:{{ ag.stColor }};">{{ ag.status }}</span>
+            </div>
+          </sc-for>
+          <div class="mono" style="font-size:9.5px;color:var(--tx-3);padding:8px 14px;">Read from agents.list() → AgentRegistry + GrantRegistry · lifecycle: register → probation HIC-0/1 → promotion, each step a ceremony</div>
+        </div>
+
+        <sc-if value="{{ agDetail }}" hint-placeholder-val="{{ false }}">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+          <div style="display:flex;flex-direction:column;gap:14px;">
+            <div class="surface" style="padding:16px;display:flex;flex-direction:column;gap:10px;">
+              <div style="display:flex;align-items:center;gap:10px;">
+                <span style="width:10px;height:10px;border-radius:999px;background:{{ agSel.vcolor }};"></span>
+                <span style="font-family:var(--font-display);font-weight:460;font-size:20px;">{{ agSel.name }}</span>
+                <span class="mono" style="font-size:9.5px;color:var(--tx-3);">{{ agSel.vendorName }} · {{ agSel.sbt }}</span>
+                <div style="flex:1;"></div>
+                <span class="mono" style="font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:{{ agSel.stColor }};border:1px solid {{ agSel.stColor }};padding:2px 8px;">{{ agSel.status }}</span>
+              </div>
+              <sc-if value="{{ agQuar }}" hint-placeholder-val="{{ false }}">
+                <div style="border:1px solid var(--danger);background:var(--danger-bg);padding:10px 12px;font-size:12.5px;line-height:1.5;">{{ agSel.quarantine }}</div>
+              </sc-if>
+              <div style="display:grid;grid-template-columns:120px 1fr;gap:6px 10px;font-size:12px;">
+                <span class="mono" style="font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx-3);padding-top:2px;">DID</span><span class="mono" style="font-size:11px;">{{ agSel.did }}</span>
+                <span class="mono" style="font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx-3);padding-top:2px;">Pubkey</span><span class="mono" style="font-size:11px;">{{ agSel.pubkey }}</span>
+                <span class="mono" style="font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx-3);padding-top:2px;">Model</span><span class="mono" style="font-size:11px;">{{ agSel.model }} · LoRA {{ agSel.lora }}</span>
+                <span class="mono" style="font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx-3);padding-top:2px;">Adapter</span><span class="mono" style="font-size:11px;">{{ agSel.transport }} · {{ agSel.sandbox }} · egress {{ agSel.egress }}</span>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:5px;border-top:1px solid var(--line-1);padding-top:10px;">
+                <span class="eyebrow">Capsules — manifest-hash verified</span>
+                <sc-for list="{{ agCapsules }}" as="cp" hint-placeholder-count="2">
+                  <div class="mono" style="display:flex;gap:10px;font-size:10.5px;align-items:baseline;"><span>{{ cp.name }}</span><span style="color:var(--tx-3);">{{ cp.hash }}</span><span style="color:{{ cp.color }};">{{ cp.state }}</span></div>
+                </sc-for>
+              </div>
+            </div>
+            <div class="surface" style="padding:16px;display:flex;flex-direction:column;gap:8px;">
+              <span class="eyebrow">Reputation — measured facts, with denominators</span>
+              <sc-for list="{{ agRep }}" as="rp" hint-placeholder-count="5">
+                <div style="display:grid;grid-template-columns:150px 70px 1fr;gap:10px;border-bottom:1px solid var(--line-1);padding-bottom:5px;align-items:baseline;">
+                  <span class="mono" style="font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--tx-3);">{{ rp.k }}</span>
+                  <span class="mono tabular" style="font-size:13px;">{{ rp.v }}</span>
+                  <span class="mono" style="font-size:9.5px;color:var(--tx-3);">{{ rp.d }}</span>
+                </div>
+              </sc-for>
+              <span style="font-size:11px;color:var(--tx-3);">No single score. A number without its denominator is an opinion.</span>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:14px;">
+            <div class="surface" style="display:flex;flex-direction:column;border-top:2px solid {{ grantsTop }};">
+              <div style="display:flex;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line-1);gap:10px;">
+                <span class="eyebrow">Grants — the envelope</span><div style="flex:1;"></div>
+                <button class="btn btn-primary btn-sm" onClick="{{ onIssueGrant }}">Issue grant</button>
+              </div>
+              <sc-if value="{{ agNoGrants }}" hint-placeholder-val="{{ false }}">
+                <div style="padding:16px 14px;font-size:12.5px;color:var(--tx-3);">No live grants. This agent can observe and speak, and nothing else.</div>
+              </sc-if>
+              <sc-for list="{{ agGrants }}" as="g" hint-placeholder-count="3">
+                <div style="display:flex;flex-direction:column;gap:4px;padding:10px 14px;border-bottom:1px solid var(--line-1);">
+                  <div style="display:flex;align-items:center;gap:8px;">
+                    <span class="mono" style="font-size:10px;color:var(--accent-text);">{{ g.id }}</span>
+                    <span class="mono" style="font-size:11px;">{{ g.classes }}</span>
+                    <div style="flex:1;"></div>
+                    <span class="mono" style="font-size:9px;color:{{ g.hicColor }};">HIC-{{ g.hic }}</span>
+                    <span onClick="{{ g.onRevoke }}" class="mono" style="font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--danger);cursor:pointer;border:1px solid var(--danger);padding:1px 7px;" style-hover="background:var(--danger-bg);">Revoke</span>
+                  </div>
+                  <div class="mono" style="font-size:9.5px;color:var(--tx-3);">scope {{ g.scope }} · budget {{ g.budget }} · expires {{ g.expiry }} · issued by {{ g.principal }}</div>
+                </div>
+              </sc-for>
+              <div class="mono" style="font-size:9.5px;color:var(--tx-3);padding:8px 14px;">agents.grants() → GrantRegistry · revocation is immediate and needs a signature</div>
+            </div>
+            <div class="surface" style="padding:14px 16px;display:flex;align-items:center;gap:14px;border:1px solid var(--danger);">
+              <div style="flex:1;">
+                <div style="font-size:13.5px;font-weight:500;color:var(--danger);">Kill switch</div>
+                <div style="font-size:11.5px;color:var(--tx-3);line-height:1.5;">Revokes every live grant for this agent. It keeps its identity and its history; it loses every capability. Running actions abort at the next checkpoint (&lt;25s).</div>
+              </div>
+              <button class="btn btn-danger" onClick="{{ onKill }}">Revoke all — {{ agSel.name }}</button>
+            </div>
+          </div>
+        </div>
+        </sc-if>
+      </div>
+      </sc-if>
+
+      <!-- ======================= LEDGER ======================= -->
+      <sc-if value="{{ rLedger }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Ledger" style="padding:18px;display:flex;flex-direction:column;gap:12px;">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <sc-for list="{{ ledTabs }}" as="lt" hint-placeholder-count="3">
+            <button onClick="{{ lt.onClick }}" class="mono" style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;background:{{ lt.bg }};color:{{ lt.color }};border:1px solid {{ lt.bd }};padding:5px 12px;cursor:pointer;border-radius:var(--r-1);">{{ lt.label }}</button>
+          </sc-for>
+          <div style="flex:1;"></div>
+          <select class="mono" onChange="{{ onAsOf }}" style="font-size:10px;background:var(--srf-1);color:var(--tx-2);border:1px solid var(--line-2);padding:5px 8px;border-radius:var(--r-1);">
+            <option value="">As of — now</option><option value="2026-07-01">As of 2026-07-01</option><option value="2026-06-01">As of 2026-06-01</option>
+          </select>
+          <button class="btn btn-ghost btn-sm" onClick="{{ onExportOpen }}">Evidence pack…</button>
+        </div>
+
+        <sc-if value="{{ asOfBanner }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;align-items:center;gap:10px;border:1.5px dashed var(--info);background:var(--info-bg);padding:9px 14px;">
+            <span class="mono" style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--info);">Time travel — you are reading history</span>
+            <span style="font-size:12.5px;">Policies, grants, and clearances as they stood on <span class="mono">{{ asOfDate }}</span>. Nothing here is current.</span>
+            <div style="flex:1;"></div>
+            <button class="btn btn-ghost btn-sm" onClick="{{ onAsOfClear }}">Return to now</button>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ ledRibbon }}" hint-placeholder-val="{{ false }}">
+        <div class="surface" style="display:flex;flex-direction:column;min-height:0;">
+          <div style="display:flex;align-items:center;gap:12px;padding:9px 14px;border-bottom:1px solid var(--line-1);">
+            <span class="eyebrow">Ribbon — every recorded action</span>
+            <span style="width:7px;height:7px;border-radius:999px;background:var(--accent);animation:ccPulse 1.6s infinite;"></span>
+            <div style="flex:1;"></div>
+            <label class="mono" style="display:flex;align-items:center;gap:6px;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--warn);cursor:pointer;">
+              <input type="checkbox" checked="{{ ledUng }}" onChange="{{ onLedUng }}">Ungoverned only
+            </label>
+            <select class="mono" onChange="{{ onLedVerdict }}" style="font-size:10px;background:var(--srf-1);color:var(--tx-2);border:1px solid var(--line-2);padding:4px 8px;border-radius:var(--r-1);">
+              <option value="all">All verdicts</option><option value="allow">allow</option><option value="require-approval">require-approval</option><option value="deny">deny</option>
+            </select>
+          </div>
+          <div class="mono" style="display:grid;grid-template-columns:70px 90px 110px 120px 1fr 60px 100px 70px;gap:8px;padding:6px 14px;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--tx-3);border-bottom:1px solid var(--line-1);">
+            <span>Time</span><span>Decision</span><span>Principal</span><span>Agent</span><span>Action class</span><span>HIC</span><span>Verdict</span><span>Corr</span>
+          </div>
+          <div style="max-height:420px;overflow:auto;">
+            <sc-for list="{{ ledRows }}" as="lr" hint-placeholder-count="14">
+              <div onClick="{{ lr.onClick }}" class="mono tabular {{ lr.cls }}" style="display:grid;grid-template-columns:70px 90px 110px 120px 1fr 60px 100px 70px;gap:8px;padding:var(--dpad) 14px;font-size:11px;border-bottom:1px solid var(--line-1);cursor:pointer;background:{{ lr.bg }};" style-hover="background:var(--srf-1);">
+                <span style="color:var(--tx-3);">{{ lr.time }}</span>
+                <span>{{ lr.id }}</span>
+                <span style="color:var(--tx-2);">{{ lr.principal }}</span>
+                <span style="color:{{ lr.vcolor }};">{{ lr.agent }}</span>
+                <span style="color:var(--tx-2);">{{ lr.actionCls }}</span>
+                <span style="color:{{ lr.hicColor }};">{{ lr.hic }}</span>
+                <span style="color:{{ lr.verdictColor }};">{{ lr.verdict }}</span>
+                <span style="color:var(--info);">{{ lr.corr }}</span>
+              </div>
+            </sc-for>
+          </div>
+          <div class="mono" style="font-size:9.5px;color:var(--tx-3);padding:7px 14px;">ledger.query() + ledger.stream() → AgentDecisionRegistryV2 → chain 40204 · virtualize at 100k rows in production</div>
+        </div>
+        </sc-if>
+
+        <sc-if value="{{ ledDecision }}" hint-placeholder-val="{{ false }}">
+        <div data-register="charter" style="background:var(--srf-0);color:var(--tx-1);margin:-6px;padding:6px;">
+        <div class="surface" style="max-width:760px;border-top:2px solid var(--line-strong);">
+          <div style="padding:20px 26px;border-bottom:1px solid var(--line-1);display:flex;flex-direction:column;gap:8px;">
+            <div style="display:flex;align-items:center;gap:12px;">
+              <span class="mono" style="font-size:11px;color:var(--accent-text);">D-88412</span>
+              <div style="font-family:var(--font-display);font-weight:440;font-size:20px;">{{ dec.what }}</div>
+              <div style="flex:1;"></div>
+              <span onClick="{{ onVerifyDec }}" class="mono" style="font-size:9.5px;color:{{ vDec.color }};border:1px solid {{ vDec.bd }};padding:2px 9px;cursor:pointer;">{{ vDec.label }}</span>
+            </div>
+            <span class="mono" style="font-size:10px;color:var(--tx-3);">{{ dec.when }} · one action, as a document — print it for the board</span>
+          </div>
+          <div style="padding:6px 0;">
+            <sc-for list="{{ decRows }}" as="dr" hint-placeholder-count="10">
+              <div style="display:grid;grid-template-columns:180px 1fr;padding:0 26px;">
+                <span class="mono" style="font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx-3);padding:8px 0;">{{ dr.k }}</span>
+                <span class="mono" style="font-size:11.5px;padding:8px 0;border-bottom:1px solid var(--line-1);color:{{ dr.color }};word-break:break-all;">{{ dr.v }}</span>
+              </div>
+            </sc-for>
+          </div>
+          <div class="mono" style="font-size:9.5px;color:var(--tx-3);padding:10px 26px;border-top:1px solid var(--line-1);">ledger.decision() · verify recomputes the hash locally and compares to the anchored root — the product's core claim, touchable</div>
+        </div>
+        </div>
+        </sc-if>
+
+        <sc-if value="{{ ledCorr }}" hint-placeholder-val="{{ false }}">
+        <div class="surface" style="max-width:760px;display:flex;flex-direction:column;">
+          <div style="padding:12px 16px;border-bottom:1px solid var(--line-1);display:flex;align-items:center;gap:10px;">
+            <span class="eyebrow">Correlation X-7104 — walk the decision back</span>
+          </div>
+          <div style="padding:16px;display:flex;flex-direction:column;">
+            <sc-for list="{{ corrRows }}" as="cr" hint-placeholder-count="5">
+              <div style="display:flex;gap:14px;">
+                <div style="display:flex;flex-direction:column;align-items:center;">
+                  <span style="width:9px;height:9px;border-radius:999px;background:{{ cr.dot }};border:1.5px solid {{ cr.bd }};flex-shrink:0;margin-top:3px;"></span>
+                  <sc-if value="{{ cr.line }}" hint-placeholder-val="{{ true }}"><span style="width:1px;flex:1;background:var(--line-2);min-height:22px;"></span></sc-if>
+                </div>
+                <div style="padding-bottom:14px;">
+                  <div style="display:flex;gap:10px;align-items:baseline;">
+                    <span class="mono tabular" style="font-size:10px;color:var(--tx-3);">{{ cr.t }}</span>
+                    <span class="mono" style="font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;color:{{ cr.kColor }};border:1px solid {{ cr.kColor }};padding:1px 6px;">{{ cr.kind }}</span>
+                  </div>
+                  <div style="font-size:13px;margin-top:3px;">{{ cr.text }}</div>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+          <div class="mono" style="font-size:9.5px;color:var(--tx-3);padding:8px 16px;border-top:1px solid var(--line-1);">The meeting that decided it → the grant that allowed it → the actions → the PR. Every action traces to a human, or is flagged ungoverned.</div>
+        </div>
+        </sc-if>
+
+        <sc-if value="{{ exportOpen }}" hint-placeholder-val="{{ false }}">
+        <div class="surface" style="max-width:560px;padding:16px;display:flex;flex-direction:column;gap:10px;border-top:2px solid var(--info);">
+          <span class="eyebrow">Auditor evidence pack</span>
+          <span style="font-size:13px;color:var(--tx-2);line-height:1.55;">Period 2026-04-23 → 2026-07-23 · scope Line-4 Automation. Includes: decision records (14,208), grant lineage, ratified minutes (11), anchor roots + inclusion proofs, and <span class="mono">verify.sh</span> — a board member can check any record offline in under a minute. Does not include: transcripts of unratified rooms, raw documents above the auditor's clearance.</span>
+          <div style="display:flex;gap:8px;"><button class="btn btn-primary btn-sm">Generate pack</button><button class="btn btn-ghost btn-sm" onClick="{{ onExportClose }}">Close</button></div>
+        </div>
+        </sc-if>
+      </div>
+      </sc-if>
+
+      <!-- ======================= JOURNAL ======================= -->
+      <sc-if value="{{ rJournal }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Journal" style="padding:20px 24px;display:grid;grid-template-columns:1fr 340px;gap:16px;max-width:1080px;">
+        <div class="surface" style="display:flex;flex-direction:column;height:fit-content;">
+          <div style="padding:10px 16px;border-bottom:1px solid var(--line-1);display:flex;align-items:center;gap:10px;">
+            <span class="eyebrow">Journals & retros — human and agent, attributed</span>
+          </div>
+          <sc-for list="{{ jRows }}" as="j" hint-placeholder-count="5">
+            <div style="display:flex;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line-1);">
+              <span class="mono tabular" style="font-size:10px;color:var(--tx-3);width:74px;flex-shrink:0;padding-top:2px;">{{ j.date }}</span>
+              <div style="min-width:0;">
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <span class="mono" style="font-size:9.5px;color:{{ j.whoColor }};border:1px solid {{ j.whoColor }};padding:1px 7px;">{{ j.who }}</span>
+                  <span class="mono" style="font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx-3);">{{ j.kind }}</span>
+                </div>
+                <p style="font-size:13px;line-height:1.55;margin:5px 0 0;">{{ j.text }}</p>
+              </div>
+            </div>
+          </sc-for>
+          <div class="mono" style="font-size:9.5px;color:var(--tx-3);padding:8px 16px;">journal.list() → local memory graph · agent entries are signed by their AgentSBT key</div>
+        </div>
+        <div class="surface" style="display:flex;flex-direction:column;height:fit-content;border-top:2px solid var(--line-strong);">
+          <div style="padding:12px 16px;border-bottom:1px solid var(--line-1);display:flex;flex-direction:column;gap:3px;">
+            <span class="eyebrow">Standup brief — claude-code</span>
+            <span class="mono" style="font-size:9.5px;color:var(--tx-3);">what the agent will say · review before the meeting</span>
+          </div>
+          <sc-for list="{{ briefRows }}" as="b" hint-placeholder-count="6">
+            <div style="display:flex;flex-direction:column;gap:2px;padding:9px 16px;border-bottom:1px solid var(--line-1);">
+              <span class="mono" style="font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx-3);">{{ b.k }}</span>
+              <span style="font-size:12.5px;">{{ b.v }}</span>
+            </div>
+          </sc-for>
+          <div style="padding:10px 16px;display:flex;gap:8px;">
+            <button class="btn btn-primary btn-sm">Approve for meeting</button>
+            <button class="btn btn-ghost btn-sm">Edit</button>
+          </div>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ======================= CALENDAR ======================= -->
+      <sc-if value="{{ rCal }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Calendar" style="padding:20px 24px;display:grid;grid-template-columns:1fr 300px;gap:16px;">
+        <div class="surface" style="display:flex;flex-direction:column;">
+          <div style="padding:10px 16px;border-bottom:1px solid var(--line-1);display:flex;align-items:center;gap:10px;">
+            <span style="font-family:var(--font-display);font-weight:460;font-size:16px;">July 2026</span>
+            <div style="flex:1;"></div>
+            <span class="mono" style="font-size:9px;color:var(--accent-text);">■ governed</span>
+            <span class="mono" style="font-size:9px;color:var(--tx-3);">□ mirrored external</span>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(7,1fr);border-bottom:1px solid var(--line-1);">
+            <sc-for list="{{ calDows }}" as="dw" hint-placeholder-count="7">
+              <span class="mono" style="font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--tx-3);padding:6px 10px;">{{ dw.d }}</span>
+            </sc-for>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(7,1fr);">
+            <sc-for list="{{ calCells }}" as="c" hint-placeholder-count="35">
+              <div style="min-height:74px;border-right:1px solid var(--line-1);border-bottom:1px solid var(--line-1);padding:5px 7px;display:flex;flex-direction:column;gap:3px;background:{{ c.bg }};">
+                <span class="mono tabular" style="font-size:9.5px;color:{{ c.dColor }};">{{ c.d }}</span>
+                <sc-for list="{{ c.evs }}" as="e" hint-placeholder-count="0">
+                  <span class="mono" style="font-size:8.5px;line-height:1.3;color:{{ e.color }};border-left:2px solid {{ e.color }};padding-left:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ e.name }}</span>
+                </sc-for>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:14px;">
+          <div class="surface" style="display:flex;flex-direction:column;">
+            <div style="padding:10px 14px;border-bottom:1px solid var(--line-1);" class="eyebrow">Connected accounts</div>
+            <sc-for list="{{ calAccts }}" as="a" hint-placeholder-count="2">
+              <div style="display:flex;flex-direction:column;gap:3px;padding:10px 14px;border-bottom:1px solid var(--line-1);">
+                <span style="font-size:12px;font-weight:500;">{{ a.name }}</span>
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <span class="mono" style="font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;color:{{ a.modeColor }};border:1px solid {{ a.modeColor }};padding:1px 6px;">{{ a.mode }}</span>
+                  <span class="mono" style="font-size:9px;color:var(--tx-3);">synced {{ a.last }}</span>
+                </div>
+              </div>
+            </sc-for>
+            <div class="mono" style="font-size:9px;color:var(--tx-3);padding:8px 14px;line-height:1.5;">Badges are truthful: read-only means Quorum never writes back. calendar.syncStatus()</div>
+          </div>
+          <div class="surface" style="padding:14px;display:flex;flex-direction:column;gap:8px;border:1px solid var(--warn);">
+            <span class="eyebrow" style="color:var(--warn);">Sync conflict</span>
+            <span style="font-size:12.5px;line-height:1.5;">An Outlook edit moved <span style="font-weight:500;">CCB #13</span> to 15:00 — but its time is a governed field, frozen by agenda. The external copy was not applied.</span>
+            <div style="display:flex;gap:6px;"><button class="btn btn-ghost btn-sm">Keep governed time</button><button class="btn btn-ghost btn-sm">Propose amendment</button></div>
+          </div>
+          <div class="surface" style="padding:14px;display:flex;flex-direction:column;gap:6px;">
+            <span class="eyebrow">Schedule a governed meeting</span>
+            <span class="mono" style="font-size:10px;color:var(--tx-3);line-height:1.7;">collects: template · required roles · agents to call · classification · recurrence</span>
+            <button class="btn btn-primary btn-sm" style="width:fit-content;">New governed meeting</button>
+          </div>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ======================= REPOS ======================= -->
+      <sc-if value="{{ rRepos }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Repos" style="padding:18px;display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+        <div style="display:flex;flex-direction:column;gap:14px;">
+          <div class="surface" style="display:flex;flex-direction:column;">
+            <div style="padding:10px 14px;border-bottom:1px solid var(--line-1);" class="eyebrow">Connected repositories</div>
+            <sc-for list="{{ repoRows }}" as="r" hint-placeholder-count="3">
+              <div style="display:flex;flex-direction:column;gap:4px;padding:11px 14px;border-bottom:1px solid var(--line-1);">
+                <sc-if value="{{ r.denied }}" hint-placeholder-val="{{ false }}">
+                  <div style="display:flex;align-items:center;gap:10px;">
+                    <span class="mono" style="font-size:12px;color:var(--tx-3);">{{ r.name }}</span>
+                    <span class="mono" style="font-size:8.5px;letter-spacing:.1em;color:var(--danger);border:1px solid var(--danger);padding:1px 6px;">ITAR</span>
+                  </div>
+                  <div style="border:1.5px dashed var(--danger);padding:9px 11px;font-size:11.5px;color:var(--tx-2);line-height:1.5;">Redacted — requires ITAR clearance. Your seat is cleared to CUI. Grantable by: J. Whitfield (export-control officer). A silent omission would be indistinguishable from “nothing here” — that is why this plate exists.</div>
+                </sc-if>
+                <sc-if value="{{ r.ok }}" hint-placeholder-val="{{ true }}">
+                  <div style="display:flex;align-items:center;gap:10px;">
+                    <span class="mono" style="font-size:12px;font-weight:500;">{{ r.name }}</span>
+                    <span style="width:7px;height:7px;border-radius:999px;background:{{ r.chColor }};"></span>
+                    <span class="mono" style="font-size:9px;color:var(--tx-3);">checks {{ r.checks }}</span>
+                    <div style="flex:1;"></div>
+                    <span class="mono tabular" style="font-size:9.5px;color:var(--tx-3);">{{ r.meta }}</span>
+                  </div>
+                  <span class="mono" style="font-size:9.5px;color:var(--tx-3);">write access: {{ r.agents }}</span>
+                </sc-if>
+              </div>
+            </sc-for>
+          </div>
+          <div class="surface" style="display:flex;flex-direction:column;">
+            <div style="padding:10px 14px;border-bottom:1px solid var(--line-1);" class="eyebrow">Open pull requests</div>
+            <sc-for list="{{ prRows }}" as="pr" hint-placeholder-count="4">
+              <div style="display:flex;align-items:center;gap:10px;padding:var(--dpad) 14px;border-bottom:1px solid var(--line-1);">
+                <span style="width:7px;height:7px;border-radius:999px;background:{{ pr.chColor }};flex-shrink:0;"></span>
+                <span style="font-size:12.5px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ pr.title }}</span>
+                <sc-if value="{{ pr.agent }}" hint-placeholder-val="{{ false }}">
+                  <span class="mono" style="font-size:8.5px;letter-spacing:.08em;color:{{ pr.byColor }};border:1px solid {{ pr.byColor }};padding:1px 6px;">AGENT · {{ pr.by }}</span>
+                </sc-if>
+                <sc-if value="{{ pr.humanPr }}" hint-placeholder-val="{{ false }}">
+                  <span class="mono" style="font-size:8.5px;color:var(--tx-3);">{{ pr.by }}</span>
+                </sc-if>
+                <span class="mono tabular" style="font-size:9.5px;color:var(--tx-3);">{{ pr.age }}</span>
+              </div>
+            </sc-for>
+            <div class="mono" style="font-size:9.5px;color:var(--tx-3);padding:8px 14px;">repos.prs() · agent-authored PRs are flagged and trace to their grant</div>
+          </div>
+        </div>
+        <div class="surface" style="display:flex;flex-direction:column;height:fit-content;">
+          <div style="padding:10px 14px;border-bottom:1px solid var(--line-1);display:flex;align-items:center;gap:10px;">
+            <span class="eyebrow">Peek — the citation component</span>
+            <div style="flex:1;"></div>
+            <span onClick="{{ onVerifyPeek }}" class="mono" style="font-size:9px;color:{{ vPeek.color }};border:1px solid {{ vPeek.bd }};padding:1px 7px;cursor:pointer;">{{ vPeek.label }}</span>
+          </div>
+          <div class="mono" style="font-size:10px;color:var(--info);padding:9px 14px;border-bottom:1px solid var(--line-1);">line4-controls@fix/fixtures:src/rig.ts#L88-L98 · pinned b3:41ce…0a77</div>
+          <div style="padding:10px 0;background:var(--srf-inset);">
+            <sc-for list="{{ peekLines }}" as="pl" hint-placeholder-count="11">
+              <div class="mono" style="display:grid;grid-template-columns:44px 1fr;font-size:10.5px;line-height:1.7;">
+                <span class="tabular" style="color:var(--tx-3);text-align:right;padding-right:12px;">{{ pl.n }}</span>
+                <span style="white-space:pre;color:{{ pl.color }};">{{ pl.code }}</span>
+              </div>
+            </sc-for>
+          </div>
+          <div class="mono" style="font-size:9.5px;color:var(--tx-3);padding:8px 14px;">repos.peek(ref) — hash-pinned so the citation cannot drift after the meeting. Opens inside rooms without navigating away.</div>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ======================= WALLET / NODE ======================= -->
+      <sc-if value="{{ rWallet }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Wallet" style="padding:18px;display:flex;flex-direction:column;gap:14px;max-width:1060px;">
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">
+          <div class="surface" style="padding:16px;"><div class="eyebrow">Balance</div><div class="tabular" style="font-family:var(--font-display);font-size:28px;font-weight:460;">2,410 <span style="font-size:13px;color:var(--tx-3);">SALT</span></div><div class="mono" style="font-size:9.5px;color:var(--tx-3);">keys in OS keyring · never exported</div></div>
+          <div class="surface" style="padding:16px;"><div class="eyebrow">Staked</div><div class="tabular" style="font-family:var(--font-display);font-size:28px;font-weight:460;">1,000</div><div class="mono" style="font-size:9.5px;color:var(--tx-3);">validator bond · 6.2% · unbonding 7d</div></div>
+          <div class="surface" style="padding:16px;border-top:2px solid var(--warn);"><div class="eyebrow">Paymaster budget</div><div class="tabular" style="font-family:var(--font-display);font-size:28px;font-weight:460;">64%</div><div class="mono" style="font-size:9.5px;color:var(--tx-3);">agent gas sponsored · resets 08-01</div></div>
+          <div class="surface" style="padding:16px;"><div class="eyebrow">Tier-2 revenue · 30d</div><div class="tabular" style="font-family:var(--font-display);font-size:28px;font-weight:460;color:var(--accent-text);">+126.4</div><div class="mono" style="font-size:9.5px;color:var(--tx-3);">verifiable inference + rewards</div></div>
+        </div>
+
+        <div class="surface" style="display:flex;align-items:center;gap:12px;padding:11px 16px;">
+          <span class="eyebrow">Account</span>
+          <span class="mono" style="font-size:11px;color:var(--tx-2);word-break:break-all;">{{ wAddr }}</span>
+          <span onClick="{{ onCopyAddr }}" class="mono" style="font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:{{ wCopied }};border:1px solid var(--line-2);padding:2px 8px;cursor:pointer;" style-hover="border-color:var(--tx-2);">{{ wCopyLabel }}</span>
+          <div style="flex:1;"></div>
+          <button class="btn btn-primary btn-sm" onClick="{{ onSendOpen }}">Send</button>
+          <button class="btn btn-ghost btn-sm" onClick="{{ onRecvOpen }}">Receive</button>
+          <button class="btn btn-ghost btn-sm" onClick="{{ onStakeOpen }}">Stake</button>
+        </div>
+
+        <sc-if value="{{ wSend }}" hint-placeholder-val="{{ false }}">
+        <div class="surface" style="padding:16px;display:flex;flex-direction:column;gap:12px;border-top:2px solid var(--line-strong);max-width:560px;">
+          <span class="eyebrow">Send — every transfer is a ceremony</span>
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            <div>
+              <div class="lbl">To</div>
+              <select class="input" onChange="{{ onSendTo }}" style="width:100%;">
+                <option value="">Choose a contact or paste an address…</option>
+                <sc-for list="{{ wContacts }}" as="ct" hint-placeholder-count="3">
+                  <option value="{{ ct.addr }}">{{ ct.label }}</option>
+                </sc-for>
+              </select>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 130px;gap:8px;">
+              <div><div class="lbl">Amount</div><input class="input" value="{{ wAmt }}" onChange="{{ onSendAmt }}" placeholder="0.00" style="width:100%;"></div>
+              <div><div class="lbl">Token</div><select class="input" style="width:100%;"><option>SALT</option><option>L4-CRED</option></select></div>
+            </div>
+          </div>
+          <sc-if value="{{ wOverCeiling }}" hint-placeholder-val="{{ false }}">
+            <div class="mono" style="font-size:10px;color:var(--warn);border:1px solid var(--warn);background:var(--warn-bg);padding:7px 10px;">Over 150 SALT — PRT-004 C2 forces HIC-1: this send will require your signature in a full ceremony.</div>
+          </sc-if>
+          <div style="display:flex;gap:8px;">
+            <button class="btn btn-primary btn-sm" onClick="{{ onSendReview }}" disabled="{{ wSendDisabled }}">Review & sign</button>
+            <button class="btn btn-ghost btn-sm" onClick="{{ onSendClose }}">Cancel</button>
+          </div>
+        </div>
+        </sc-if>
+
+        <sc-if value="{{ wRecv }}" hint-placeholder-val="{{ false }}">
+        <div class="surface" style="padding:16px;display:flex;gap:16px;align-items:center;border-top:2px solid var(--line-strong);max-width:560px;">
+          <div style="width:96px;height:96px;flex-shrink:0;display:grid;grid-template-columns:repeat(8,1fr);gap:2px;padding:8px;border:1px solid var(--line-2);">
+            <sc-for list="{{ wQr }}" as="q" hint-placeholder-count="64">
+              <span style="background:{{ q.c }};"></span>
+            </sc-for>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:6px;min-width:0;">
+            <span class="eyebrow">Receive</span>
+            <span class="mono" style="font-size:11px;word-break:break-all;">{{ wAddr }}</span>
+            <span class="mono" style="font-size:9.5px;color:var(--tx-3);">chain 40204 · citrate testnet · SALT + tenant tokens</span>
+            <button class="btn btn-ghost btn-sm" onClick="{{ onRecvClose }}" style="width:fit-content;">Close</button>
+          </div>
+        </div>
+        </sc-if>
+
+        <sc-if value="{{ wStake }}" hint-placeholder-val="{{ false }}">
+        <div class="surface" style="padding:16px;display:flex;flex-direction:column;gap:10px;border-top:2px solid var(--line-strong);max-width:560px;">
+          <span class="eyebrow">Staking — validator bond</span>
+          <div style="display:grid;grid-template-columns:150px 1fr;gap:6px 12px;font-size:12.5px;">
+            <span class="lbl" style="margin:0;">Bonded</span><span class="mono tabular" style="font-size:12px;">1,000 SALT · MembershipStakeVault</span>
+            <span class="lbl" style="margin:0;">Rewards · 30d</span><span class="mono tabular" style="font-size:12px;color:var(--accent-text);">+126.4 SALT · 6.2% APR</span>
+            <span class="lbl" style="margin:0;">Unbonding</span><span class="mono tabular" style="font-size:12px;">0 · period 7 days</span>
+            <span class="lbl" style="margin:0;">Slashing</span><span style="font-size:12px;color:var(--tx-2);">double-sign or checkpoint equivocation — bond at risk</span>
+          </div>
+          <div style="display:flex;gap:8px;">
+            <button class="btn btn-primary btn-sm" onClick="{{ onBond }}">Bond more — ceremony</button>
+            <button class="btn btn-ghost btn-sm" onClick="{{ onUnbond }}">Begin unbonding — ceremony</button>
+            <button class="btn btn-ghost btn-sm" onClick="{{ onStakeClose }}">Close</button>
+          </div>
+        </div>
+        </sc-if>
+
+        <div style="display:grid;grid-template-columns:300px 1fr;gap:14px;align-items:start;">
+          <div class="surface" style="display:flex;flex-direction:column;">
+            <div style="padding:10px 14px;border-bottom:1px solid var(--line-1);" class="eyebrow">Tokens</div>
+            <sc-for list="{{ wTokens }}" as="tk" hint-placeholder-count="3">
+              <div style="display:flex;align-items:baseline;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line-1);">
+                <span class="mono" style="font-size:11px;font-weight:500;width:64px;">{{ tk.sym }}</span>
+                <span style="font-size:11px;color:var(--tx-3);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ tk.name }}</span>
+                <span class="mono tabular" style="font-size:12px;">{{ tk.balance }}</span>
+              </div>
+            </sc-for>
+            <div class="mono" style="font-size:9px;color:var(--tx-3);padding:8px 14px;line-height:1.5;">wallet.summary() · tenant tokens are chain-native, custody in the same keyring</div>
+          </div>
+          <div class="surface" style="display:flex;flex-direction:column;">
+            <div style="padding:10px 14px;border-bottom:1px solid var(--line-1);" class="eyebrow">Activity — every movement, attributed</div>
+            <sc-for list="{{ wTxs }}" as="tx" hint-placeholder-count="7">
+              <div style="display:grid;grid-template-columns:52px 160px 1fr 110px 70px;gap:10px;padding:8px 14px;border-bottom:1px solid var(--line-1);align-items:baseline;">
+                <span class="mono" style="font-size:8.5px;letter-spacing:.08em;text-transform:uppercase;color:{{ tx.dirColor }};">{{ tx.dir }}</span>
+                <span style="font-size:12px;">{{ tx.kind }}</span>
+                <span class="mono" style="font-size:10px;color:var(--tx-3);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ tx.counterparty }}<sc-if value="{{ tx.decision }}" hint-placeholder-val="{{ false }}"><span onClick="{{ tx.onDecision }}" style="color:var(--info);cursor:pointer;"> · {{ tx.decision }}</span></sc-if></span>
+                <span class="mono tabular" style="font-size:11.5px;text-align:right;color:{{ tx.amtColor }};">{{ tx.amount }} <span style="color:var(--tx-3);font-size:9px;">{{ tx.token }}</span></span>
+                <span class="mono" style="font-size:9px;color:{{ tx.stColor }};text-align:right;">{{ tx.status }}</span>
+              </div>
+            </sc-for>
+            <div class="mono" style="font-size:9px;color:var(--tx-3);padding:8px 14px;">Agent budget draws and paymaster gas link to their decision id — spend is governance, not just accounting</div>
+          </div>
+        </div>
+
+        <div class="surface" style="padding:14px 16px;display:flex;flex-direction:column;gap:6px;">
+          <span class="eyebrow">Agent spend — under grants</span>
+          <span class="mono" style="font-size:11px;line-height:1.9;color:var(--tx-2);">claude-code 312 / 500 · codex 448 / 500 ⚠ · devin 96 / 250 · hermes 210 / 400</span>
+        </div>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ rNode }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Node" style="padding:18px;display:flex;flex-direction:column;gap:14px;max-width:1100px;">
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">
+          <div class="surface" style="padding:16px;"><div class="eyebrow">Height</div><div class="tabular" style="font-family:var(--font-display);font-size:26px;font-weight:460;">{{ chainH }}</div><div class="mono" style="font-size:9.5px;color:var(--tx-3);">GhostDAG k=18</div></div>
+          <div class="surface" style="padding:16px;"><div class="eyebrow">Checkpoint</div><div class="tabular" style="font-family:var(--font-display);font-size:26px;font-weight:460;">~25s</div><div class="mono" style="font-size:9.5px;color:var(--tx-3);">50 blocks · BFT 67%</div></div>
+          <div class="surface" style="padding:16px;border-top:2px solid var(--accent);"><div class="eyebrow">Validating</div><div class="tabular" style="font-family:var(--font-display);font-size:26px;font-weight:460;color:var(--accent);">{{ nodeState }}</div><div class="mono" style="font-size:9.5px;color:var(--tx-3);">uptime 99.2% · 30d</div></div>
+          <div class="surface" style="padding:16px;"><div class="eyebrow">Relay</div><div class="tabular" style="font-family:var(--font-display);font-size:26px;font-weight:460;">{{ relayLabel }}</div><div class="mono" style="font-size:9.5px;color:var(--tx-3);">rooms E2E · relay sees ciphertext</div></div>
+        </div>
+        <div style="display:grid;grid-template-columns:minmax(0,1fr) 280px;gap:14px;align-items:start;">
+          <div style="display:flex;flex-direction:column;gap:14px;min-width:0;">
+            <div class="surface" style="display:flex;flex-direction:column;">
+              <div style="padding:10px 14px;border-bottom:1px solid var(--line-1);display:flex;align-items:center;gap:10px;">
+                <span class="eyebrow">Explorer — recent blocks</span>
+                <span style="width:7px;height:7px;border-radius:999px;background:{{ nExpDot }};animation:{{ nExpAnim }};"></span>
+                <div style="flex:1;"></div>
+                <input class="input mono" value="{{ nQ }}" onChange="{{ onNQ }}" placeholder="height · hash · address" style="width:170px;max-width:40%;font-size:10.5px;padding:4px 9px;">
+              </div>
+              <div class="mono" style="display:grid;grid-template-columns:76px minmax(70px,1fr) 34px minmax(80px,110px) 64px 56px;gap:8px;padding:6px 14px;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--tx-3);border-bottom:1px solid var(--line-1);">
+                <span>Height</span><span>Hash</span><span>Txs</span><span>Proposer</span><span>Gas</span><span>Age</span>
+              </div>
+              <sc-for list="{{ nBlocks }}" as="b" hint-placeholder-count="12">
+                <div onClick="{{ b.onClick }}" class="mono tabular" style="display:grid;grid-template-columns:76px minmax(70px,1fr) 34px minmax(80px,110px) 64px 56px;gap:8px;padding:6px 14px;font-size:10.5px;border-bottom:1px solid var(--line-1);cursor:pointer;background:{{ b.bg }};" style-hover="background:var(--srf-1);">
+                  <span style="color:{{ b.hColor }};white-space:nowrap;">{{ b.height }}<sc-if value="{{ b.checkpoint }}" hint-placeholder-val="{{ false }}"><span style="color:var(--accent-text);"> ●</span></sc-if></span>
+                  <span style="color:var(--tx-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ b.hash }}</span>
+                  <span>{{ b.txs }}</span>
+                  <span style="color:var(--tx-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ b.proposer }}</span>
+                  <span style="color:var(--tx-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ b.gas }}</span>
+                  <span style="color:var(--tx-3);white-space:nowrap;">{{ b.age }}</span>
+                </div>
+              </sc-for>
+              <div class="mono" style="font-size:9px;color:var(--tx-3);padding:7px 14px;">● checkpoint block · red rows are non-blue (GhostDAG anticone) — recorded, not discarded · node.blocks()</div>
+            </div>
+            <sc-if value="{{ nBlockSel }}" hint-placeholder-val="{{ false }}">
+            <div class="surface" style="display:flex;flex-direction:column;border-top:2px solid var(--line-strong);">
+              <div style="padding:10px 14px;border-bottom:1px solid var(--line-1);display:flex;align-items:center;gap:10px;">
+                <span class="eyebrow">Block {{ nSel.height }}</span>
+                <div style="flex:1;"></div>
+                <span onClick="{{ onNClose }}" class="mono" style="font-size:10px;color:var(--tx-3);cursor:pointer;">close ×</span>
+              </div>
+              <sc-for list="{{ nSelRows }}" as="sr" hint-placeholder-count="6">
+                <div style="display:grid;grid-template-columns:130px 1fr;border-bottom:1px solid var(--line-1);">
+                  <span class="mono" style="font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx-3);padding:7px 14px;background:var(--srf-inset);">{{ sr.k }}</span>
+                  <span class="mono" style="font-size:10.5px;padding:7px 14px;color:{{ sr.color }};word-break:break-all;">{{ sr.v }}</span>
+                </div>
+              </sc-for>
+            </div>
+            </sc-if>
+            <div class="surface" style="display:flex;flex-direction:column;">
+              <div style="padding:10px 14px;border-bottom:1px solid var(--line-1);display:flex;align-items:center;gap:10px;">
+                <span class="eyebrow">Logs — live</span>
+                <span style="width:7px;height:7px;border-radius:999px;background:{{ nExpDot }};animation:{{ nExpAnim }};"></span>
+                <div style="flex:1;"></div>
+                <sc-for list="{{ nLvls }}" as="lv" hint-placeholder-count="3">
+                  <span onClick="{{ lv.onClick }}" class="mono" style="font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:{{ lv.color }};border:1px solid {{ lv.bd }};padding:1px 7px;cursor:pointer;">{{ lv.label }}</span>
+                </sc-for>
+              </div>
+              <div style="max-height:260px;overflow:auto;background:var(--srf-inset);padding:6px 0;">
+                <sc-for list="{{ nLogs }}" as="lg" hint-placeholder-count="14">
+                  <div class="mono" style="display:grid;grid-template-columns:64px 44px 80px minmax(0,1fr);gap:8px;padding:2px 14px;font-size:10px;line-height:1.7;">
+                    <span class="tabular" style="color:var(--tx-3);">{{ lg.t }}</span>
+                    <span style="color:{{ lg.lvlColor }};">{{ lg.lvl }}</span>
+                    <span style="color:var(--info);">{{ lg.mod }}</span>
+                    <span style="color:var(--tx-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ lg.msg }}</span>
+                  </div>
+                </sc-for>
+              </div>
+              <div class="mono" style="font-size:9px;color:var(--tx-3);padding:7px 14px;">node.logs() stream · tail -f semantics · production: ring buffer 10k lines, full logs on disk</div>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:14px;">
+            <div class="surface" style="display:flex;flex-direction:column;">
+              <div style="padding:10px 14px;border-bottom:1px solid var(--line-1);" class="eyebrow">Peers</div>
+              <sc-for list="{{ nPeers }}" as="p" hint-placeholder-count="5">
+                <div style="display:flex;align-items:center;gap:8px;padding:8px 14px;border-bottom:1px solid var(--line-1);">
+                  <span style="width:7px;height:7px;border-radius:999px;background:{{ p.dot }};flex-shrink:0;"></span>
+                  <span class="mono" style="font-size:10.5px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ p.id }}</span>
+                  <span class="mono" style="font-size:8.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--tx-3);">{{ p.kind }}</span>
+                  <span class="mono tabular" style="font-size:9.5px;color:{{ p.latColor }};width:38px;text-align:right;">{{ p.latency }}</span>
+                </div>
+              </sc-for>
+            </div>
+            <div class="surface" style="padding:14px;display:flex;flex-direction:column;gap:6px;">
+              <span class="eyebrow">Local hash chain</span>
+              <span class="mono" style="font-size:10.5px;color:var(--tx-2);line-height:1.7;">#48,214 · head b3:22e0…91cf<br>anchored → root 0x7c1fa2…90de @ 1,284,051<br>advances even offline</span>
+            </div>
+            <div class="surface" style="padding:14px;display:flex;flex-direction:column;gap:6px;">
+              <span class="eyebrow">Learning — mentor-mentee</span>
+              <span class="mono" style="font-size:10.5px;color:var(--tx-2);line-height:1.7;">gov-lora v2.3 · rank 16 · dim 768<br>last delta: checkpoint 25,681<br>next exchange in ~18s</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ======================= SETTINGS ======================= -->
+      <sc-if value="{{ rSettings }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Settings" style="padding:22px 26px;display:flex;flex-direction:column;gap:16px;max-width:860px;">
+        <div style="display:flex;gap:0;border-bottom:1px solid var(--line-2);">
+          <sc-for list="{{ setTabs }}" as="st" hint-placeholder-count="5">
+            <button onClick="{{ st.onClick }}" class="mono" style="font-size:10px;letter-spacing:.13em;text-transform:uppercase;background:transparent;border:none;cursor:pointer;padding:8px 14px;color:{{ st.color }};border-bottom:2px solid {{ st.line }};margin-bottom:-1px;">{{ st.label }}</button>
+          </sc-for>
+        </div>
+
+        <sc-if value="{{ setTenancy }}" hint-placeholder-val="{{ true }}">
+        <div class="surface" style="display:flex;flex-direction:column;">
+          <div class="mono" style="display:grid;grid-template-columns:1fr 200px 130px 110px;gap:10px;padding:8px 16px;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--tx-3);border-bottom:1px solid var(--line-1);">
+            <span>Scope</span><span>Admins</span><span>Class ceiling</span><span>Threshold</span>
+          </div>
+          <sc-for list="{{ tenRows }}" as="tn" hint-placeholder-count="4">
+            <div style="display:grid;grid-template-columns:1fr 200px 130px 110px;gap:10px;padding:9px 16px;border-bottom:1px solid var(--line-1);align-items:center;">
+              <span style="font-size:13px;font-weight:500;padding-left:{{ tn.pad }};">{{ tn.name }}</span>
+              <span style="font-size:12px;color:var(--tx-2);">{{ tn.admins }}</span>
+              <span class="mono" style="font-size:8.5px;letter-spacing:.1em;color:{{ tn.ceilColor }};border:1px solid {{ tn.ceilColor }};padding:1px 6px;width:fit-content;">{{ tn.ceiling }}</span>
+              <span class="mono tabular" style="font-size:10.5px;color:var(--tx-2);">{{ tn.threshold }}</span>
+            </div>
+          </sc-for>
+        </div>
+        </sc-if>
+
+        <sc-if value="{{ setIdentity }}" hint-placeholder-val="{{ false }}">
+        <div class="surface" style="padding:16px;display:flex;flex-direction:column;gap:10px;">
+          <div style="display:grid;grid-template-columns:190px 1fr;gap:8px 12px;font-size:13px;">
+            <span class="lbl" style="margin:0;">Federation</span><span>Meridian Okta · OIDC · healthy</span>
+            <span class="lbl" style="margin:0;">SCIM sync</span><span>last 4m ago · 1,204 seats</span>
+            <span class="lbl" style="margin:0;">Clearance source</span><span>ClearanceRegistry (chain) ← HR export, dual-signed</span>
+            <span class="lbl" style="margin:0;">Deprovision SLA</span><span>15 minutes</span>
+          </div>
+          <div style="border:1px solid var(--warn);background:var(--warn-bg);padding:10px 12px;font-size:12.5px;line-height:1.5;">Honest note: this SLA <em>is</em> the agent kill-switch SLA. When a human leaves, every grant issued under their authority suspends within the same window.</div>
+        </div>
+        </sc-if>
+
+        <sc-if value="{{ setModels }}" hint-placeholder-val="{{ false }}">
+        <div class="surface" style="padding:16px;display:flex;flex-direction:column;gap:10px;">
+          <div style="display:grid;grid-template-columns:190px 1fr;gap:8px 12px;font-size:13px;">
+            <span class="lbl" style="margin:0;">Bundled model</span><span class="mono" style="font-size:11.5px;">Gemma 3 4B · governance LoRA v2.3 (rank 16)</span>
+            <span class="lbl" style="margin:0;">Gateway</span><span class="mono" style="font-size:11.5px;">127.0.0.1:8484 · local</span>
+            <span class="lbl" style="margin:0;">BYO keys</span><span class="mono" style="font-size:11.5px;">anthropic ●●●● k3B1 · keyring-sealed, shown once</span>
+          </div>
+          <div style="border:1px solid var(--line-2);background:var(--srf-inset);padding:10px 12px;display:flex;align-items:center;gap:12px;">
+            <div style="flex:1;">
+              <div style="font-size:12.5px;font-weight:500;">Egress policy — read-only here</div>
+              <div class="mono" style="font-size:10px;color:var(--tx-3);">in force: PRT-002 · CUI+ local-only · set by a deployed protocol, not a preference</div>
+            </div>
+            <button class="btn btn-ghost btn-sm" onClick="{{ goGov }}">This is governed — change it in Governance</button>
+          </div>
+        </div>
+        </sc-if>
+
+        <sc-if value="{{ setLicense }}" hint-placeholder-val="{{ false }}">
+        <div class="surface" style="padding:16px;display:flex;flex-direction:column;gap:10px;">
+          <div style="display:flex;gap:24px;">
+            <div><div class="eyebrow">Seats licensed</div><div class="tabular" style="font-family:var(--font-display);font-size:28px;font-weight:460;">1,500</div></div>
+            <div><div class="eyebrow">Seats active</div><div class="tabular" style="font-family:var(--font-display);font-size:28px;font-weight:460;">1,204</div></div>
+          </div>
+          <div style="border:1.5px dashed var(--line-2);padding:12px 14px;font-size:12.5px;color:var(--tx-3);">Metering is not enforced yet — counts are informational. Enforcement lands in <span class="mono">QRM-S3</span>. This plate is deliberate: an unbuilt surface must look unbuilt.</div>
+        </div>
+        </sc-if>
+
+        <sc-if value="{{ setCompliance }}" hint-placeholder-val="{{ false }}">
+        <div class="surface" style="padding:16px;display:flex;flex-direction:column;gap:10px;">
+          <div style="display:grid;grid-template-columns:190px 1fr;gap:8px 12px;font-size:13px;">
+            <span class="lbl" style="margin:0;">Evidence export</span><span>auditor packs from Ledger · verify.sh included</span>
+            <span class="lbl" style="margin:0;">Retention</span><span>decisions indefinite (chain) · transcripts 7y · drafts 90d</span>
+            <span class="lbl" style="margin:0;">Consent</span><span>room voice: local transcription, never stored — per-member consent recorded</span>
+          </div>
+        </div>
+        </sc-if>
+      </div>
+      </sc-if>
+
+      <!-- SURF-MORE -->
+
+    </div>
+
+    <!-- status rail -->
+    <div class="mono tabular" style="display:flex;align-items:center;gap:18px;padding:0 18px;border-top:1px solid var(--line-1);background:var(--srf-1);font-size:10px;color:var(--tx-3);">
+      <span>CHAIN <span style="color:var(--tx-2);">{{ chainH }}</span></span>
+      <span>RELAY <span style="color:{{ relayColor }};">{{ relayLabel }}</span></span>
+      <span>AGENTS LIVE <span style="color:var(--tx-2);">{{ agentsLive }}</span></span>
+      <span>PENDING <span style="color:{{ pendColor }};">{{ pendCount }}</span></span>
+      <div style="flex:1;"></div>
+      <button onClick="{{ onConn }}" class="mono" style="font-size:9px;letter-spacing:.12em;text-transform:uppercase;background:transparent;border:1px solid var(--line-2);color:var(--tx-2);padding:1px 8px;cursor:pointer;border-radius:var(--r-1);">SIM · {{ connMode }}</button>
+    </div>
+  </div>
+</div>
+</sc-if>
+
+<!-- ============================ CEREMONY ============================ -->
+<sc-if value="{{ cerOpen }}" hint-placeholder-val="{{ false }}">
+<div style="position:fixed;inset:0;background:rgba(14,15,12,.5);z-index:100;display:flex;align-items:center;justify-content:center;padding:24px;">
+  <div data-register="charter" data-screen-label="Signature Ceremony" style="width:640px;max-height:90vh;overflow:auto;background:#ffffff;color:var(--tx-1);border-radius:var(--r-3,12px);box-shadow:0 24px 64px rgba(14,15,12,.35);display:flex;flex-direction:column;">
+    <div style="display:flex;align-items:center;gap:10px;padding:16px 20px;border-bottom:2px solid var(--line-strong);">
+      <img src="assets/citrate_mark_black.svg" alt="" style="width:20px;height:20px;">
+      <span class="mono" style="font-size:11px;font-weight:500;letter-spacing:.16em;text-transform:uppercase;">Signature ceremony</span>
+      <sc-if value="{{ cer.queueDepth }}" hint-placeholder-val="{{ false }}">
+        <span class="mono tabular" style="font-size:9.5px;color:var(--tx-3);border:1px solid var(--line-2);padding:1px 7px;border-radius:999px;">queue {{ cer.queueDepth }}</span>
+      </sc-if>
+      <div style="flex:1;"></div>
+      <span class="mono" style="font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:{{ cer.originColor }};border:1px solid {{ cer.originColor }};padding:2px 8px;">{{ cer.origin }}</span>
+    </div>
+    <div style="display:flex;gap:0;border-bottom:1px solid var(--line-1);">
+      <sc-for list="{{ cerPhases }}" as="ph" hint-placeholder-count="4">
+        <div class="mono" style="flex:1;text-align:center;font-size:9px;letter-spacing:.13em;text-transform:uppercase;padding:8px 4px;color:{{ ph.color }};border-bottom:2px solid {{ ph.line }};">{{ ph.label }}</div>
+      </sc-for>
+    </div>
+    <div style="padding:18px 20px;display:flex;flex-direction:column;gap:14px;">
+      <div style="font-family:var(--font-display);font-weight:440;font-size:20px;letter-spacing:-0.008em;">{{ cer.title }}</div>
+
+      <sc-if value="{{ cer.raw }}" hint-placeholder-val="{{ false }}">
+        <div style="border:1px solid var(--danger);background:var(--danger-bg);padding:12px 14px;display:flex;flex-direction:column;gap:8px;">
+          <span class="mono" style="font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--danger);">Calldata could not be decoded</span>
+          <p style="font-size:13px;line-height:1.5;margin:0;color:var(--tx-1);">This request carries raw calldata that matches no known contract ABI. Quorum cannot tell you what it does. Signing it is signing something unread.</p>
+          <div class="mono" style="font-size:10.5px;color:var(--tx-2);background:#ffffff;border:1px solid var(--line-2);padding:8px 10px;word-break:break-all;">0x7ff36ab5000000000000000000000000000000000000000000000000016345785d8a0000…</div>
+          <label style="display:flex;align-items:flex-start;gap:8px;font-size:12.5px;cursor:pointer;">
+            <input type="checkbox" checked="{{ cerAck }}" onChange="{{ onCerAck }}" style="margin-top:2px;">
+            <span>I understand this calldata is raw and unverified, and I accept responsibility for what it executes.</span>
+          </label>
+        </div>
+      </sc-if>
+
+      <div style="border:1px solid var(--line-1);">
+        <sc-for list="{{ cer.rows }}" as="r" hint-placeholder-count="6">
+          <div style="display:grid;grid-template-columns:150px 1fr;border-bottom:1px solid var(--line-1);">
+            <span class="mono" style="font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--tx-3);padding:8px 12px;background:var(--srf-inset);">{{ r.k }}</span>
+            <span class="mono" style="font-size:11.5px;padding:8px 12px;color:{{ r.color }};word-break:break-all;">{{ r.v }}</span>
+          </div>
+        </sc-for>
+      </div>
+
+      <sc-if value="{{ cer.multisig }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:0;border:1px solid var(--line-1);">
+          <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--srf-inset);border-bottom:1px solid var(--line-1);">
+            <span class="mono" style="font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--tx-3);">Signer envelope · {{ cer.threshold }}</span>
+            <div style="flex:1;"></div>
+            <span class="mono tabular" style="font-size:10px;color:var(--warn);">expires {{ cer.expiry }}</span>
+          </div>
+          <sc-for list="{{ cerSigners }}" as="sg" hint-placeholder-count="3">
+            <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--line-1);background:{{ sg.bg }};">
+              <span style="width:8px;height:8px;border-radius:999px;background:{{ sg.dot }};flex-shrink:0;"></span>
+              <span style="font-size:13px;font-weight:{{ sg.weight }};">{{ sg.name }}</span>
+              <sc-if value="{{ sg.you }}" hint-placeholder-val="{{ false }}"><span class="mono" style="font-size:9px;letter-spacing:.1em;color:var(--accent-text);">YOU</span></sc-if>
+              <div style="flex:1;"></div>
+              <span class="mono" style="font-size:10px;color:{{ sg.stColor }};">{{ sg.state }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ cerSettled }}" hint-placeholder-val="{{ false }}">
+        <div class="cc-stamp" style="display:flex;align-items:center;gap:12px;border:1px solid var(--ok);background:var(--ok-bg);padding:14px;">
+          <span style="width:28px;height:28px;border-radius:999px;border:1.5px solid var(--ok);color:var(--ok);display:inline-flex;align-items:center;justify-content:center;"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 12 L10 17 L19 8"></path></svg></span>
+          <div>
+            <div style="font-size:14px;font-weight:500;">On record</div>
+            <div class="mono" style="font-size:10.5px;color:var(--tx-2);">{{ cer.settledNote }}</div>
+          </div>
+        </div>
+      </sc-if>
+      <sc-if value="{{ cerBusy }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;align-items:center;gap:14px;border:1px solid var(--line-1);padding:12px 14px;">
+          <div style="width:34px;height:34px;flex-shrink:0;"><dc-import name="LoaderMark" size="34" hint-size="34px,34px"></dc-import></div>
+          <span class="mono" style="font-size:11px;color:var(--tx-2);">{{ cerBusyText }}</span>
+        </div>
+      </sc-if>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;padding:14px 20px;border-top:1px solid var(--line-1);">
+      <span class="mono" style="font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx-3);">One approval · one signature · nothing is remembered</span>
+      <div style="flex:1;"></div>
+      <sc-if value="{{ cerReview }}" hint-placeholder-val="{{ true }}">
+        <button class="btn btn-ghost" onClick="{{ onCerReject }}">Reject</button>
+        <button class="btn btn-primary" onClick="{{ onCerSign }}" disabled="{{ cerSignDisabled }}">Sign</button>
+      </sc-if>
+      <sc-if value="{{ cerDone }}" hint-placeholder-val="{{ false }}">
+        <sc-if value="{{ cerHasNext }}" hint-placeholder-val="{{ false }}">
+          <button class="btn btn-primary" onClick="{{ onCerNext }}">Next in queue ({{ cerNextCount }})</button>
+        </sc-if>
+        <button class="btn btn-ghost" onClick="{{ onCerClose }}">Close</button>
+      </sc-if>
+    </div>
+  </div>
+</div>
+</sc-if>
+
+<!-- ============================ COMMAND PALETTE ============================ -->
+<sc-if value="{{ palOpen }}" hint-placeholder-val="{{ false }}">
+<div onClick="{{ onPalClose }}" style="position:fixed;inset:0;background:rgba(14,15,12,.35);z-index:110;display:flex;justify-content:center;padding-top:12vh;">
+  <div data-register="charter" onClick="{{ stop }}" style="color:var(--tx-1);width:560px;height:fit-content;max-height:60vh;background:#ffffff;border-radius:var(--r-2);box-shadow:0 24px 64px rgba(14,15,12,.3);display:flex;flex-direction:column;overflow:hidden;">
+    <input class="mono" autoFocus="{{ true }}" value="{{ palQ }}" onChange="{{ onPalQ }}" placeholder="Jump to a room, protocol, agent, decision — or run a command" style="border:none;outline:none;padding:14px 16px;font-size:13px;border-bottom:1px solid var(--line-1);background:transparent;color:var(--tx-1);">
+    <div style="overflow:auto;">
+      <sc-for list="{{ palResults }}" as="pr" hint-placeholder-count="6">
+        <div onClick="{{ pr.onClick }}" style="display:flex;align-items:center;gap:10px;padding:9px 16px;cursor:pointer;border-bottom:1px solid var(--line-1);" style-hover="background:var(--srf-1);">
+          <span class="mono" style="font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:{{ pr.color }};border:1px solid {{ pr.color }};padding:1px 6px;flex-shrink:0;">{{ pr.kind }}</span>
+          <span style="font-size:13px;flex:1;">{{ pr.label }}</span>
+          <sc-if value="{{ pr.danger }}" hint-placeholder-val="{{ false }}"><span class="mono" style="font-size:9px;color:var(--danger);">CONFIRMED ACTION</span></sc-if>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+</div>
+</sc-if>
+
+<!-- ============================ ESCALATION TOAST ============================ -->
+<sc-if value="{{ escOpen }}" hint-placeholder-val="{{ false }}">
+<div data-register="charter" data-screen-label="Escalation" style="color:var(--tx-1);position:fixed;right:18px;bottom:44px;width:400px;z-index:90;background:#ffffff;border:1px solid var(--warn);border-left:3px solid var(--warn);box-shadow:0 12px 40px rgba(14,15,12,.22);border-radius:var(--r-1);">
+  <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line-1);">
+    <span style="width:8px;height:8px;border-radius:999px;background:var(--warn);animation:ccPulse 1.4s infinite;"></span>
+    <span class="mono" style="font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--warn);">Agent blocked — needs a human</span>
+    <div style="flex:1;"></div>
+    <button onClick="{{ onEscDismiss }}" style="background:none;border:none;cursor:pointer;color:var(--tx-3);font-size:14px;line-height:1;">×</button>
+  </div>
+  <div style="padding:12px 14px;display:flex;flex-direction:column;gap:10px;">
+    <div style="display:flex;align-items:center;gap:8px;">
+      <span class="mono" style="font-size:10px;color:var(--z-amber);border:1px solid var(--z-amber);padding:2px 7px;">hermes · Nous · AgentSBT #47</span>
+      <span class="mono" style="font-size:9.5px;color:var(--info);">HIC-2</span>
+    </div>
+    <p style="font-size:13px;line-height:1.5;margin:0;color:var(--tx-2);"><span class="mono">calendar.write</span> refused — no live grant carries <span class="mono">schedule.write</span>. hermes asks for a bounded grant to book the probation review.</p>
+    <div style="display:flex;gap:8px;">
+      <button class="btn btn-primary btn-sm" onClick="{{ onEscRoom }}">Open in room</button>
+      <button class="btn btn-ghost btn-sm" onClick="{{ onEscGrant }}">Review grant</button>
+    </div>
+  </div>
+</div>
+</sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;: {&quot;width&quot;: 1440, &quot;height&quot;: 900}, &quot;startInShell&quot;: {&quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: false, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Demo&quot;}, &quot;connectivity&quot;: {&quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;live&quot;, &quot;degraded&quot;, &quot;offline&quot;], &quot;default&quot;: &quot;live&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Demo&quot;}, &quot;escalationSeconds&quot;: {&quot;editor&quot;: &quot;int&quot;, &quot;default&quot;: 14, &quot;min&quot;: 2, &quot;max&quot;: 120, &quot;tsType&quot;: &quot;number&quot;, &quot;section&quot;: &quot;Demo&quot;}}">
+class Component extends DCLogic {
+  state = {
+    ob: true, obStep: 'sign', obCk: 0, tourIdx: 0,
+    route: 'dash', register: 'instrument',
+    loaded: false, agents: [], rooms: [], meetings: [], protocols: [], ribbon: [],
+    density: 'comfortable', conn: 'live', hicOpen: false,
+    chainH: 1284067, pal: { open: false, q: '' },
+    esc: false, escSeen: false,
+    cer: null, cerQueue: [], cerAck: false,
+    selAgent: null, meetView: 'list', ledgerMode: 'ribbon', ledgerUng: false, ledgerVerdict: 'all', asOf: null,
+    govTab: 'pipeline', govStep: 1, simState: 'idle', sim: null, deployed: false,
+    roomJoined: false, consent: false, transcript: [], vote: null, roomEsc: false, minutesN: 0,
+    peek: false, settingsTab: 'tenancy', calView: 'month', schedOpen: false,
+    verify: {}, grantFlash: false, journalSel: 'j1', ledgerRows: [],
+    wPanel: null, wTo: '', wAmt: '', wCopied: false,
+    nLogs: [], nLvl: 'all', nQ: '', nSelBlock: null,
+  };
+
+  componentDidMount() {
+    try { const p = JSON.parse(localStorage.getItem('quorum-proto') || '{}');
+      if (p.obDone || this.props.startInShell) this.setState({ ob: false });
+      if (p.density) this.setState({ density: p.density });
+    } catch (e) {}
+    // hash routing: #/rooms, #/ledger, #/ledger/decision, #/ledger/corr, #/gov …
+    const applyHash = () => {
+      const h = (location.hash || '').replace(/^#\/?/, '').split('/');
+      if (!h[0]) return;
+      const valid = ['dash', 'gov', 'agents', 'rooms', 'meetings', 'cal', 'ledger', 'journal', 'repos', 'wallet', 'node', 'settings'];
+      if (!valid.includes(h[0])) return;
+      const extra = {};
+      if (h[0] === 'ledger' && h[1]) extra.ledgerMode = { decision: 'decision', corr: 'corr' }[h[1]] || 'ribbon';
+      if (h[0] === 'meetings' && h[1]) extra.meetView = 'detail';
+      if (h[0] === 'agents' && h[1]) extra.selAgent = h[1];
+      this.setState({ route: h[0], ob: false, ...extra });
+    };
+    applyHash();
+    this.onHash = applyHash;
+    window.addEventListener('hashchange', this.onHash);
+    if (this.props.connectivity) this.setState({ conn: this.props.connectivity });
+    this.boot();
+    this.onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); this.setState(s => ({ pal: { open: !s.pal.open, q: '' } })); }
+      if (e.key === 'Escape') this.setState({ pal: { open: false, q: '' }, hicOpen: false });
+    };
+    window.addEventListener('keydown', this.onKey);
+  }
+  componentWillUnmount() {
+    window.removeEventListener('keydown', this.onKey);
+    if (this.onHash) window.removeEventListener('hashchange', this.onHash);
+    [this.unLedger, this.unRoom, this.unLogs].forEach(u => u && u());
+    [this.tickT, this.escT].forEach(t => t && clearInterval(t));
+  }
+
+  async boot() {
+    const S = await import('./quorum-sim.js'); this.S = S;
+    const [agents, rooms, meetings, protocols, rows] = await Promise.all([
+      S.bridge.agents.list(), S.bridge.rooms.list(), S.bridge.meetings.list(),
+      S.bridge.governance.protocols(), S.bridge.ledger.query()]);
+    this.setState({ loaded: true, agents, rooms, meetings, protocols, ribbon: rows.slice(0, 10), ledgerRows: rows });
+    this.unLedger = S.bridge.ledger.stream(d => {
+      if (this.state.conn !== 'live') return;
+      this.setState(s => ({ ribbon: [{ ...d, fresh: true }, ...s.ribbon.map(x => ({ ...x, fresh: false }))].slice(0, 10),
+        ledgerRows: [{ ...d, fresh: true }, ...s.ledgerRows.map(x => ({ ...x, fresh: false }))].slice(0, 60) }));
+    });
+    this.tickT = setInterval(() => this.setState(s => ({ chainH: s.conn === 'offline' ? s.chainH : s.chainH + 1 })), 5000);
+    this.setState({ nLogs: Array.from({ length: 18 }, (_, i) => S.mkLog(17 - i)) });
+    this.unLogs = S.bridge.node.logs(lg => {
+      if (this.state.conn === 'offline') return;
+      this.setState(s => ({ nLogs: [...s.nLogs, lg].slice(-40) }));
+    });
+    const escDelay = (this.props.escalationSeconds ?? 14) * 1000;
+    this.escT = setTimeout(() => { if (!this.state.escSeen) this.setState({ esc: true }); }, escDelay);
+    this.seedQueue();
+  }
+  seedQueue() {
+    this.setState({ cerQueue: [this.rawIntent()] });
+  }
+
+  persist() { try { localStorage.setItem('quorum-proto', JSON.stringify({ obDone: !this.state.ob, density: this.state.density })); } catch (e) {} }
+
+  // ------------- routing -------------
+  REG = { dash: 'instrument', gov: 'charter', agents: 'instrument', rooms: 'instrument', meetings: 'charter', cal: 'charter', ledger: 'instrument', journal: 'charter', repos: 'instrument', wallet: 'instrument', node: 'instrument', settings: 'charter' };
+  TITLES = { dash: 'Dashboard', gov: 'Governance', agents: 'Agents', rooms: 'Rooms', meetings: 'Meetings', cal: 'Calendar', ledger: 'Ledger', journal: 'Journal', repos: 'Repos', wallet: 'Wallet', node: 'Node', settings: 'Settings' };
+  go(route, extra) {
+    this.setState({ route, hicOpen: false, pal: { open: false, q: '' }, ...(extra || {}) });
+    try { history.replaceState(null, '', '#/' + route); } catch (e) {}
+  }
+
+  // ------------- room stream -------------
+  joinRoom() { this.setState({ roomJoined: true }); }
+  giveConsent() {
+    this.setState({ consent: true, transcript: [], vote: null });
+    if (this.unRoom) this.unRoom();
+    this.unRoom = this.S.bridge.rooms.events(ev => {
+      if (this.state.conn === 'offline') return;
+      if (ev.escalate && !this.state.escSeen) this.setState({ esc: true });
+      if (ev.kind === 'system' && ev.text.startsWith('Vote opened')) this.setState({ vote: { open: true, q: ev.text.replace('Vote opened — ', ''), casts: [], for_: 0, abst: 0, against: 0 } });
+      if (ev.kind === 'vote-cast') this.setState(s => ({ vote: s.vote && { ...s.vote, casts: [...s.vote.casts, ev], for_: s.vote.for_ + (ev.choice === 'For' ? ev.weight : 0), abst: s.vote.abst + (ev.choice === 'Abstain' ? ev.weight : 0) } }));
+      if (ev.kind === 'vote-close') this.setState(s => ({ vote: s.vote && { ...s.vote, open: false, result: ev.text } }));
+      this.setState(s => ({ transcript: [...s.transcript, ev], minutesN: s.minutesN + (ev.kind === 'system' || ev.kind === 'vote-close' ? 1 : 0) }));
+    });
+  }
+
+  // ------------- ceremonies -------------
+  ORIGIN = { user: 'var(--accent-text)', 'agent:hermes': 'var(--z-amber)', 'agent:windsurf-swe': 'var(--z-silver)', system: 'var(--info)' };
+  rawIntent() {
+    return { id: 'raw', title: 'Contract call — windsurf-swe (quarantined)', origin: 'agent:windsurf-swe', raw: true,
+      rows: [ { k: 'Authorizes', v: 'UNKNOWN — calldata not decodable', color: 'var(--danger)' }, { k: 'To contract', v: '0x3f91aa02…77de (unverified, no known ABI)' }, { k: 'Value', v: '100 SALT', color: 'var(--danger)' }, { k: 'Chain', v: '40204 · citrate testnet' }, { k: 'Under grant', v: 'none — agent is quarantined', color: 'var(--danger)' }, { k: 'HIC level', v: 'HIC-1 forced (undecoded intents always require a signature)' } ],
+      settledNote: 'recorded → this intent should almost certainly be rejected' };
+  }
+  ratifyIntent() {
+    return { id: 'ratify', title: 'Ratify minutes — Weekly Standup 2026-07-16', origin: 'user',
+      rows: [ { k: 'Authorizes', v: 'Anchor minutes hash + attendance + decisions as the record' }, { k: 'To contract', v: 'MinutesRegistry · 0x8840c2…1f77' }, { k: 'Document', v: 'b3:c202…7714 · 4 items · 2 decisions · 1 dissent' }, { k: 'Value', v: '0 SALT (anchor fee paymastered)' }, { k: 'Chain', v: '40204 · citrate testnet' }, { k: 'Under', v: 'principal signature — Rachel Ortiz · HumanSBT #12' }, { k: 'HIC level', v: 'HIC-1 · one human, one signature' } ],
+      settledNote: 'D-88430 · block 1,284,0' + (68 + (this.state.chainH % 9)) + ' — minutes are now evidence', after: () => this.setState({ ratified: true }) };
+  }
+  deployIntent() {
+    return { id: 'deploy', title: 'Deploy protocol — Line-4 Operating Envelope v4', origin: 'user', multisig: true, threshold: '2 of 3 required', expiry: '23:14:08',
+      signers: [ { name: 'Rachel Ortiz', you: true, signed: false }, { name: 'M. Okonkwo', signed: false }, { name: 'J. Whitfield', signed: false } ],
+      rows: [ { k: 'Authorizes', v: 'Deploy governance contract from audited template' }, { k: 'Template', v: 'BoundedAutonomy v2.1 · audit CID bafy…70e1' }, { k: 'Spec', v: 'SPEC-104 · CID bafy…d two clauses amended · C4 excluded (unmapped)' }, { k: 'Will deploy to', v: '0x9E44d0A17c33B8e2f1a6C90dD24b7E80f1532Aa7 (CREATE2 — known before you sign)', color: 'var(--accent-text)' }, { k: 'Value', v: '12 SALT deploy stake' }, { k: 'Chain', v: '40204 · citrate testnet' }, { k: 'HIC level', v: 'HIC-1 · N-of-M envelope' } ],
+      settledNote: 'deployed @ 0x9E44…2Aa7 · block 1,284,071 · D-88433', after: () => this.setState({ deployed: true, govStep: 7 }) };
+  }
+  grantIntent() {
+    return { id: 'grant', title: 'Issue grant — hermes · schedule.write (bounded)', origin: 'agent:hermes',
+      rows: [ { k: 'Authorizes', v: 'schedule.write on calendar:line4 — governed meetings only' }, { k: 'To agent', v: 'hermes · Nous · AgentSBT #47' }, { k: 'Budget', v: '10 writes/wk · 0 SALT' }, { k: 'Expiry', v: '2026-08-06 (14 days)' }, { k: 'Under', v: 'PRT-004 §7 — in-room escalation path' }, { k: 'HIC level', v: 'HIC-2 · budgeted autonomy' } ],
+      settledNote: 'G-2205 live · hermes unblocked · D-88431', after: () => this.setState({ esc: false, escSeen: true, grantFlash: true }) };
+  }
+  sendIntent(to, amt) {
+    const over = parseFloat(amt) > 150;
+    return { id: 'send', title: 'Send ' + amt + ' SALT', origin: 'user',
+      rows: [ { k: 'Authorizes', v: 'Transfer ' + amt + ' SALT from your account' }, { k: 'To', v: to || '(no recipient)', color: to ? 'var(--tx-1)' : 'var(--danger)' }, { k: 'From', v: '0x9f2E4a17…c771aa · Rachel Ortiz · HumanSBT #12' }, { k: 'Fee', v: '0.002 SALT · checkpoint inclusion' }, { k: 'Chain', v: '40204 · citrate testnet' }, { k: 'HIC level', v: over ? 'HIC-1 forced — over 150 SALT single-action ceiling (PRT-004 C2)' : 'HIC-1 · direct transfer, one signature', color: over ? 'var(--warn)' : 'var(--tx-1)' } ],
+      settledNote: 'transfer settled · recorded → new decision id', after: () => this.setState({ wPanel: null, wTo: '', wAmt: '' }) };
+  }
+  stakeIntent(kind) {
+    const bond = kind === 'bond';
+    return { id: 'stake', title: bond ? 'Bond 100 SALT — validator stake' : 'Begin unbonding — 7 day period', origin: 'user',
+      rows: [ { k: 'Authorizes', v: bond ? 'Move 100 SALT into MembershipStakeVault' : 'Start unbonding of validator stake — 7 days, no rewards during' }, { k: 'Contract', v: 'MembershipStakeVault · 0x7a41c2…90fe' }, { k: 'Effect', v: bond ? 'bond 1,000 → 1,100 · voting weight recalculated at next checkpoint' : 'validator drops from committee at next epoch if bond < minimum', color: bond ? 'var(--tx-1)' : 'var(--warn)' }, { k: 'Slashing', v: 'bonded stake remains slashable until fully unbonded' }, { k: 'HIC level', v: 'HIC-1 · one human, one signature' } ],
+      settledNote: bond ? 'bond updated · effective at checkpoint 25,682' : 'unbonding started · completes 2026-07-30' };
+  }
+  revokeIntent(name) {
+    return { id: 'revoke', title: 'Revoke all grants — ' + name, origin: 'user',
+      rows: [ { k: 'Authorizes', v: 'Immediate revocation of every live grant for ' + name, color: 'var(--danger)' }, { k: 'Stops', v: 'repo.write · pr.open · vote delegation · journal.write' }, { k: 'Effect', v: 'agent drops to HIC-X observed-only; running actions abort at next checkpoint' }, { k: 'Reversible', v: 'yes — re-issue is a new ceremony per grant' }, { k: 'HIC level', v: 'HIC-1 · destructive, confirmed' } ],
+      settledNote: 'revocation on record · fleet policy reloaded' };
+  }
+  openCer(intent) { this.setState({ cer: { ...intent, phase: 'review' }, cerAck: false }); }
+  signCer() {
+    const c = this.state.cer; if (!c) return;
+    const finish = () => {
+      this.setState({ cer: { ...this.state.cer, phase: 'broadcasting' }, cerBusyText: 'broadcasting · waiting for checkpoint finality (~25s compressed)' });
+      setTimeout(() => { this.setState({ cer: { ...this.state.cer, phase: 'settled' } }); if (c.after) c.after(); }, 1400);
+    };
+    this.setState({ cer: { ...c, phase: 'signing' }, cerBusyText: 'signing in the OS keyring — keys never leave this machine' });
+    if (c.multisig) {
+      setTimeout(() => {
+        this.setState({ cer: { ...this.state.cer, signers: c.signers.map(s => s.you ? { ...s, signed: true } : s) }, cerBusyText: 'your signature is in — waiting on 1 of 2 co-signers' });
+        setTimeout(() => { this.setState({ cer: { ...this.state.cer, signers: this.state.cer.signers.map(s => s.name === 'M. Okonkwo' ? { ...s, signed: true } : s) } }); finish(); }, 1800);
+      }, 900);
+    } else setTimeout(finish, 900);
+  }
+  rejectCer() { const c = this.state.cer; this.setState({ cer: { ...c, phase: 'rejected' } }); setTimeout(() => this.closeCer(), 600); }
+  closeCer() { this.setState({ cer: null }); }
+  nextCer() { const q = this.state.cerQueue; if (q.length) { this.setState({ cerQueue: q.slice(1) }); this.openCer(q[0]); } }
+
+  // ------------- verify -------------
+  doVerify(key, outcome) {
+    this.setState(s => ({ verify: { ...s.verify, [key]: 'busy' } }));
+    setTimeout(() => this.setState(s => ({ verify: { ...s.verify, [key]: outcome || 'ok' } })), 1100);
+  }
+  vv(key) {
+    const st = this.state.verify[key] || 'idle';
+    return { idle: { label: 'Verify', color: 'var(--accent-text)', bd: 'var(--accent-text)' },
+      busy: { label: 'recomputing…', color: 'var(--tx-3)', bd: 'var(--line-2)' },
+      ok: { label: '✓ verified on chain', color: 'var(--ok)', bd: 'var(--ok)' },
+      bad: { label: '✗ mismatch — local ≠ chain', color: 'var(--danger)', bd: 'var(--danger)' },
+      un: { label: '⚠ not yet anchored', color: 'var(--warn)', bd: 'var(--warn)' } }[st];
+  }
+
+  // ------------- palette -------------
+  palIndex() {
+    const c = (kind, color, label, fn, danger) => ({ kind, color, label, onClick: fn, danger });
+    return [
+      c('room', 'var(--info)', 'Weekly Standup — Line-4 (live)', () => this.go('rooms', { roomJoined: true })),
+      c('protocol', 'var(--accent-text)', 'PRT-004 · Line-4 Agent Operating Envelope', () => this.go('gov', { govTab: 'protocols' })),
+      c('agent', 'var(--z-amber)', 'hermes · AgentSBT #47', () => this.go('agents', { selAgent: 'hermes' })),
+      c('agent', 'var(--z-cyan)', 'claude-code · AgentSBT #41', () => this.go('agents', { selAgent: 'claude-code' })),
+      c('decision', 'var(--tx-2)', 'D-88412 · vote cast — PRT-004 A2', () => this.go('ledger', { ledgerMode: 'decision' })),
+      c('corr', 'var(--tx-2)', 'X-7104 · correlation timeline', () => this.go('ledger', { ledgerMode: 'corr' })),
+      c('command', 'var(--info)', 'Start a meeting from template…', () => this.go('meetings')),
+      c('command', 'var(--info)', 'Call devin to the live room', () => this.go('rooms', { roomJoined: true })),
+      c('command', 'var(--danger)', 'Revoke all for windsurf-swe', () => this.openCer(this.revokeIntent('windsurf-swe')), true),
+    ];
+  }
+
+  // ------------- render -------------
+  renderVals() {
+    const s = this.state;
+    const gcol = { 0: 'var(--accent)', 1: 'var(--accent)', 2: 'var(--info)', 3: 'var(--warn)', X: 'var(--danger)' };
+    const vcol = { allow: 'var(--tx-2)', 'require-approval': 'var(--warn)', deny: 'var(--danger)', ungoverned: 'var(--warn)' };
+    const VEND = { anthropic: ['Anthropic', 'var(--z-cyan)'], openai: ['OpenAI', 'var(--z-indigo)'], cognition: ['Cognition', 'var(--z-magenta)'], nous: ['Nous', 'var(--z-amber)'], internal: ['Internal', 'var(--z-silver)'] };
+    const CLSC = { Public: 'var(--z-silver)', Proprietary: 'var(--info)', CUI: 'var(--warn)', ITAR: 'var(--danger)' };
+
+    // onboarding
+    const ckLabels = ['entitlement resolved — Quorum seat · Meridian Aero', 'clearance from chain — CUI · ClearanceRegistry', 'effective grant computed — HIC-2 scope Line-4', 'landing — 12 surfaces authorized'];
+    const obChecks = ckLabels.map((label, i) => i < s.obCk
+      ? { label, bg: 'var(--ok-bg)', bd: 'var(--ok)', fg: 'var(--ok)', tx: 'var(--tx-1)' }
+      : i === s.obCk ? { label, bg: 'var(--warn-bg)', bd: 'var(--warn)', fg: 'transparent', tx: 'var(--tx-2)' }
+      : { label, bg: 'transparent', bd: 'var(--line-2)', fg: 'transparent', tx: 'var(--tx-3)' });
+    const TOURS = [
+      { badge: 'HIC-0 · 1', color: 'var(--accent-text)', title: 'Humans in control', body: 'Every agent acts under a named human. At HIC-0 it only observes; at HIC-1 every action pauses for that human\u2019s signature. New agents start here — on probation, watched, cheap to stop.' },
+      { badge: 'HIC-2', color: 'var(--info)', title: 'Budgeted autonomy', body: 'The working level. A grant gives an agent a bounded envelope — action classes, scope, budget, expiry. Inside it, the agent moves at machine speed. At the edge, it stops and asks. You are at HIC-2 in Line-4 today.' },
+      { badge: 'HIC-3', color: 'var(--warn)', title: 'Post-hoc review', body: 'For mature, low-risk classes only: the agent acts, the record is written, a human reviews on cadence. Amber on every surface — deliberate, never the default.' },
+      { badge: 'HIC-X', color: 'var(--danger)', title: 'Ungoverned — the red you act on', body: 'An action with no live grant behind it. Maybe benign, never acceptable silently. HIC-X is loud everywhere: the ledger flags it, the dashboard counts it, and it can never be suppressed.' },
+    ];
+    const t = TOURS[s.tourIdx] || TOURS[0];
+
+    // nav
+    const routes = [
+      ['Govern', [['dash', 'Dashboard', 'M3 3h8v10H3z M13 3h8v6h-8z', 'M13 13h8v8h-8z M3 17h8v4H3z'], ['gov', 'Governance', 'M12 3v18 M5 21h14', 'M5 7l7-4 7 4 M3 7h4l-2 6a2 2 0 0 0 4 0z M17 7h4l-2 6a2 2 0 0 0 4 0z'], ['agents', 'Agents', 'M12 8V4 M8 8h8a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2z', 'M9.5 13h.01 M14.5 13h.01 M4 12h2 M18 12h2']]],
+      ['Meet', [['rooms', 'Rooms', 'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z', 'M8 9h8 M8 13h5'], ['meetings', 'Meetings', 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z', 'M14 2v6h6 M9 13h6 M9 17h6'], ['cal', 'Calendar', 'M3 5h18v16H3z M3 9h18', 'M8 3v4 M16 3v4']]],
+      ['Observe', [['ledger', 'Ledger', 'M9 6h12 M9 12h12 M9 18h12', 'M4 6h1 M4 12h1 M4 18h1'], ['journal', 'Journal', 'M4 19.5A2.5 2.5 0 0 1 6.5 17H20V2H6.5A2.5 2.5 0 0 0 4 4.5z', 'M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-2.5'], ['repos', 'Repos', 'M6 3v12 M6 15a3 3 0 1 0 0 6 3 3 0 0 0 0-6z', 'M18 3a3 3 0 1 0 0 6 3 3 0 0 0 0-6z M18 9a9 9 0 0 1-9 9']]],
+      ['Operate', [['wallet', 'Wallet', 'M21 7H5a2 2 0 0 1 0-4h14v4 M21 7v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5', 'M16 14h.01'], ['node', 'Node', 'M2 4h20v7H2z M2 13h20v7H2z', 'M6 7.5h.01 M6 16.5h.01'], ['settings', 'Settings', 'M4 21v-7 M4 10V3 M12 21v-9 M12 8V3 M20 21v-5 M20 12V3', 'M1 14h6 M9 8h6 M17 16h6']]],
+    ];
+    const pendCount = s.cerQueue.length + (s.cer ? 1 : 0);
+    const ungCount = s.ledgerRows.filter(r => r.verdict === 'ungoverned').length;
+    const nav = routes.map(([label, items]) => ({ label, items: items.map(([id, lb, p1, p2]) => ({
+      id, label: lb, p1, p2, onClick: () => this.go(id),
+      bg: s.route === id ? '#8ecc09' : 'transparent', fg: s.route === id ? '#0e0f0c' : '#cde7d6',
+      hbg: s.route === id ? '#8ecc09' : 'rgba(205,231,214,.08)',
+      badge: id === 'gov' && pendCount ? String(pendCount) : null,
+      liveDot: id === 'rooms', amberDot: id === 'ledger' && ungCount > 0,
+    })) }));
+
+    // ribbon rows
+    const ribbon = s.ribbon.map(r => ({
+      ...r, actionCls: r.cls, cls: r.fresh ? 'cc-row-stroke' : '',
+      bg: r.verdict === 'ungoverned' ? 'var(--warn-bg)' : 'transparent',
+      verdictColor: vcol[r.verdict], hicColor: gcol[r.hic] || 'var(--tx-2)',
+      vcolor: (VEND[(this.state.agents.find(a => a.name === r.agent) || {}).vendor] || ['', 'var(--tx-2)'])[1],
+      verdict: r.verdict === 'ungoverned' ? 'UNGOV' : r.verdict, hic: 'HIC-' + r.hic,
+    }));
+
+    // dashboard
+    const statTiles = [
+      { label: 'Governed actions today', value: '1,842', sub: 'ledger.summary(24h)', top: 'var(--line-1)', color: 'var(--tx-1)', onClick: () => this.go('ledger') },
+      { label: 'Pending approvals', value: String(pendCount), sub: 'signing.queue()', top: pendCount ? 'var(--warn)' : 'var(--line-1)', color: pendCount ? 'var(--warn)' : 'var(--tx-1)', onClick: () => this.nextCer() },
+      { label: 'Ungoverned events', value: String(ungCount), sub: 'HIC-X · never quiet', top: ungCount ? 'var(--danger)' : 'var(--line-1)', color: ungCount ? 'var(--danger)' : 'var(--tx-1)', onClick: () => this.go('ledger', { ledgerUng: true }) },
+      { label: 'Active agents', value: '4 / 5', sub: '1 quarantined', top: 'var(--line-1)', color: 'var(--tx-1)', onClick: () => this.go('agents') },
+      { label: 'Budget burn', value: '71%', sub: 'codex at 90% — warning', top: 'var(--warn)', color: 'var(--tx-1)', onClick: () => this.go('agents', { selAgent: 'codex' }) },
+      { label: 'Next meeting', value: '09:00', sub: 'Standup — Line-4 · live now', top: 'var(--accent)', color: 'var(--accent-text)', onClick: () => this.go('rooms', { roomJoined: true }) },
+    ];
+    const needsYou = [
+      ...(s.esc ? [{ tag: 'Escalation', color: 'var(--warn)', text: 'hermes blocked on calendar.write — asks for a bounded schedule.write grant', meta: 'in room · 09:08', onClick: () => this.go('agents', { selAgent: 'hermes' }) }] : []),
+      ...s.cerQueue.map(q => ({ tag: 'Ceremony', color: 'var(--danger)', text: q.title, meta: 'queued', onClick: () => this.nextCer() })),
+      { tag: 'Ratify', color: 'var(--warn)', text: 'CCB #12 minutes await ratification (drafted 07-14)', meta: 'meetings', onClick: () => this.go('meetings', { meetView: 'detail' }) },
+    ];
+    const risks = [
+      { label: 'Open contradiction', color: 'var(--warn)', text: 'claude-code vs codex on Line-4 coverage — two attested ci runs disagree. Resolve in room.' },
+      { label: 'Expiring grants · 7d', color: 'var(--warn)', text: 'G-2118 and G-2119 (vote delegations) expire 07-31. Renewal is a ceremony each.' },
+      { label: 'Budget exhaustion', color: 'var(--danger)', text: 'codex at 448 / 500 SALT with 8 days left in cycle. It will stop, not overspend.' },
+      { label: 'Deprecated template', color: 'var(--danger)', text: 'PRT-001 built on BoundedAutonomy v1.9 (deprecated). Superseded but still resolvable in history.' },
+    ];
+
+    // connectivity
+    const conn = s.conn;
+    const connMap = {
+      degraded: { text: 'Relay unreachable — degraded', sub: 'local queue holding 3 posts · reconnect in 14s · everything shown still reconciles', bg: 'var(--warn-bg)', bd: 'var(--warn)' },
+      offline: { text: 'Fully local mode', sub: 'no chain, no relay · local hash chain still advancing · will reconcile on reconnect', bg: 'var(--danger-bg)', bd: 'var(--danger)' },
+    };
+
+    // ceremony
+    const cer = s.cer || {};
+    const phases = ['review', 'signing', 'broadcasting', 'settled'];
+    const phIdx = phases.indexOf(cer.phase);
+    const cerPhases = phases.map((p, i) => ({ label: p, color: i === phIdx ? 'var(--tx-1)' : i < phIdx ? 'var(--accent-text)' : 'var(--tx-3)', line: i === phIdx ? 'var(--accent)' : i < phIdx ? 'var(--accent-wash)' : 'transparent' }));
+    const cerSigners = (cer.signers || []).map(sg => ({ ...sg, dot: sg.signed ? 'var(--ok)' : 'var(--warn)', bg: sg.you ? 'var(--accent-wash)' : 'transparent', weight: sg.you ? 600 : 400, state: sg.signed ? 'signed' : 'outstanding', stColor: sg.signed ? 'var(--ok)' : 'var(--warn)' }));
+
+    // palette
+    const q = s.pal.q.toLowerCase();
+    const palResults = this.loadedIdx || (this.loadedIdx = this.palIndex());
+
+    const dens = s.density === 'compact';
+
+    return {
+      // onboarding
+      ob: s.ob, obSign: s.obStep === 'sign', obResolve: s.obStep === 'resolve', obTour: s.obStep === 'tour', obReducedV: s.obStep === 'reduced',
+      obChecks, tour: { ...t, step: s.tourIdx + 1, cta: s.tourIdx === 3 ? 'Enter Quorum' : 'Next' },
+      tourDots: TOURS.map((_, i) => ({ bg: i <= s.tourIdx ? 'var(--accent)' : 'transparent' })),
+      onObSign: () => { this.setState({ obStep: 'resolve', obCk: 0 }); const step = () => { if (this.state.obCk < 4) { this.setState(x => ({ obCk: x.obCk + 1 })); setTimeout(step, 650); } else this.setState({ obStep: 'tour' }); }; setTimeout(step, 650); },
+      onObReduced: (e) => { e.preventDefault(); this.setState({ obStep: 'reduced' }); },
+      onObBack: () => this.setState({ obStep: 'sign' }),
+      onTourNext: () => { if (s.tourIdx === 3) { this.setState({ ob: false }); this.persist(); } else this.setState({ tourIdx: s.tourIdx + 1 }); },
+
+      // shell
+      shell: !s.ob, register: this.REG[s.route], surfaceTitle: this.TITLES[s.route],
+      tenantChip: 'Meridian Aero › Aerostructures › Wichita › Line-4 Automation',
+      onScope: () => {}, nav,
+      nodeDot: conn === 'live' ? '#8ecc09' : conn === 'degraded' ? '#ffbd10' : '#dd7259',
+      nodeAnim: conn === 'live' ? 'ccPulse 2.2s infinite' : 'none',
+      nodeLabel: conn === 'live' ? 'node validating' : conn === 'degraded' ? 'relay lost' : 'offline',
+      hicColor: 'var(--info)', hicOpen: s.hicOpen, onHic: () => this.setState({ hicOpen: !s.hicOpen }),
+      onDensity: () => { this.setState({ density: dens ? 'comfortable' : 'compact' }); setTimeout(() => this.persist(), 0); },
+      densityLabel: s.density, dpad: dens ? '4px' : '9px',
+      chainH: s.chainH.toLocaleString('en-US'),
+      relayColor: conn === 'live' ? 'var(--tx-2)' : 'var(--warn)', relayLabel: conn === 'live' ? 'relay-wichita-2' : conn.toUpperCase(),
+      agentsLive: '4', pendCount: String(pendCount), pendColor: pendCount ? 'var(--warn)' : 'var(--tx-2)',
+      onConn: () => this.setState({ conn: conn === 'live' ? 'degraded' : conn === 'degraded' ? 'offline' : 'live' }),
+      connMode: conn, connBanner: conn !== 'live', connText: (connMap[conn] || {}).text, connSub: (connMap[conn] || {}).sub, connBg: (connMap[conn] || {}).bg, connBd: (connMap[conn] || {}).bd,
+
+      // routes
+      rDash: s.route === 'dash', rGov: s.route === 'gov', rAgents: s.route === 'agents', rRooms: s.route === 'rooms',
+      rMeetings: s.route === 'meetings', rCal: s.route === 'cal', rLedger: s.route === 'ledger', rJournal: s.route === 'journal',
+      rRepos: s.route === 'repos', rWallet: s.route === 'wallet', rNode: s.route === 'node', rSettings: s.route === 'settings',
+      goLedger: (e) => { e && e.preventDefault(); this.go('ledger'); },
+
+      // dashboard
+      statTiles, needsYou, needsCount: String(needsYou.length), needsEmpty: needsYou.length === 0, ribbon, risks,
+
+      // ceremony
+      cerOpen: !!s.cer, cer: { ...cer, queueDepth: s.cerQueue.length ? String(s.cerQueue.length + 1) : null, originColor: this.ORIGIN[cer.origin] || 'var(--tx-2)', rows: (cer.rows || []).map(r => ({ ...r, color: r.color || 'var(--tx-1)' })) },
+      cerPhases, cerSigners, cerReview: cer.phase === 'review', cerBusy: cer.phase === 'signing' || cer.phase === 'broadcasting',
+      cerBusyText: this.state.cerBusyText, cerSettled: cer.phase === 'settled', cerDone: cer.phase === 'settled',
+      cerHasNext: s.cerQueue.length > 0, cerNextCount: String(s.cerQueue.length),
+      cerAck: s.cerAck, onCerAck: (e) => this.setState({ cerAck: e.target.checked }),
+      cerSignDisabled: !!cer.raw && !s.cerAck,
+      onCerSign: () => this.signCer(), onCerReject: () => this.rejectCer(), onCerClose: () => this.closeCer(), onCerNext: () => { this.closeCer(); setTimeout(() => this.nextCer(), 150); },
+
+      // palette
+      palOpen: s.pal.open, palQ: s.pal.q,
+      onPalOpen: () => this.setState({ pal: { open: true, q: '' } }),
+      onPalClose: () => this.setState({ pal: { open: false, q: '' } }),
+      onPalQ: (e) => this.setState({ pal: { open: true, q: e.target.value } }),
+      palResults: palResults.filter(r => !q || r.label.toLowerCase().includes(q) || r.kind.includes(q)),
+      stop: (e) => e.stopPropagation(),
+
+      // escalation
+      escOpen: s.esc && !s.ob,
+      onEscDismiss: () => this.setState({ esc: false, escSeen: true }),
+      onEscRoom: () => { this.setState({ esc: false, escSeen: true }); this.go('rooms', { roomJoined: true }); },
+      onEscGrant: () => { this.setState({ esc: false, escSeen: true }); this.go('agents', { selAgent: 'hermes', grantFlash: true }); },
+
+      ...this.roomVals(VEND, gcol, vcol, CLSC),
+      ...this.meetVals(CLSC),
+      ...this.govVals(),
+      ...this.agentVals(VEND, gcol, CLSC),
+      ...this.ledgerVals(gcol, vcol, CLSC),
+      ...this.miscVals(VEND, CLSC),
+    };
+  }
+
+  roomVals(VEND, gcol, vcol, CLSC) {
+    const s = this.state;
+    const whoColor = (who, human) => human ? 'var(--accent-text)' : (VEND[(s.agents.find(a => a.name === who) || { vendor: 'internal' }).vendor] || ['', 'var(--z-silver)'])[1];
+    const HUM = ['Rachel Ortiz', 'M. Okonkwo'];
+    const speakingNow = s.transcript.length && ['speech', 'text'].includes(s.transcript[s.transcript.length - 1].kind) ? s.transcript[s.transcript.length - 1].who : null;
+    const roster = (this.S ? this.S.ROSTER : []).map(ro => {
+      const human = !!ro.human; const vend = VEND[ro.vendor] || null;
+      return {
+        initials: ro.name.split(/[\s-]/).map(x => x[0]).join('').slice(0, 2).toUpperCase(),
+        name: ro.name, speaking: ro.name === speakingNow,
+        avBg: human ? 'var(--accent-wash)' : 'transparent', avBd: human ? 'var(--accent)' : (vend ? vend[1] : 'var(--line-2)'),
+        avFg: human ? 'var(--accent-text)' : (vend ? vend[1] : 'var(--tx-2)'),
+        sub: human ? ro.role + ' · human · ' + ro.clearance : (vend ? vend[0] : '') + ' · AgentSBT ' + ro.sbt,
+        subColor: 'var(--tx-3)', tip: human ? 'cryptographic peer — HumanSBT' : 'AgentSBT ' + ro.sbt + ' · hover shows identity',
+        hicChip: human ? null : 'HIC-' + ro.hic, hicColor: gcol[ro.hic],
+      };
+    });
+    const casts = s.transcript.filter(e => e.kind === 'vote-cast');
+    const transcript = s.transcript.map(ev => {
+      const base = { isSystem: false, isMsg: false, isTool: false, isContra: false, isCast: false };
+      if (ev.kind === 'system' || ev.kind === 'vote-close') return { ...base, isSystem: true, text: ev.text, meta: ev.meta || '', sysColor: ev.kind === 'vote-close' ? 'var(--ok)' : 'var(--tx-2)' };
+      if (ev.kind === 'speech' || ev.kind === 'text') return { ...base, isMsg: true, who: ev.who, whoColor: whoColor(ev.who, ev.human), text: ev.text, fstyle: ev.kind === 'speech' ? 'italic' : 'normal', citeChips: (ev.cites || []).map(c => ({ label: c, onClick: () => this.setState({ peek: true, route: s.route }) })) };
+      if (ev.kind === 'tool') return { ...base, isTool: true, who: ev.who, whoColor: whoColor(ev.who), tool: ev.tool + '(' + ev.params + ')', verdict: ev.verdict, dur: ev.dur, result: ev.result, toolColor: vcol[ev.verdict] || 'var(--tx-2)', toolBd: ev.verdict === 'require-approval' ? 'var(--warn)' : ev.verdict === 'deny' ? 'var(--danger)' : 'var(--line-1)', toolBg: ev.verdict === 'require-approval' ? 'var(--warn-bg)' : 'transparent' };
+      if (ev.kind === 'contradiction') return { ...base, isContra: true, fact: ev.fact, a: ev.a, b: ev.b, va: ev.va, vb: ev.vb, note: ev.note };
+      if (ev.kind === 'vote-cast') return { ...base, isCast: true, who: ev.who, choice: ev.choice, weight: String(ev.weight), proof: ev.proof ? '· ' + ev.proof : '' };
+      return { ...base, isSystem: true, text: ev.text || '', meta: '', sysColor: 'var(--tx-2)' };
+    });
+    const v = s.vote;
+    const escInRoom = s.transcript.some(e => e.escalate) && !s.escSeen;
+    return {
+      roomList: !s.roomJoined, inRoom: s.roomJoined,
+      roomRows: (s.rooms || []).map(rm => ({ name: rm.name, live: rm.live, notLive: !rm.live, classification: rm.classification.toUpperCase(), clsColor: CLSC[rm.classification], meta: rm.live ? rm.members + ' in room · live since ' + rm.started : rm.members + ' members · idle', onClick: () => rm.live ? this.joinRoom() : null })),
+      roster, transcript, hasTranscript: s.consent,
+      needConsent: !s.consent,
+      onConsent: () => this.giveConsent(), onConsentText: () => this.giveConsent(),
+      onRevokeAll: () => this.openCer(this.revokeIntent('every agent in this room')),
+      agendaItems: [{ n: '1', text: 'Agent reports' }, { n: '2', text: 'hermes calendar ask' }, { n: '3', text: 'Coverage contradiction' }, { n: '4', text: 'Vote — PRT-004 amendment A2' }],
+      vAgenda: this.vv('agenda'), onVerifyAgenda: () => this.doVerify('agenda'),
+      roomEscPending: escInRoom || s.esc, roomEscNone: !(escInRoom || s.esc),
+      onEscGrant2: () => this.openCer(this.grantIntent()),
+      voteShow: !!v, voteOpen: v && v.open, voteQ: v ? v.q : '',
+      voteFor: v ? String(v.for_) : '0', voteAbst: v ? String(v.abst) : '0',
+      voteForPct: v ? Math.min(100, v.for_) + '%' : '0%', voteAbstPct: v ? Math.min(100, v.abst) + '%' : '0%',
+      voteCasts: casts.map(c => ({ who: c.who, color: whoColor(c.who, c.human), choice: c.choice, weight: String(c.weight), proof: c.proof, onRevoke: () => this.openCer(this.revokeIntent('delegated voting allowance — ' + c.who)) })),
+      voteResult: v && !v.open ? v.result : null,
+      minutesN: String(s.minutesN),
+      goMeetDetail: () => this.go('meetings', { meetView: 'detail' }),
+    };
+  }
+  meetVals(CLSC) {
+    const s = this.state;
+    const ST = { 'in-progress': ['in progress →', 'var(--accent)'], ratified: ['ratified', 'var(--ok)'], awaiting: ['awaiting ratification', 'var(--warn)'], inquorate: ['quorum not met', 'var(--danger)'], scheduled: ['scheduled', 'var(--tx-3)'], drafting: ['minutes drafting', 'var(--info)'] };
+    return {
+      meetList: s.meetView === 'list', meetDetailV: s.meetView === 'detail',
+      meetRows: (s.meetings || []).map(m => ({ name: m.name, when: m.when, tpl: m.tpl, att: m.humans + 'h + ' + m.agents + 'a', classification: m.classification.toUpperCase(), clsColor: CLSC[m.classification], stLabel: ST[m.state][0], stColor: ST[m.state][1], onClick: () => m.state === 'in-progress' ? this.go('rooms', { roomJoined: true }) : this.setState({ meetView: 'detail' }) })),
+      meetTpls: [{ name: 'Standup', req: 'agents report from journals' }, { name: 'Retro', req: 'artifacts required' }, { name: 'Change-control board', req: '2 humans min' }, { name: 'Incident review', req: 'correlation id' }, { name: 'Quarterly governance', req: 'board output' }],
+      backMeetings: (e) => { e.preventDefault(); this.setState({ meetView: 'list' }); },
+      ratified: !!s.ratified, unratified: !s.ratified,
+      onRatify: () => this.openCer(this.ratifyIntent()),
+      vMeet: this.vv('meet'), onVerifyMeet: () => this.doVerify('meet'),
+      meetAgenda: (this.S ? this.S.MEETING_DETAIL.agenda : []).map(a => ({ n: String(a.n), text: a.text, src: a.src })),
+      meetMinutes: (this.S ? this.S.MEETING_DETAIL.minutes : []).map(text => ({ text })),
+      meetAtt: (this.S ? this.S.MEETING_DETAIL.attendance : []).map(a => ({ name: a.name, dot: a.attested ? 'var(--ok)' : 'var(--warn)', color: a.attested ? 'var(--tx-1)' : 'var(--tx-3)', tag: a.attested ? (a.agent ? 'agent · attested' : 'attested') : 'not attested' })),
+      meetDecisions: (this.S ? this.S.MEETING_DETAIL.decisions : []).map(d => ({ id: d.id, text: d.text, onClick: () => this.go('ledger', { ledgerMode: 'decision' }) })),
+    };
+  }
+  govVals() {
+    const s = this.state; const S = this.S || {};
+    const CLSC = { Public: 'var(--z-silver)', Proprietary: 'var(--info)', CUI: 'var(--warn)', ITAR: 'var(--danger)' };
+    const tabs = [['pipeline', 'Pipeline — draft to law'], ['protocols', 'Protocols'], ['templates', 'Templates catalog']];
+    const steps = ['Ingest', 'Interview', 'Spec', 'Compile', 'Simulate', 'Ceremony', 'Deploy', 'Bind'];
+    return {
+      govTabs: tabs.map(([id, label]) => ({ label, onClick: () => this.setState({ govTab: id }), color: s.govTab === id ? 'var(--tx-1)' : 'var(--tx-3)', line: s.govTab === id ? 'var(--accent)' : 'transparent' })),
+      govPipe: s.govTab === 'pipeline', govProt: s.govTab === 'protocols', govTpl: s.govTab === 'templates',
+      govSteps: steps.map((label, i) => ({ n: '0' + (i + 1), label, onClick: () => this.setState({ govStep: i + 1 }), color: s.govStep === i + 1 ? 'var(--tx-1)' : i + 1 < s.govStep ? 'var(--accent-text)' : 'var(--tx-3)', line: s.govStep === i + 1 ? 'var(--accent)' : i + 1 < s.govStep ? 'var(--accent-wash)' : 'var(--line-1)' })),
+      gs1: s.govStep === 1, gs2: s.govStep === 2, gs3: s.govStep === 3, gs4: s.govStep === 4, gs5: s.govStep === 5, gs6: s.govStep === 6, gs7: s.govStep === 7, gs8: s.govStep === 8,
+      gNext: () => this.setState({ govStep: Math.min(8, s.govStep + 1) }),
+      ingestRows: (S.INGEST_FILES || []).map(f => ({ name: f.name, size: f.size, cls: f.class.toUpperCase(), clsColor: CLSC[f.class], note: f.note, noteColor: f.class === 'ITAR' ? 'var(--danger)' : 'var(--tx-3)', prov: f.prov })),
+      interview: S.INTERVIEW || [],
+      ivSummary: [
+        { k: 'Principals', v: 'R. Ortiz (all classes) · M. Okonkwo (doc, schedule)' },
+        { k: 'Spend ceiling', v: '150 SALT single action → ceremony' },
+        { k: 'CUI+ models', v: 'local hosting only' },
+        { k: 'Grant expiry', v: '45-day max, renewal is a ceremony' },
+        { k: 'Escalation', v: 'in-room → issuing principal → CCB at 24h' },
+        { k: 'Exceptions', v: 'none recorded' },
+      ],
+      specClauses: (S.SPEC_CLAUSES || []).map(c => ({ n: c.n, en: c.en, gh: c.gh, tpl: c.tpl ? c.tpl : null, flag: !c.ok, why: c.why, bg: c.ok ? 'transparent' : 'var(--warn-bg)', nColor: c.ok ? 'var(--tx-3)' : 'var(--warn)', ghColor: c.ok ? 'var(--tx-2)' : 'var(--warn)' })),
+      compileRows: [
+        { k: 'Template', v: 'BoundedAutonomy v2.1' }, { k: 'Audit', v: 'CID bafy…70e1 · Zellic + in-house, 2026-05', color: 'var(--ok)' },
+        { k: 'Clauses mapped', v: 'C1 C2 C3 C5 · C4 excluded (flagged)', color: 'var(--warn)' },
+        { k: 'Parameters', v: 'ceiling=150 SALT · expiry_max=45d · egress_class>=CUI→local · calendar=standing-grant' },
+        { k: 'Spec CID', v: 'bafybeigd7…q2ha' }, { k: 'Amends', v: 'PRT-004 v3 → v4' },
+      ],
+      simRange: (S.SIMULATION || {}).range || '', simIdle: s.simState === 'idle', simRunning: s.simState === 'running', simDone: s.simState === 'done',
+      onRunSim: async () => { this.setState({ simState: 'running' }); await this.S.bridge.governance.simulate(); this.setState({ simState: 'done' }); },
+      simClasses: ((S.SIMULATION || {}).byClass || []).map(([name, b, a]) => ({ name, bw: (b * 1.8) + 'px', aw: (a * 1.8) + 'px', nums: b + ' · ' + a })),
+      simWho: ((S.SIMULATION || {}).inconvenienced || []).map(([name, n, note]) => ({ name, n: String(n), note, color: { codex: 'var(--z-indigo)', hermes: 'var(--z-amber)', 'claude-code': 'var(--z-cyan)', devin: 'var(--z-magenta)' }[name] || 'var(--tx-2)' })),
+      simSamples: ((S.SIMULATION || {}).samples || []).map(sm => ({ ...sm, color: sm.would === 'blocked' ? 'var(--danger)' : 'var(--warn)', would: sm.would })),
+      onDeploy: () => this.openCer(this.deployIntent()), deployed: s.deployed,
+      deployRows: [
+        { k: 'Address', v: '0x9E44d0A17c33B8e2f1a6C90dD24b7E80f1532Aa7 — exactly as shown before signing', color: 'var(--accent-text)' },
+        { k: 'Block', v: '1,284,071 · finality 67% BFT committee' },
+        { k: 'Template', v: 'BoundedAutonomy v2.1 · audit CID bafy…70e1' },
+        { k: 'Spec CID', v: 'bafybeigd7…q2ha' },
+        { k: 'Decision', v: 'D-88433 · ceremony envelope 2-of-3' },
+      ],
+      protRows: (s.protocols || []).map(p => ({ ...p, template: p.template, auditColor: p.audit.startsWith('audited') ? 'var(--ok)' : 'var(--danger)', stColor: p.state === 'live' ? 'var(--ok)' : 'var(--danger)', state: p.state === 'live' ? 'live' : 'deprecated ⚠' })),
+      tplCards: [
+        { name: 'BoundedAutonomy v2.1', audit: 'audited · Zellic 2026-05 · CID bafy…70e1', desc: 'Capability envelopes: action classes, scope, budget, expiry, HIC threshold. Governs most agent work.', top: 'var(--accent)', audColor: 'var(--ok)' },
+        { name: 'EgressControl v1.4', audit: 'audited · in-house 2026-03 · CID bafy…22a8', desc: 'Network and model-hosting policy by data classification. The ITAR/CUI backstop.', top: 'var(--accent)', audColor: 'var(--ok)' },
+        { name: 'BoundedAutonomy v1.9', audit: 'DEPRECATED — superseded by v2.1', desc: 'Kept resolvable for history. New deploys refuse this version.', top: 'var(--danger)', audColor: 'var(--danger)' },
+      ],
+    };
+  }
+  agentVals(VEND, gcol) {
+    const s = this.state;
+    const stCol = { active: 'var(--ok)', probation: 'var(--warn)', quarantined: 'var(--danger)' };
+    const sel = (s.agents || []).find(a => a.id === s.selAgent);
+    const grants = sel && this.S ? (this.S.GRANTS[sel.id] || []) : [];
+    return {
+      fleet: (s.agents || []).map(a => ({
+        name: a.name, sbt: a.sbt, hic: String(a.hic), hicColor: gcol[a.hic], grants: String(a.grants),
+        vcolor: (VEND[a.vendor] || ['', 'var(--z-silver)'])[1],
+        budget: a.budgetUsed + '/' + a.budgetCap, budgetPct: Math.round(a.budgetUsed / a.budgetCap * 100) + '%',
+        budgetColor: a.budgetUsed / a.budgetCap > 0.85 ? 'var(--warn)' : 'var(--accent)',
+        disputeRate: a.disputeRate, status: a.status, stColor: stCol[a.status],
+        bg: s.selAgent === a.id ? 'var(--accent-wash)' : 'transparent',
+        onClick: () => this.setState({ selAgent: a.id }),
+      })),
+      agDetail: !!sel,
+      agSel: sel ? { ...sel, vendorName: (VEND[sel.vendor] || [''])[0], vcolor: (VEND[sel.vendor] || ['', ''])[1], stColor: stCol[sel.status] } : {},
+      agQuar: sel && !!sel.quarantine,
+      agCapsules: sel ? sel.capsules.map(c => ({ ...c, state: c.verified ? '✓ verified' : '✗ hash mismatch — refused to load', color: c.verified ? 'var(--ok)' : 'var(--danger)' })) : [],
+      agRep: sel ? [['Dispute rate', ...sel.reputation.dispute], ['Contradictions', ...sel.reputation.contradiction], ['Escalations', ...sel.reputation.escalation], ['Budget adherence', ...sel.reputation.budget], ['Claim-grader', ...sel.reputation.grader]].map(([k, v, d]) => ({ k, v, d })) : [],
+      agGrants: grants.map(g => ({ ...g, hic: String(g.hic), hicColor: gcol[g.hic], onRevoke: () => this.openCer(this.revokeIntent(sel.name + ' · ' + g.id)) })),
+      agNoGrants: sel && grants.length === 0,
+      grantsTop: s.grantFlash ? 'var(--warn)' : 'var(--line-1)',
+      onIssueGrant: () => this.openCer(this.grantIntent()),
+      onKill: () => this.openCer(this.revokeIntent(sel ? sel.name : 'agent')),
+    };
+  }
+  ledgerVals(gcol, vcol, CLSC) {
+    const s = this.state;
+    const tabs = [['ribbon', 'Ribbon'], ['decision', 'Decision D-88412'], ['corr', 'Correlation X-7104']];
+    let rows = s.ledgerRows || [];
+    if (s.ledgerUng) rows = rows.filter(r => r.verdict === 'ungoverned');
+    if (s.ledgerVerdict !== 'all') rows = rows.filter(r => r.verdict === s.ledgerVerdict);
+    const D = this.S ? this.S.DECISION_DETAIL : {};
+    const kCol = { meeting: 'var(--info)', grant: 'var(--accent-text)', action: 'var(--tx-2)', pr: 'var(--z-indigo)' };
+    return {
+      ledTabs: tabs.map(([id, label]) => ({ label, onClick: () => this.setState({ ledgerMode: id, exportOpen: false }), bg: s.ledgerMode === id ? 'var(--tx-1)' : 'transparent', color: s.ledgerMode === id ? 'var(--srf-0)' : 'var(--tx-2)', bd: s.ledgerMode === id ? 'var(--tx-1)' : 'var(--line-2)' })),
+      ledRibbon: s.ledgerMode === 'ribbon' && !s.exportOpen, ledDecision: s.ledgerMode === 'decision' && !s.exportOpen, ledCorr: s.ledgerMode === 'corr' && !s.exportOpen,
+      ledUng: s.ledgerUng, onLedUng: (e) => this.setState({ ledgerUng: e.target.checked }),
+      onLedVerdict: (e) => this.setState({ ledgerVerdict: e.target.value }),
+      ledRows: rows.slice(0, 30).map(r => ({
+        ...r, actionCls: r.cls, cls: r.fresh ? 'cc-row-stroke' : '',
+        bg: r.verdict === 'ungoverned' ? 'var(--warn-bg)' : 'transparent',
+        verdictColor: vcol[r.verdict], hicColor: gcol[r.hic] || 'var(--tx-2)',
+        vcolor: (({ 'claude-code': 'var(--z-cyan)', codex: 'var(--z-indigo)', devin: 'var(--z-magenta)', hermes: 'var(--z-amber)' })[r.agent]) || 'var(--tx-2)',
+        verdict: r.verdict === 'ungoverned' ? 'UNGOVERNED ⚠' : r.verdict, hic: 'HIC-' + r.hic,
+        onClick: () => this.setState({ ledgerMode: 'decision' }),
+      })),
+      asOfBanner: !!s.asOf, asOfDate: s.asOf,
+      onAsOf: (e) => this.setState({ asOf: e.target.value || null }),
+      onAsOfClear: () => this.setState({ asOf: null }),
+      exportOpen: !!s.exportOpen, onExportOpen: () => this.setState({ exportOpen: true }), onExportClose: () => this.setState({ exportOpen: false }),
+      dec: D, vDec: this.vv('dec'), onVerifyDec: () => this.doVerify('dec'),
+      decRows: [
+        ['What happened', D.what], ['Authorized by', D.principal], ['Acting agent', D.agent],
+        ['Under grant', D.grant], ['Under protocol', D.protocol], ['Verdict · reason', (D.verdict || '') + ' · ' + (D.reason || '')],
+        ['Produced by', D.model], ['Params hash', D.params], ['Local chain', D.chainPos],
+        ['Anchor', (D.anchor || '') + ' · ' + (D.proof || '')],
+      ].map(([k, v]) => ({ k, v: v || '', color: k === 'Verdict · reason' ? 'var(--ok)' : 'var(--tx-1)' })),
+      corrRows: (this.S ? this.S.CORRELATION : []).map((c, i, arr) => ({ ...c, kColor: kCol[c.kind], dot: i === arr.length - 1 ? 'var(--accent)' : 'var(--srf-0)', bd: kCol[c.kind], line: i < arr.length - 1 })),
+    };
+  }
+  miscVals(VEND, CLSC) {
+    const s = this.state; const S = this.S || {};
+    const whoCol = { 'Rachel Ortiz': 'var(--accent-text)', 'M. Okonkwo': 'var(--accent-text)', 'claude-code': 'var(--z-cyan)', codex: 'var(--z-indigo)', devin: 'var(--z-magenta)', hermes: 'var(--z-amber)' };
+    // calendar: July 2026 starts Wed (dow 3), 31 days
+    const evByDay = {}; (S.CAL_EVENTS || []).forEach(e => { (evByDay[e.d] = evByDay[e.d] || []).push(e); });
+    const cells = [];
+    for (let i = 0; i < 35; i++) {
+      const d = i - 2; // 1 Jul 2026 is Wednesday → offset 3 (Mon-first)
+      const inMonth = d >= 1 && d <= 31;
+      cells.push({
+        d: inMonth ? String(d) : '', dColor: d === 23 ? 'var(--accent-text)' : 'var(--tx-3)',
+        bg: d === 23 ? 'var(--accent-wash)' : 'transparent',
+        evs: inMonth ? (evByDay[d] || []).map(e => ({ name: e.time + ' ' + e.name, color: e.gov ? 'var(--accent-text)' : 'var(--tx-3)' })) : [],
+      });
+    }
+    const setTabs = [['tenancy', 'Tenancy'], ['identity', 'Identity'], ['models', 'Models'], ['license', 'License'], ['compliance', 'Compliance']];
+    return {
+      jRows: (S.JOURNAL || []).map(j => ({ ...j, whoColor: whoCol[j.who] || 'var(--tx-2)' })),
+      briefRows: ((S.BRIEF || {}).sections || []).map(([k, v]) => ({ k, v })),
+      calDows: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(d => ({ d })),
+      calCells: cells,
+      calAccts: (S.CAL_ACCOUNTS || []).map(a => ({ ...a, mode: a.mode, modeColor: a.mode === 'two-way' ? 'var(--ok)' : 'var(--info)' })),
+      repoRows: (S.REPOS || []).map(r => ({
+        name: r.name, denied: !!r.denied, ok: !r.denied,
+        checks: r.checks || '', chColor: r.checks === 'green' ? 'var(--ok)' : r.checks === 'running' ? 'var(--info)' : 'var(--warn)',
+        meta: r.denied ? '' : r.branches + ' branches · ' + r.prs + ' PRs · ' + r.last, agents: r.agents || '',
+      })),
+      prRows: (S.PRS || []).map(p => ({ ...p, humanPr: !p.agent, chColor: p.checks === 'green' ? 'var(--ok)' : p.checks === 'running' ? 'var(--info)' : 'var(--warn)', byColor: whoCol[p.by] || 'var(--tx-2)' })),
+      peekLines: ((S.PEEK || {}).lines || []).map(([n, code]) => ({ n: String(n), code, color: code.trim().startsWith('//') ? 'var(--tx-3)' : 'var(--tx-1)' })),
+      vPeek: this.vv('peek'), onVerifyPeek: () => this.doVerify('peek'),
+      nodeState: s.conn === 'live' ? 'LIVE' : s.conn.toUpperCase(),
+      ...this.walletVals(), ...this.nodeVals(),
+      setTabs: setTabs.map(([id, label]) => ({ label, onClick: () => this.setState({ settingsTab: id }), color: s.settingsTab === id ? 'var(--tx-1)' : 'var(--tx-3)', line: s.settingsTab === id ? 'var(--accent)' : 'transparent' })),
+      setTenancy: s.settingsTab === 'tenancy', setIdentity: s.settingsTab === 'identity', setModels: s.settingsTab === 'models', setLicense: s.settingsTab === 'license', setCompliance: s.settingsTab === 'compliance',
+      tenRows: (S.TENANCY || []).map(t => ({ ...t, pad: (t.depth * 18) + 'px', ceilColor: CLSC[t.ceiling] })),
+      goGov: () => this.go('gov', { govTab: 'protocols' }),
+    };
+  }
+  walletVals() {
+    const s = this.state; const W = (this.S || {}).WALLET || { tokens: [], txs: [], contacts: [], address: '' };
+    const dirC = { in: 'var(--ok)', out: 'var(--tx-2)', stake: 'var(--info)', gas: 'var(--tx-3)' };
+    const amtOk = parseFloat(s.wAmt) > 0;
+    // deterministic fake QR from address chars
+    const qr = Array.from({ length: 64 }, (_, i) => ({ c: (W.address.charCodeAt(i % W.address.length) + i * 7) % 3 ? 'var(--tx-1)' : 'transparent' }));
+    return {
+      wAddr: W.address, wCopyLabel: s.wCopied ? 'copied' : 'copy', wCopied: s.wCopied ? 'var(--ok)' : 'var(--tx-2)',
+      onCopyAddr: () => { try { navigator.clipboard.writeText(W.address); } catch (e) {} this.setState({ wCopied: true }); setTimeout(() => this.setState({ wCopied: false }), 1400); },
+      wSend: s.wPanel === 'send', wRecv: s.wPanel === 'recv', wStake: s.wPanel === 'stake',
+      onSendOpen: () => this.setState({ wPanel: s.wPanel === 'send' ? null : 'send' }),
+      onRecvOpen: () => this.setState({ wPanel: s.wPanel === 'recv' ? null : 'recv' }),
+      onStakeOpen: () => this.setState({ wPanel: s.wPanel === 'stake' ? null : 'stake' }),
+      onSendClose: () => this.setState({ wPanel: null }), onRecvClose: () => this.setState({ wPanel: null }), onStakeClose: () => this.setState({ wPanel: null }),
+      wContacts: W.contacts.map(c => ({ addr: c.addr, label: c.name + ' · ' + c.addr + ' · ' + c.sbt })),
+      onSendTo: (e) => this.setState({ wTo: e.target.value }),
+      wAmt: s.wAmt, onSendAmt: (e) => this.setState({ wAmt: e.target.value }),
+      wOverCeiling: parseFloat(s.wAmt) > 150,
+      wSendDisabled: !s.wTo || !amtOk,
+      onSendReview: () => this.openCer(this.sendIntent(s.wTo, s.wAmt)),
+      onBond: () => this.openCer(this.stakeIntent('bond')),
+      onUnbond: () => this.openCer(this.stakeIntent('unbond')),
+      wQr: qr,
+      wTokens: W.tokens,
+      wTxs: W.txs.map(tx => ({ ...tx, dirColor: dirC[tx.dir], amtColor: tx.amount.startsWith('+') ? 'var(--ok)' : 'var(--tx-1)', stColor: tx.status === 'settled' ? 'var(--tx-3)' : 'var(--danger)', onDecision: () => this.go('ledger', { ledgerMode: 'decision' }) })),
+    };
+  }
+  nodeVals() {
+    const s = this.state; const S = this.S;
+    const live = s.conn === 'live';
+    const lvlC = { INFO: 'var(--tx-3)', WARN: 'var(--warn)', DEBUG: 'var(--info)', ERROR: 'var(--danger)' };
+    let logs = s.nLogs;
+    if (s.nLvl !== 'all') logs = logs.filter(l => l.lvl === s.nLvl);
+    const blocks = S ? S.bridge.node.blocks(s.chainH) : [];
+    const q = s.nQ.trim().toLowerCase();
+    const filtered = q ? blocks.filter(b => String(b.height).includes(q) || b.hash.toLowerCase().includes(q) || b.proposer.toLowerCase().includes(q)) : blocks;
+    const sel = s.nSelBlock;
+    return {
+      nExpDot: live ? 'var(--accent)' : 'var(--warn)', nExpAnim: live ? 'ccPulse 1.6s infinite' : 'none',
+      nQ: s.nQ, onNQ: (e) => this.setState({ nQ: e.target.value }),
+      nBlocks: filtered.map(b => ({
+        ...b, height: b.height.toLocaleString('en-US'), txs: String(b.txs),
+        hColor: b.blue ? 'var(--tx-1)' : 'var(--danger)',
+        bg: sel && sel.height === b.height ? 'var(--accent-wash)' : (b.blue ? 'transparent' : 'var(--danger-bg)'),
+        onClick: () => this.setState({ nSelBlock: b }),
+      })),
+      nBlockSel: !!sel,
+      nSel: sel ? { height: sel.height.toLocaleString('en-US') } : {},
+      onNClose: () => this.setState({ nSelBlock: null }),
+      nSelRows: sel ? [
+        ['Hash', sel.hash, 'var(--tx-1)'],
+        ['GhostDAG', sel.blue ? 'blue block · in the selected chain' : 'non-blue · anticone member — recorded, contributes to blue score, not discarded', sel.blue ? 'var(--tx-1)' : 'var(--danger)'],
+        ['Proposer', sel.proposer + ' · validator committee member', 'var(--tx-1)'],
+        ['Transactions', sel.txs + ' · ' + sel.gas + ' gas', 'var(--tx-1)'],
+        ['Checkpoint', sel.checkpoint ? 'YES — BFT settled · 50-block boundary' : 'no · settles at next 50-block boundary', sel.checkpoint ? 'var(--accent-text)' : 'var(--tx-3)'],
+        ['Decisions', sel.txs > 3 ? String(sel.txs - 3) + ' registry event(s) → visible in Ledger' : 'none in this block', 'var(--info)'],
+      ].map(([k, v, color]) => ({ k, v, color })) : [],
+      nLvls: ['all', 'INFO', 'WARN'].map(lv => ({ label: lv, onClick: () => this.setState({ nLvl: lv }), color: s.nLvl === lv ? 'var(--tx-1)' : 'var(--tx-3)', bd: s.nLvl === lv ? 'var(--tx-1)' : 'var(--line-2)' })),
+      nLogs: logs.slice(-24).map(l => ({ ...l, lvlColor: lvlC[l.lvl] })),
+    };
+  }
+}
+</script>
+</body>
+</html>
