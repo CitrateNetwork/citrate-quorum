@@ -1,0 +1,15 @@
+# WP-S2 — the session resolution: identity → clearance → EffectiveGrant.
+[package]
+name = "quorum-session"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "citrate-quorum session resolution — joins the OIDC entitlement, on-chain clearance, and tenant ceiling into one fail-closed EffectiveGrant (least of all ceilings)."
+
+[dependencies]
+quorum-tenancy = { path = "../quorum-tenancy" }
+
+[lints]
+workspace = true

@@ -3216,6 +3216,13 @@ name = "quorum-rbac"
 version = "0.0.0"
 
 [[package]]
+name = "quorum-session"
+version = "0.0.0"
+dependencies = [
+ "quorum-tenancy",
+]
+
+[[package]]
 name = "quorum-tenancy"
 version = "0.0.0"
 dependencies = [
