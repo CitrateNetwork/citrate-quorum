@@ -1,0 +1,18 @@
+# WP-S6 core (client-side) — the policy enforcement heart: CapabilityGrant (the
+# HIC envelope), the verdict engine (PolicyBinding.check), and VoteAllowance.
+# Pure Rust mirror of the governance-contract invariants (03_GOVERNANCE_CONTRACTS).
+[package]
+name = "quorum-policy"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "citrate-quorum policy enforcement — CapabilityGrant, the verdict engine, and VoteAllowance, with the CG/VA invariants as tested Rust."
+
+[dependencies]
+quorum-tenancy = { path = "../quorum-tenancy" }
+quorum-audit = { path = "../quorum-audit" }
+
+[lints]
+workspace = true

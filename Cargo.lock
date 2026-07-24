@@ -3273,6 +3273,14 @@ name = "quorum-license"
 version = "0.0.0"
 
 [[package]]
+name = "quorum-policy"
+version = "0.0.0"
+dependencies = [
+ "quorum-audit",
+ "quorum-tenancy",
+]
+
+[[package]]
 name = "quorum-rbac"
 version = "0.0.0"
 
