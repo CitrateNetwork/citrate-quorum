@@ -32,6 +32,10 @@ citrate-core-kit = { path = "../../citrate-core/kit" }
 quorum-tenancy = { path = "crates/quorum-tenancy" }
 quorum-license = { path = "crates/quorum-license" }
 quorum-rbac = { path = "crates/quorum-rbac" }
+quorum-session = { path = "crates/quorum-session" }
+quorum-clearance = { path = "crates/quorum-clearance" }
+quorum-audit = { path = "crates/quorum-audit" }
+quorum-policy = { path = "crates/quorum-policy" }
 
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"

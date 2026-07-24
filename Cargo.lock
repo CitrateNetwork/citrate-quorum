@@ -675,8 +675,12 @@ name = "citrate-quorum"
 version = "0.0.0"
 dependencies = [
  "citrate-core-kit",
+ "quorum-audit",
+ "quorum-clearance",
  "quorum-license",
+ "quorum-policy",
  "quorum-rbac",
+ "quorum-session",
  "quorum-tenancy",
  "serde",
  "serde_json",

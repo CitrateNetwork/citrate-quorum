@@ -26,6 +26,8 @@
 use citrate_core_kit::{ceremony, config, custody, oidc};
 use tauri::Manager;
 
+mod backend;
+
 /// A tiny, honest status command the placeholder shell can call to prove the
 /// backend is live and the quorum-specific seams (tenancy, license) are wired —
 /// without fabricating any governance data.
@@ -81,6 +83,12 @@ pub fn run() {
             // this one approval surface; the gated signer is reachable ONLY from
             // its `approve` path and is unreachable from any quorum code.
             app.manage(ceremony::build_ceremony_state());
+            // The quorum governance backend: per-tenant audit HashChains, live
+            // capability grants + vote allowances, and the policy→audit pipeline.
+            // In-memory today (durable persistence is a later WP); serves the
+            // Ledger surface and the governed-action loop honestly from real
+            // hash-chained records, never fabricated data (Rule 1).
+            app.manage(std::sync::Mutex::new(backend::QuorumBackend::default()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -111,6 +119,20 @@ pub fn run() {
             ceremony::sign_approve,
             ceremony::sign_and_broadcast,
             ceremony::sign_reject,
+            // governance backend — the policy→audit pipeline + ledger reads +
+            // grant/allowance management (quorum-policy/audit/session/clearance).
+            backend::action_evaluate_and_record,
+            backend::ledger_records,
+            backend::ledger_head,
+            backend::ledger_merkle_root,
+            backend::ledger_verify,
+            backend::ledger_ungoverned_count,
+            backend::grant_issue,
+            backend::grant_revoke,
+            backend::allowance_issue,
+            backend::allowance_revoke,
+            backend::vote_cast,
+            backend::session_resolve,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
