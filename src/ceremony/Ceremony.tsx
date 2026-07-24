@@ -1,12 +1,22 @@
 // =====================================================================
 import markBlack from "../assets/brand/citrate_mark_black.svg";
-// citrate-quorum — the Signature Ceremony (QRM-S2D)
+// citrate-quorum — the Signature Ceremony (QRM-S2D · gated in QRM-S2)
 //
 // Ported from design/CitrateQuorum.dc.html §CEREMONY. THE single
 // human-in-the-loop signing surface (design brief §3.3). Any surface that
 // needs a signature calls useCeremony().request(intent) and awaits the
 // outcome — it NEVER performs the action itself and NEVER fabricates a
 // settled state. Charter register, always (signing is a document act).
+//
+// THE POLICY GATE RUNS FIRST (I-3/I-4). `request()` does not open this dialog:
+// it calls bridge.policy.evaluate(intent.action), which evaluates the action
+// against the tenant's live grants and appends the verdict to the tenant's
+// evidence chain. Only then is a signature asked for, and the verdict that was
+// recorded is shown alongside what is being signed:
+//  · deny            → rejected before the dialog ever opens
+//  · require-approval→ opens, flagged HIC-1, this signature IS the approval
+//  · ungoverned      → opens, flagged — recorded and surfaced, never silent
+//  · gate unreachable→ rejected, fail-closed, with the reason
 //
 // Properties enforced here, which are HIC security expressed as UI:
 //  · decoded intent (key/value rows), never a raw hex blob by default
@@ -23,29 +33,43 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
   type ReactNode,
 } from "react";
-import type { CeremonyPhase, SignatureIntent } from "../bridge";
+import { bridge, type CeremonyPhase, type GateDecision, type SignatureIntent } from "../bridge";
 import { LoaderMark } from "../components/LoaderMark";
+import { runGate, type CeremonyResult } from "./gate";
 
-export interface CeremonyResult {
-  outcome: "settled" | "rejected";
-  /** A short human-readable settlement note (tx hash / decision id / anchor). */
-  note?: string;
-}
+export type { CeremonyResult } from "./gate";
 
 interface Pending {
   intent: SignatureIntent;
+  /** The verdict recorded BEFORE this dialog opened. */
+  gate: GateDecision;
   resolve: (r: CeremonyResult) => void;
 }
 
 interface CeremonyApi {
-  /** Queue a signature request; resolves when it settles or is rejected. */
+  /**
+   * Run the policy gate on the intent's action, record the verdict, and — if
+   * the verdict permits — queue the signature request. Resolves when it settles
+   * or is rejected. A denied or ungateable action never reaches the dialog.
+   */
   request: (intent: SignatureIntent) => Promise<CeremonyResult>;
 }
+
+/** The first 10 hex chars of a chain head — enough to recognize, short enough to read. */
+const shortHead = (h: string) => (h.length > 12 ? `${h.slice(0, 12)}…` : h);
+
+const VERDICT_STYLE: Record<GateDecision["verdict"], { label: string; color: string }> = {
+  allow: { label: "Allowed by policy", color: "var(--ok)" },
+  "require-approval": { label: "Requires your approval", color: "var(--warn)" },
+  deny: { label: "Denied by policy", color: "var(--danger)" },
+  ungoverned: { label: "Ungoverned", color: "var(--danger)" },
+};
 
 const Ctx = createContext<CeremonyApi | null>(null);
 
@@ -73,6 +97,20 @@ const PHASES: { key: CeremonyPhase; label: string }[] = [
 
 export function CeremonyProvider({ children }: { children: ReactNode }) {
   const [queue, setQueue] = useState<Pending[]>([]);
+  // The ceremony is the human-identity boundary, so it — not each surface —
+  // stamps the principal onto the action. Unresolved (no IdP) leaves it unset,
+  // and the record honestly carries no principal rather than a guessed one.
+  const principal = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    bridge.session
+      .current()
+      .then((s) => {
+        principal.current = s.user.name;
+      })
+      .catch(() => {
+        principal.current = undefined;
+      });
+  }, []);
   const [phase, setPhase] = useState<CeremonyPhase>("review");
   const [ack, setAck] = useState(false);
   const [settledNote, setSettledNote] = useState<string>("");
@@ -80,9 +118,18 @@ export function CeremonyProvider({ children }: { children: ReactNode }) {
 
   const head = queue[0] ?? null;
 
-  const request = useCallback((intent: SignatureIntent) => {
+  const request = useCallback(async (intent: SignatureIntent): Promise<CeremonyResult> => {
+    // I-3: the gate runs BEFORE this dialog opens. No signature is ever asked
+    // for on an action the policy engine has not ruled on and recorded.
+    const outcome = await runGate(
+      (a) => bridge.policy.evaluate(a),
+      intent.action,
+      principal.current,
+    );
+    if (!outcome.open) return outcome.result;
+    const { gate } = outcome;
     return new Promise<CeremonyResult>((resolve) => {
-      setQueue((q) => [...q, { intent, resolve }]);
+      setQueue((q) => [...q, { intent, gate, resolve }]);
     });
   }, []);
 
@@ -95,7 +142,7 @@ export function CeremonyProvider({ children }: { children: ReactNode }) {
 
   const finish = (outcome: "settled" | "rejected", note?: string) => {
     if (!head) return;
-    head.resolve({ outcome, note });
+    head.resolve({ outcome, note, gate: head.gate });
     clearTimers();
     setQueue((q) => q.slice(1));
     setPhase("review");
@@ -114,11 +161,10 @@ export function CeremonyProvider({ children }: { children: ReactNode }) {
       setTimeout(() => setPhase("broadcasting"), 1000),
       setTimeout(() => {
         setPhase("settled");
-        setSettledNote(
-          head.intent.kind === "deploy"
-            ? `deployed at ${head.intent.create2 ?? "0x…"} · anchored`
-            : "recorded → AgentDecisionRegistryV2 · anchored",
-        );
+        // The real thing that happened: the gate appended this decision to the
+        // tenant's evidence chain, at this head. Nothing claims an anchor —
+        // there is no chain to anchor to yet (see the sub-line below).
+        setSettledNote(`decision recorded · chain head ${shortHead(head.gate.chainHead)}`);
       }, 2400),
     );
   };
@@ -134,6 +180,8 @@ export function CeremonyProvider({ children }: { children: ReactNode }) {
   }
 
   const intent = head.intent;
+  const gate = head.gate;
+  const gateStyle = VERDICT_STYLE[gate.verdict];
   const originColor = ORIGIN_COLOR[intent.origin] ?? "var(--tx-2)";
   const phaseIdx = PHASES.findIndex((p) => p.key === (phase === "rejected" ? "review" : phase));
   const inReview = phase === "review";
@@ -178,6 +226,27 @@ export function CeremonyProvider({ children }: { children: ReactNode }) {
           {/* body */}
           <div style={{ padding: "18px 20px", display: "flex", flexDirection: "column", gap: 14 }}>
             <div style={{ fontFamily: "var(--font-display)", fontWeight: 440, fontSize: 20, letterSpacing: "-0.008em" }}>{intent.title}</div>
+
+            {/* The policy verdict — recorded BEFORE this dialog opened, read
+                back from the decision that was appended to the chain. */}
+            <div style={{ border: `1px solid ${gateStyle.color}`, background: gate.ungoverned ? "var(--danger-bg)" : "var(--srf-inset)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderBottom: "1px solid var(--line-1)" }}>
+                <span className="mono" style={{ fontSize: 9.5, letterSpacing: ".13em", textTransform: "uppercase", color: gateStyle.color }}>{gateStyle.label}</span>
+                <span className="mono" style={{ fontSize: 9.5, letterSpacing: ".1em", padding: "1px 7px", border: `1px solid ${gateStyle.color}`, color: gateStyle.color }}>HIC-{gate.hic}</span>
+                <div style={{ flex: 1 }} />
+                <span className="mono" style={{ fontSize: 10, color: "var(--tx-3)" }}>{gate.grantId ?? "no grant"}</span>
+              </div>
+              <div style={{ padding: "9px 12px", display: "flex", flexDirection: "column", gap: 4 }}>
+                <span style={{ fontSize: 12.5, lineHeight: 1.5 }}>
+                  {gate.ungoverned
+                    ? "No live grant covers this action. It has been recorded as ungoverned and surfaced — signing it does not make it governed."
+                    : gate.reason}
+                </span>
+                <span className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)" }}>
+                  {intent.action.actionClass} · {intent.action.classification} · recorded at {shortHead(gate.chainHead)}
+                </span>
+              </div>
+            </div>
 
             {intent.rawUnverified && (
               <div style={{ border: "1px solid var(--danger)", background: "var(--danger-bg)", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
@@ -232,6 +301,11 @@ export function CeremonyProvider({ children }: { children: ReactNode }) {
                 <div>
                   <div style={{ fontSize: 14, fontWeight: 500 }}>On record</div>
                   <div className="mono" style={{ fontSize: 10.5, color: "var(--tx-2)" }}>{settledNote}</div>
+                  {/* Rule 1: say exactly how far this went. The decision is in
+                      the local evidence chain; nothing is on chain yet. */}
+                  <div className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)", marginTop: 2 }}>
+                    local evidence chain only — signature + on-chain anchor land with QRM-S6
+                  </div>
                 </div>
               </div>
             )}

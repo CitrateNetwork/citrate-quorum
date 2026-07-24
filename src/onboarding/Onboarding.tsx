@@ -1,12 +1,19 @@
-// citrate-quorum — onboarding (QRM-S2D). Ported from design §ONBOARDING.
+// citrate-quorum — onboarding (QRM-S2D · scope-establishing in QRM-S2).
 // Sign in with the federated IdP → clearance resolves from chain (nothing
 // granted by default, access is computed then shown) → a 4-screen HIC tour →
 // the app. Plus the fail-closed reduced-access state. Charter register.
+//
+// This flow ESTABLISHES THE TENANT SCOPE (Rule 6). Until it does, every
+// tenant-keyed command fails closed — no evidence is read or written. The
+// resolve checklist only ticks once the session actually resolves; if the
+// identity provider cannot be reached, we say so and ask for the scope
+// explicitly rather than showing green checks for steps that did not happen.
 import { useEffect, useState } from "react";
+import { bridge } from "../bridge";
 import { LoaderMark } from "../components/LoaderMark";
 import marqueeBlack from "../assets/brand/citrate_marquee_black.svg";
 
-type Phase = "sign" | "resolve" | "tour" | "reduced";
+type Phase = "sign" | "resolve" | "scope" | "tour" | "reduced";
 
 const RESOLVE_STEPS = [
   "Meridian Okta — OIDC id_token verified",
@@ -26,14 +33,53 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const [phase, setPhase] = useState<Phase>("sign");
   const [checks, setChecks] = useState(0);
   const [tourIdx, setTourIdx] = useState(0);
+  const [scopeErr, setScopeErr] = useState<string>("");
+  const [scopeInput, setScopeInput] = useState("");
 
   useEffect(() => {
     if (phase !== "resolve") return;
     setChecks(0);
-    const timers = RESOLVE_STEPS.map((_, i) => setTimeout(() => setChecks(i + 1), 500 + i * 550));
-    const done = setTimeout(() => setPhase("tour"), 500 + RESOLVE_STEPS.length * 550 + 400);
-    return () => { timers.forEach(clearTimeout); clearTimeout(done); };
+    let cancelled = false;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+
+    // The real attempt. Only on success do the checks tick — a green check
+    // here is a claim that the step happened (Rule 1).
+    bridge.session
+      .current()
+      .then(async (s) => {
+        const leaf = s.tenant[s.tenant.length - 1];
+        await bridge.session.setActiveTenant(leaf);
+        if (cancelled) return;
+        RESOLVE_STEPS.forEach((_, i) =>
+          timers.push(setTimeout(() => !cancelled && setChecks(i + 1), 220 + i * 420)),
+        );
+        timers.push(
+          setTimeout(() => !cancelled && setPhase("tour"), 220 + RESOLVE_STEPS.length * 420 + 350),
+        );
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setScopeErr(e instanceof Error ? e.message : String(e));
+        setPhase("scope");
+      });
+
+    return () => {
+      cancelled = true;
+      timers.forEach(clearTimeout);
+    };
   }, [phase]);
+
+  const submitScope = async () => {
+    const t = scopeInput.trim();
+    if (!t) return;
+    try {
+      await bridge.session.setActiveTenant(t);
+      setScopeErr("");
+      setPhase("tour");
+    } catch (e) {
+      setScopeErr(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   if (phase === "sign") {
     return (
@@ -79,6 +125,39 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                 </div>
               );
             })}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (phase === "scope") {
+    return (
+      <div data-register="charter" style={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 32, background: "var(--srf-0)" }}>
+        <div className="surface" style={{ width: 520, padding: 30, display: "flex", flexDirection: "column", gap: 14, borderTop: "2px solid var(--warn)" }}>
+          <div className="eyebrow" style={{ color: "var(--warn)" }}>Identity provider did not resolve</div>
+          <div style={{ fontFamily: "var(--font-display)", fontWeight: 420, fontSize: 26 }}>Name the tenant scope</div>
+          <p style={{ fontSize: 14.5, lineHeight: 1.6, color: "var(--tx-2)", margin: 0 }}>
+            Quorum could not derive your tenant scope from the identity provider, so it will not guess one.
+            Until a scope is set, nothing is read from or written to any evidence chain. Enter the tenant
+            this installation governs; every decision recorded from here is keyed to it.
+          </p>
+          <div className="mono" style={{ fontSize: 10.5, color: "var(--tx-3)", border: "1px solid var(--line-1)", padding: "9px 12px", background: "var(--srf-inset)", wordBreak: "break-all" }}>
+            session.current() — {scopeErr || "unavailable"}
+          </div>
+          <input
+            value={scopeInput}
+            onChange={(e) => setScopeInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") void submitScope(); }}
+            placeholder="tenant scope — e.g. line-4-automation"
+            className="mono"
+            aria-label="Tenant scope"
+            style={{ fontSize: 13, padding: "10px 12px", border: "1px solid var(--line-2)", background: "var(--srf-1)", color: "var(--tx-1)" }}
+          />
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <button className="btn btn-ghost" onClick={() => setPhase("sign")}>Back to sign in</button>
+            <div style={{ flex: 1 }} />
+            <button className="btn btn-primary" onClick={() => void submitScope()} disabled={!scopeInput.trim()}>Set scope</button>
           </div>
         </div>
       </div>

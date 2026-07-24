@@ -18,6 +18,8 @@ import type {
   CorrelationEvent,
   Decision,
   DecisionDetail,
+  GateDecision,
+  GovernedAction,
   Grant,
   IngestFile,
   InterviewTurn,
@@ -42,6 +44,23 @@ import type {
 
 export interface SessionDomain {
   current(): Promise<Session>;
+  /** The active tenant scope, or null if none is established yet. */
+  activeTenant(): Promise<string | null>;
+  /** Establish the tenant scope everything else is keyed by (Rule 6). */
+  setActiveTenant(tenant: string): Promise<void>;
+}
+
+/**
+ * The policy gate — the seam through which every governed action passes before
+ * it executes or is signed (I-3/I-4).
+ *
+ * `evaluate` is not a preview: it evaluates the action against the tenant's live
+ * grants AND appends the resulting decision to the tenant's evidence chain. An
+ * action with no covering grant comes back `ungoverned` — recorded and surfaced,
+ * never silently allowed and never silently dropped (Rule 5).
+ */
+export interface PolicyDomain {
+  evaluate(action: GovernedAction): Promise<GateDecision>;
 }
 
 export interface WalletDomain {
@@ -120,6 +139,7 @@ export interface SettingsDomain {
 /** The whole bridge — one field per domain. */
 export interface BridgeContract {
   session: SessionDomain;
+  policy: PolicyDomain;
   wallet: WalletDomain;
   node: NodeDomain;
   agents: AgentsDomain;

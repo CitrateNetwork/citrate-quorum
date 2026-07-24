@@ -8,42 +8,57 @@
 //
 // Nothing here fabricates: each call round-trips to real Rust that reads the
 // real per-tenant HashChain / policy engine. An empty chain returns [].
+//
+// NOTE: no wrapper takes a tenant. The tenant scope is backend-owned state
+// (`tenant_set`); the frontend cannot name the chain it reads or writes, so a
+// bug here cannot cross a tenant boundary (Rule 6).
 // =====================================================================
 import { invoke } from "@tauri-apps/api/core";
 
 import type { Classification, Decision, Verdict } from "../types";
 
+// ---- the tenant scope ----------------------------------------------
+
+/** The active tenant scope, or null if none is established yet. */
+export function tenantActive(): Promise<string | null> {
+  return invoke<string | null>("tenant_active");
+}
+
+/** Establish the active tenant scope. Rejects a malformed tenant id. */
+export function tenantSet(tenant: string): Promise<void> {
+  return invoke<void>("tenant_set", { tenant });
+}
+
 // ---- ledger / audit spine ------------------------------------------
 
-/** The Ledger rows for a tenant — the real BLAKE3 hash-chained records. */
-export function ledgerRecords(tenant: string): Promise<Decision[]> {
-  return invoke<Decision[]>("ledger_records", { tenant });
+/** The Ledger rows for the active tenant — the real BLAKE3 hash-chained records. */
+export function ledgerRecords(): Promise<Decision[]> {
+  return invoke<Decision[]>("ledger_records");
 }
 
 /** The tenant's chain head — the value that commits to the whole history. */
-export function ledgerHead(tenant: string): Promise<string> {
-  return invoke<string>("ledger_head", { tenant });
+export function ledgerHead(): Promise<string> {
+  return invoke<string>("ledger_head");
 }
 
-/** The Merkle root anchored nightly to `AnchorRegistry`. */
-export function ledgerMerkleRoot(tenant: string): Promise<string> {
-  return invoke<string>("ledger_merkle_root", { tenant });
+/** The Merkle root that an `AnchorRegistry` anchor will commit to. */
+export function ledgerMerkleRoot(): Promise<string> {
+  return invoke<string>("ledger_merkle_root");
 }
 
 /** Recompute the whole chain and confirm it was not tampered with. */
-export function ledgerVerify(tenant: string): Promise<boolean> {
-  return invoke<boolean>("ledger_verify", { tenant });
+export function ledgerVerify(): Promise<boolean> {
+  return invoke<boolean>("ledger_verify");
 }
 
 /** The count of `ungoverned` actions — the honest headline gap (Rule 5). */
-export function ledgerUngovernedCount(tenant: string): Promise<number> {
-  return invoke<number>("ledger_ungoverned_count", { tenant });
+export function ledgerUngovernedCount(): Promise<number> {
+  return invoke<number>("ledger_ungoverned_count");
 }
 
 // ---- the governed-action pipeline ----------------------------------
 
 export interface ActionInput {
-  tenant: string;
   agent: string;
   principal?: string | null;
   class: string;
@@ -74,7 +89,6 @@ export function actionEvaluateAndRecord(input: ActionInput): Promise<DecisionRes
 
 export interface GrantInput {
   id: string;
-  tenant: string;
   agent: string;
   principal: string;
   tenant_scope: string;
@@ -87,8 +101,8 @@ export interface GrantInput {
 export function grantIssue(input: GrantInput): Promise<void> {
   return invoke<void>("grant_issue", { input });
 }
-export function grantRevoke(tenant: string, agent: string, grantId: string): Promise<boolean> {
-  return invoke<boolean>("grant_revoke", { tenant, agent, grantId });
+export function grantRevoke(agent: string, grantId: string): Promise<boolean> {
+  return invoke<boolean>("grant_revoke", { agent, grantId });
 }
 
 // ---- vote allowances (the delegated voting franchise) --------------

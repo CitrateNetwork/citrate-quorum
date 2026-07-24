@@ -22,13 +22,18 @@ export function Wallet() {
   const send = async () => {
     const r = await ceremony.request({
       kind: "transfer", title: "Send SALT", origin: "user",
+      // PRT-004 C2: over 150 SALT escalates to HIC-1. The gate decides that
+      // from the cost + threshold — the UI does not pre-judge it.
+      action: { actionClass: "spend", classification: "Public", agent: "user", cost: parseFloat(amt || "0"), hic1CostThreshold: 150 },
       rows: [{ k: "To", v: to || "0x…" }, { k: "Amount", v: `${amt || "0"} SALT` }, ...(over ? [{ k: "Policy", v: "PRT-004 C2 · over 150 SALT → HIC-1" }] : [])],
       cost: `${amt || "0"} SALT`,
     });
     if (r.outcome === "settled") setPanel("");
   };
   const stakeOp = async (kind: string) => {
-    await ceremony.request({ kind: "stake", title: kind, origin: "user", rows: [{ k: "Vault", v: "MembershipStakeVault" }, { k: "Effect", v: kind }] });
+    await ceremony.request({ kind: "stake", title: kind, origin: "user",
+      action: { actionClass: "stake", classification: "Public", agent: "user", mandatoryHic1: true },
+      rows: [{ k: "Vault", v: "MembershipStakeVault" }, { k: "Effect", v: kind }] });
   };
 
   if (!w) return <div style={{ padding: 18 }} className="mono">wallet.summary()…</div>;

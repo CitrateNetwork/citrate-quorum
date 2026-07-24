@@ -42,6 +42,9 @@ tauri-plugin-opener = "2"
 tauri-plugin-store = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Tenant directory names are blake3(tenant_id) — a raw tenant id may legally
+# contain path separators, so it never becomes a path component.
+blake3 = "1"
 
 [lints]
 workspace = true

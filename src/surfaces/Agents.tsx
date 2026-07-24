@@ -33,6 +33,8 @@ export function Agents() {
     if (!sel) return;
     const r = await ceremony.request({
       kind: "revoke", title: `Revoke grant ${g.id} — ${sel.name}`, origin: "user",
+      // Revoking a capability always requires a human at HIC-1 (Rule 5).
+      action: { actionClass: "grant.revoke", classification: "Proprietary", agent: "user", mandatoryHic1: true },
       rows: [{ k: "Grant", v: `${g.id} · ${g.classes}` }, { k: "Agent", v: `${sel.name} · ${sel.sbt}` }, { k: "Scope", v: g.scope }, { k: "Effect", v: "immediate — the capability is gone at the next checkpoint" }],
     });
     if (r.outcome === "settled") setRevoked((s) => new Set(s).add(g.id));
@@ -42,6 +44,7 @@ export function Agents() {
     if (!sel) return;
     const r = await ceremony.request({
       kind: "revoke", title: `Revoke ALL grants — ${sel.name}`, origin: "user",
+      action: { actionClass: "grant.revoke-all", classification: "Proprietary", agent: "user", mandatoryHic1: true },
       rows: [{ k: "Agent", v: `${sel.name} · ${sel.sbt}` }, { k: "Grants revoked", v: `${grants.length} live grants` }, { k: "Keeps", v: "identity + history" }, { k: "Loses", v: "every capability" }, { k: "Running actions", v: "abort at the next checkpoint (<25s)" }],
     });
     if (r.outcome === "settled") setRevoked(new Set(grants.map((g) => g.id)));
@@ -51,6 +54,7 @@ export function Agents() {
     if (!sel) return;
     await ceremony.request({
       kind: "grant", title: `Issue grant — ${sel.name}`, origin: "user",
+      action: { actionClass: "grant.issue", classification: "Proprietary", agent: "user", mandatoryHic1: true },
       rows: [{ k: "Agent", v: `${sel.name} · ${sel.sbt}` }, { k: "Action classes", v: "(configured in the grant form)" }, { k: "HIC level", v: "HIC-2 · budgeted autonomy" }, { k: "Expiry", v: "45-day maximum" }],
     });
   };

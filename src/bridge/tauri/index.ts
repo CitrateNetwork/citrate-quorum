@@ -2,20 +2,37 @@
 // citrate-quorum — Tauri adapter (QRM-S2 · partially LIVE)
 //
 // Domains with a real Rust backend today call it (Rule 1: real data or an
-// honest error, never fabricated). The audit LEDGER is live — it reads the
-// per-tenant BLAKE3 HashChain the policy→audit pipeline writes. Every other
-// domain still throws Unavailable until its sprint wires it (rooms need the
-// comms relay, governance needs the chain, calendar needs OAuth, …). The
+// honest error, never fabricated). LIVE here:
+//
+//  · policy  — the gate. Evaluates against the tenant's live grants and
+//              appends the decision to the tenant's BLAKE3 evidence chain.
+//  · ledger  — reads that same chain back.
+//  · session — the active tenant scope (`current()` still needs the IdP).
+//
+// Every other domain throws Unavailable until its sprint wires it (rooms need
+// the comms relay, governance needs the chain, calendar needs OAuth, …). The
 // SHARED signing surface (config / custody / auth / ceremony) is already live
 // in the kit (WP-S1.3).
 //
-// Active tenant: the ledger is tenant-scoped (Rule 6). Until the session flow
-// resolves a tenant (needs the live IdP), it is unset and the ledger fails
-// closed with an honest error rather than guessing a tenant.
+// The tenant scope lives in the Rust backend, not here: no call below names a
+// tenant, and a command with no scope established fails closed with an honest
+// error rather than guessing one (Rule 6).
 // =====================================================================
 import type { BridgeContract } from "../domains";
-import { Failed, Unavailable, type Decision, type Unsubscribe } from "../types";
-import { ledgerRecords } from "./commands";
+import {
+  Unavailable,
+  type Decision,
+  type GateDecision,
+  type GovernedAction,
+  type HicLevel,
+  type Unsubscribe,
+} from "../types";
+import {
+  actionEvaluateAndRecord,
+  ledgerRecords,
+  tenantActive,
+  tenantSet,
+} from "./commands";
 
 const na = (op: string) => (): never => {
   throw new Unavailable(op);
@@ -26,48 +43,66 @@ const naStream =
     throw new Unavailable(op);
   };
 
-// The tenant whose data the packaged app is currently showing. Set by the
-// session flow once it resolves (session_resolve). Null until then.
-let activeTenant: string | null = null;
-/** Set the active tenant scope. Called by the session/onboarding flow. */
-export function setActiveTenant(tenant: string | null): void {
-  activeTenant = tenant;
-}
-function requireTenant(op: string): string {
-  if (!activeTenant) {
-    throw new Failed(op, "no active tenant — sign in to resolve a tenant scope first");
-  }
-  return activeTenant;
-}
-
 /** Poll interval for the streaming ledger ribbon (ms). The chain is append-only
  *  and low-rate; polling is honest and simple until a push channel lands. */
 const LEDGER_POLL_MS = 4000;
 
 export function createTauriBridge(): BridgeContract {
   return {
-    session: { current: na("session.current") },
+    session: {
+      current: na("session.current"),
+      // LIVE: backend-owned tenant scope.
+      activeTenant: () => tenantActive(),
+      setActiveTenant: (tenant: string) => tenantSet(tenant),
+    },
+    policy: {
+      // LIVE: quorum-policy evaluate → quorum-audit DecisionRecord → the
+      // tenant's hash chain. `action_evaluate_and_record` in backend.rs.
+      evaluate: async (action: GovernedAction): Promise<GateDecision> => {
+        const d = await actionEvaluateAndRecord({
+          agent: action.agent,
+          principal: action.principal ?? null,
+          class: action.actionClass,
+          classification: action.classification,
+          cost: action.cost ?? 0,
+          hic1_cost_threshold: action.hic1CostThreshold ?? 0,
+          mandatory_hic1: action.mandatoryHic1 ?? false,
+          // Stays empty until the agent adapters (S4) supply real tool
+          // parameters to commit to. An empty hash claims nothing.
+          params_hash: "",
+          model_id: action.modelId ?? "",
+          correlation_id: action.correlationId ?? "",
+        });
+        return {
+          verdict: d.verdict,
+          hic: d.hic as HicLevel,
+          grantId: d.grant_id,
+          reason: d.reason,
+          chainHead: d.chain_head,
+          ungoverned: d.ungoverned,
+        };
+      },
+    },
     wallet: { summary: na("wallet.summary") },
     node: { peers: na("node.peers"), logs: naStream("node.logs"), blocks: na("node.blocks") },
     agents: { list: na("agents.list"), grants: na("agents.grants") },
     rooms: { list: na("rooms.list"), roster: na("rooms.roster"), events: naStream("rooms.events") },
     ledger: {
       // LIVE: the real per-tenant hash chain.
-      query: () => ledgerRecords(requireTenant("ledger.query")),
+      query: () => ledgerRecords(),
       // LIVE: poll the chain, emit rows appended since the last poll.
       stream: (onEvent: (e: Decision) => void): Unsubscribe => {
-        const tenant = requireTenant("ledger.stream");
         let seen = 0;
         let stopped = false;
         const tick = async (): Promise<void> => {
           if (stopped) return;
           try {
-            const rows = await ledgerRecords(tenant);
+            const rows = await ledgerRecords();
             for (let i = seen; i < rows.length; i++) onEvent(rows[i]);
             seen = rows.length;
           } catch {
-            // A transient backend error must not kill the stream; the next
-            // tick retries. (Errors surface through query() for the UI.)
+            // A transient backend error (or no tenant scope yet) must not kill
+            // the stream; the next tick retries. Errors surface through query().
           }
         };
         void tick();

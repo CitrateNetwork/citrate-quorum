@@ -434,10 +434,56 @@ export type IntentKind =
   | "revoke"
   | "transfer"
   | "stake";
+/** The HIC level in force for a decision. "X" is ungoverned. */
+export type HicLevel = "0" | "1" | "2" | "3" | "X";
+
+/**
+ * A proposed governed action — the input to the policy gate.
+ *
+ * There is deliberately no tenant field: the tenant scope is backend-owned, and
+ * the frontend cannot name the chain it writes to (Rule 6).
+ */
+export interface GovernedAction {
+  /** Action class, e.g. `repo.write`, `spend`, `grant.revoke`, `protocol.deploy`. */
+  actionClass: string;
+  classification: Classification;
+  /** The acting agent's id — or the principal's, when a human acts directly. */
+  agent: string;
+  principal?: string;
+  /** Cost in the action's own units (SALT for spend, 0 for most). */
+  cost?: number;
+  /** Above this cost the action escalates to HIC-1. 0 disables the threshold. */
+  hic1CostThreshold?: number;
+  /** Force HIC-1 regardless of grant or cost (chain state, money, keys, grants). */
+  mandatoryHic1?: boolean;
+  correlationId?: string;
+  modelId?: string;
+}
+
+/**
+ * What the policy gate actually recorded. Every field is read back from the
+ * evidence chain the decision was appended to — none of it is inferred by the UI.
+ */
+export interface GateDecision {
+  verdict: "allow" | "require-approval" | "deny" | "ungoverned";
+  hic: HicLevel;
+  grantId: string | null;
+  reason: string;
+  /** The tenant's evidence-chain head after this decision was appended. */
+  chainHead: string;
+  ungoverned: boolean;
+}
+
 export interface SignatureIntent {
   kind: IntentKind;
   title: string;
   origin: string;
+  /**
+   * The governed action this signature enacts. Required: the ceremony runs the
+   * policy gate on it *before* opening (I-3/I-4), so an intent that cannot say
+   * what it does cannot be signed.
+   */
+  action: GovernedAction;
   rows: { k: string; v: string }[];
   /** Present for a protocol deploy — shown BEFORE signing (GF-1). */
   create2?: string;

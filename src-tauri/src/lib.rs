@@ -27,6 +27,7 @@ use citrate_core_kit::{ceremony, config, custody, oidc};
 use tauri::Manager;
 
 mod backend;
+mod store;
 
 /// A tiny, honest status command the placeholder shell can call to prove the
 /// backend is live and the quorum-specific seams (tenancy, license) are wired —
@@ -85,10 +86,20 @@ pub fn run() {
             app.manage(ceremony::build_ceremony_state());
             // The quorum governance backend: per-tenant audit HashChains, live
             // capability grants + vote allowances, and the policy→audit pipeline.
-            // In-memory today (durable persistence is a later WP); serves the
-            // Ledger surface and the governed-action loop honestly from real
+            // Serves the Ledger surface and the governed-action loop from real
             // hash-chained records, never fabricated data (Rule 1).
-            app.manage(std::sync::Mutex::new(backend::QuorumBackend::default()));
+            //
+            // Its evidence store is DURABLE and required. This product's
+            // deliverable is audit evidence; an installation that cannot write
+            // it must not start up pretending otherwise, so a store that will
+            // not open is a hard startup failure rather than a silent fall back
+            // to memory.
+            let evidence_root = app.path().app_data_dir()?.join("evidence");
+            let store = store::EvidenceStore::open(evidence_root)
+                .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?;
+            app.manage(std::sync::Mutex::new(backend::QuorumBackend::with_store(
+                store,
+            )));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -121,6 +132,9 @@ pub fn run() {
             ceremony::sign_reject,
             // governance backend — the policy→audit pipeline + ledger reads +
             // grant/allowance management (quorum-policy/audit/session/clearance).
+            // The tenant scope is backend-owned: no command below takes one.
+            backend::tenant_set,
+            backend::tenant_active,
             backend::action_evaluate_and_record,
             backend::ledger_records,
             backend::ledger_head,

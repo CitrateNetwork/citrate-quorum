@@ -7,11 +7,76 @@
 // (bridge/tauri) mirrors this signature with real Rust commands.
 // =====================================================================
 import type { BridgeContract } from "../domains";
-import type { RoomEvent, Decision, LogLine, Unsubscribe } from "../types";
+import type {
+  RoomEvent,
+  Decision,
+  GateDecision,
+  GovernedAction,
+  LogLine,
+  Unsubscribe,
+} from "../types";
 import * as D from "./data";
 
 const delay = <T>(ms: number, v: T): Promise<T> =>
   new Promise((r) => setTimeout(() => r(v), ms));
+
+/**
+ * The prototype's tenant scope. Null until the onboarding flow establishes it,
+ * mirroring the Tauri adapter (where the scope is backend state) so the same
+ * flow runs in both modes.
+ */
+let simTenant: string | null = null;
+
+/**
+ * The SCRIPTED policy gate — the sim's stand-in for `quorum-policy`.
+ *
+ * This is prototype data, not the engine: the real verdicts come from
+ * `evaluate()` in `quorum-policy` via the Tauri adapter. The rules here are the
+ * narrowest set that keeps the demo beats coherent — an agent with no scripted
+ * grant is ungoverned, cost over its threshold escalates to HIC-1, and anything
+ * mandatory-HIC-1 escalates regardless.
+ */
+const SIM_GRANTED: Record<string, { grantId: string; hic: "1" | "2" | "3" }> = {
+  "claude-code": { grantId: "G-2291", hic: "2" },
+  "sbt-41": { grantId: "G-2291", hic: "2" },
+  codex: { grantId: "G-2288", hic: "2" },
+  hermes: { grantId: "G-2301", hic: "3" },
+  user: { grantId: "G-1000", hic: "1" },
+};
+let simChainSeq = 0x4a71;
+function simGate(a: GovernedAction): GateDecision {
+  const head = `0x${(simChainSeq++ * 2654435761).toString(16).padStart(16, "0").slice(0, 16)}…`;
+  const g = SIM_GRANTED[a.agent];
+  if (!g) {
+    return {
+      verdict: "ungoverned",
+      hic: "X",
+      grantId: null,
+      reason: "no live grant covers this agent",
+      chainHead: head,
+      ungoverned: true,
+    };
+  }
+  const overCost = (a.hic1CostThreshold ?? 0) > 0 && (a.cost ?? 0) > (a.hic1CostThreshold ?? 0);
+  if (a.mandatoryHic1 || overCost) {
+    return {
+      verdict: "require-approval",
+      hic: "1",
+      grantId: g.grantId,
+      reason: overCost ? "cost over the grant's HIC-1 threshold" : "action class always requires HIC-1",
+      chainHead: head,
+      ungoverned: false,
+    };
+  }
+  return {
+    verdict: "allow",
+    hic: g.hic,
+    grantId: g.grantId,
+    reason: "within grant scope, budget, and ceiling",
+    chainHead: head,
+    ungoverned: false,
+  };
+}
 
 /** Replay a timestamped script once; `loop` re-runs it after the last event. */
 function timeline<E extends { t: number }>(script: E[], loop: boolean) {
@@ -39,7 +104,15 @@ function timeline<E extends { t: number }>(script: E[], loop: boolean) {
 
 export function createSimBridge(): BridgeContract {
   return {
-    session: { current: () => delay(120, D.SESSION) },
+    session: {
+      current: () => delay(120, D.SESSION),
+      activeTenant: () => delay(40, simTenant),
+      setActiveTenant: (tenant: string) => {
+        simTenant = tenant;
+        return delay(40, undefined);
+      },
+    },
+    policy: { evaluate: (a: GovernedAction) => delay(220, simGate(a)) },
     wallet: { summary: () => delay(150, D.WALLET) },
     node: {
       peers: () => delay(120, D.NODE_PEERS),

@@ -37,6 +37,7 @@ export function Meetings() {
       kind: "ratify",
       title: `Ratify minutes — ${detail.name}`,
       origin: "user",
+      action: { actionClass: "meeting.ratify", classification: "Proprietary", agent: "user", mandatoryHic1: true },
       rows: [
         { k: "Meeting", v: detail.name },
         { k: "When", v: detail.when },

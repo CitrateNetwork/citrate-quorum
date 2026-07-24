@@ -674,6 +674,7 @@ dependencies = [
 name = "citrate-quorum"
 version = "0.0.0"
 dependencies = [
+ "blake3",
  "citrate-core-kit",
  "quorum-audit",
  "quorum-clearance",

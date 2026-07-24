@@ -46,6 +46,8 @@ export function Governance() {
       kind: "deploy",
       title: "Deploy SPEC-104 — Line-4 Operating Envelope v4",
       origin: "user",
+      // Deploying a governance protocol is chain state: always HIC-1.
+      action: { actionClass: "protocol.deploy", classification: "CUI", agent: "user", mandatoryHic1: true },
       create2,
       threshold: 2,
       signers: [{ name: "M. Okonkwo", signed: false }, { name: "J. Whitfield (export-control)", signed: false }],
