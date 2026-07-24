@@ -14,7 +14,9 @@
       {
         "title": "Citrate Quorum",
         "width": 1200,
-        "height": 780
+        "height": 780,
+        "minWidth": 960,
+        "minHeight": 640
       }
     ],
     "security": {
@@ -24,12 +26,33 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "category": "Business",
+    "shortDescription": "Governance for agents.",
+    "longDescription": "Citrate Quorum — a governed workspace where humans in control (HIC) and AI agents hold auditable meetings, run the Agentile loop, and deploy plain-English governance protocols as smart contracts on Citrate. Every agent action is policy-gated, signed through a human ceremony where required, recorded, and anchored on chain.",
+    "homepage": "https://citrate.ai",
+    "publisher": "Citrate Network",
+    "copyright": "© 2026 Citrate Inc.. All rights reserved.",
+    "licenseFile": "../LICENSE",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": false,
+    "linux": {
+      "deb": {
+        "depends": []
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine"
+      }
+    }
   }
 }

@@ -119,6 +119,34 @@ run "no sim data outside bridge" "no src/surfaces yet (design prototype)" "$HAS_
 run "no hardcoded hex" "no src/surfaces yet (design prototype)" "$HAS_SRC" \
     bash -c '! grep -rnE "#[0-9a-fA-F]{6}\b" src/surfaces src/components src/shell 2>/dev/null'
 
+# ---- @rule8: no signing / updater key material -----------------------------
+# WP-S1.8: the installer skeleton is UNSIGNED and has NO auto-updater. Signing
+# identities + the update signing key are @rule8 secrets deferred to QRM-S9 and
+# must never live in the repo/CI. This guard fails if any of that leaks in.
+echo
+echo "@rule8 signing hygiene"
+run "no signing/updater key material" "always runs" "true" \
+    bash -c '
+      hits=0
+      # An active updater pubkey in the tauri config (empty/false is fine).
+      if grep -RInE "\"pubkey\"[[:space:]]*:[[:space:]]*\"[A-Za-z0-9+/=]+\"" src-tauri/tauri.conf.json 2>/dev/null; then
+        echo "updater pubkey present in tauri.conf.json (must stay inert until S9)"; hits=1; fi
+      # createUpdaterArtifacts must not be true in the skeleton.
+      if grep -RInE "\"createUpdaterArtifacts\"[[:space:]]*:[[:space:]]*true" src-tauri/tauri.conf.json 2>/dev/null; then
+        echo "createUpdaterArtifacts:true (updater must be inert until S9)"; hits=1; fi
+      # Any private signing key material committed anywhere. scripts/ and docs/ are
+      # excluded: this guard and RELEASE.md deliberately NAME these strings as prose
+      # and patterns — only genuine key material elsewhere should trip the check.
+      if grep -RIlE "untrusted comment: (minisign|rsign) encrypted secret key|TAURI_SIGNING_PRIVATE_KEY[[:space:]]*[:=]|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY" \
+           --exclude-dir=node_modules --exclude-dir=target --exclude-dir=.git \
+           --exclude-dir=scripts --exclude-dir=docs . 2>/dev/null; then
+        echo "private signing key material present in the tree"; hits=1; fi
+      # Key files by extension.
+      if find . -path ./node_modules -prune -o -path ./target -prune -o \
+           \( -name "*.key" -o -name "*.pem" -o -name "*.p12" -o -name "*.minisign" \) -print 2>/dev/null | grep -q .; then
+        echo "a key/cert file is present in the tree"; hits=1; fi
+      exit $hits'
+
 # ---- summary --------------------------------------------------------------
 echo
 echo "───────────────────────────────────────────────"
