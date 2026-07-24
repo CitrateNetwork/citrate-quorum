@@ -1,4 +1,5 @@
 // =====================================================================
+import markBlack from "../assets/brand/citrate_mark_black.svg";
 // citrate-quorum — the Signature Ceremony (QRM-S2D)
 //
 // Ported from design/CitrateQuorum.dc.html §CEREMONY. THE single
@@ -156,7 +157,7 @@ export function CeremonyProvider({ children }: { children: ReactNode }) {
         <div data-register="charter" style={{ width: 640, maxHeight: "90vh", overflow: "auto", background: "#ffffff", color: "var(--tx-1)", borderRadius: 12, boxShadow: "0 24px 64px rgba(14,15,12,.35)", display: "flex", flexDirection: "column" }}>
           {/* header */}
           <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "16px 20px", borderBottom: "2px solid var(--line-strong)" }}>
-            <img src="/src/assets/brand/citrate_mark_black.svg" alt="" style={{ width: 20, height: 20 }} />
+            <img src={markBlack} alt="" style={{ width: 20, height: 20 }} />
             <span className="mono" style={{ fontSize: 11, fontWeight: 500, letterSpacing: ".16em", textTransform: "uppercase" }}>Signature ceremony</span>
             {queue.length > 1 && (
               <span className="mono tabular" style={{ fontSize: 9.5, color: "var(--tx-3)", border: "1px solid var(--line-2)", padding: "1px 7px", borderRadius: 999 }}>queue {queue.length}</span>

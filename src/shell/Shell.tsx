@@ -11,6 +11,8 @@ import { SURFACES } from "../surfaces/registry";
 import { Placeholder } from "../surfaces/Placeholder";
 import { CommandPalette } from "./CommandPalette";
 import { EscalationToast } from "./EscalationToast";
+import markWhite from "../assets/brand/citrate_mark_white.svg";
+import marqueeWhite from "../assets/brand/citrate_marquee_white.svg";
 
 function routeFromHash(): string {
   const h = window.location.hash.replace(/^#\/?/, "");
@@ -56,8 +58,8 @@ export function Shell() {
       {/* sidebar */}
       <div style={{ background: "var(--deep-evergreen)", color: "#cde7d6", display: "flex", flexDirection: "column", minHeight: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "16px 14px 12px" }}>
-          <img src="/src/assets/brand/citrate_mark_white.svg" alt="" style={{ width: 22, height: 22 }} />
-          <img src="/src/assets/brand/citrate_marquee_white.svg" alt="Citrate" style={{ height: 12 }} />
+          <img src={markWhite} alt="" style={{ width: 22, height: 22 }} />
+          <img src={marqueeWhite} alt="Citrate" style={{ height: 12 }} />
           <div style={{ flex: 1 }} />
           <span className="mono" style={{ fontSize: 8.5, letterSpacing: ".18em", color: "rgba(205,231,214,.6)" }}>QUORUM</span>
         </div>

@@ -4,6 +4,7 @@
 // the app. Plus the fail-closed reduced-access state. Charter register.
 import { useEffect, useState } from "react";
 import { LoaderMark } from "../components/LoaderMark";
+import marqueeBlack from "../assets/brand/citrate_marquee_black.svg";
 
 type Phase = "sign" | "resolve" | "tour" | "reduced";
 
@@ -40,7 +41,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         <div className="lattice-dots" style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 24, padding: "48px 24px", textAlign: "center" }}>
           <div style={{ width: 160, height: 160 }}><LoaderMark size={160} /></div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <img src="/src/assets/brand/citrate_marquee_black.svg" alt="Citrate" style={{ height: 18 }} />
+            <img src={marqueeBlack} alt="Citrate" style={{ height: 18 }} />
             <span className="mono" style={{ fontSize: 11, letterSpacing: ".18em", textTransform: "uppercase", color: "var(--tx-2)", border: "1px solid var(--line-2)", padding: "2px 8px" }}>Quorum</span>
           </div>
           <div style={{ maxWidth: 560, display: "flex", flexDirection: "column", gap: 12, alignItems: "center" }}>
