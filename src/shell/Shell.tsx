@@ -4,7 +4,7 @@
 // register-aware: `data-register` flips per the active surface (§2.2), and
 // the ceremony (later) always forces charter. Routes via hash.
 import { useEffect, useState } from "react";
-import { bridge } from "../bridge";
+import { BRIDGE_MODE, bridge } from "../bridge";
 import type { Session } from "../bridge";
 import { NAV, NAV_ITEMS, type NavItem } from "./nav";
 import { SURFACES } from "../surfaces/registry";
@@ -134,7 +134,9 @@ export function Shell() {
           <span>relay {session?.chain.relay ?? "—"}</span>
           <span>anchor {session?.chain.anchorRoot ?? "—"}</span>
           <div style={{ flex: 1 }} />
-          <span>{active.built ? "surface: live (sim)" : "surface: being ported"}</span>
+          {/* Name the adapter actually running. This read "surface: live (sim)"
+              unconditionally, so the packaged Tauri build reported "sim". */}
+          <span>{active.built ? `surface: live (${BRIDGE_MODE})` : "surface: being ported"}</span>
         </div>
       </div>
       <CommandPalette open={palOpen} onClose={() => setPalOpen(false)} onGo={go} />

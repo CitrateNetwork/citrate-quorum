@@ -1,16 +1,26 @@
 // citrate-quorum — escalation toast (QRM-S2D). Ported from design
 // §ESCALATION TOAST. The app's one interrupt: when an agent is blocked, it
 // surfaces immediately, anywhere, in amber, and never auto-dismisses. Charter
-// register. Fires ~14s after mount (the standup's hermes calendar.write block).
+// register.
+//
+// SIM ONLY. Its content is the demo beat's scripted hermes calendar.write
+// block — a specific named agent, a specific refused action. On the prototype
+// adapter that is exactly right; in the packaged app it was a fabricated
+// escalation about an agent that does not exist, shown to a real operator
+// (Rule 1). The live escalation feed is a real ungoverned decision arriving
+// from the ledger, and lands with the agent adapters in QRM-S4.
 import { useEffect, useState } from "react";
+import { BRIDGE_MODE } from "../bridge";
 
 export function EscalationToast({ afterSeconds = 14, onGo }: { afterSeconds?: number; onGo: (id: string) => void }) {
   const [open, setOpen] = useState(false);
+  const scripted = BRIDGE_MODE === "sim";
   useEffect(() => {
+    if (!scripted) return;
     const t = setTimeout(() => setOpen(true), afterSeconds * 1000);
     return () => clearTimeout(t);
-  }, [afterSeconds]);
-  if (!open) return null;
+  }, [afterSeconds, scripted]);
+  if (!open || !scripted) return null;
   return (
     <div data-register="charter" style={{ color: "var(--tx-1)", position: "fixed", right: 18, bottom: 44, width: 400, zIndex: 90, background: "#ffffff", border: "1px solid var(--warn)", borderLeft: "3px solid var(--warn)", boxShadow: "0 12px 40px rgba(14,15,12,.22)", borderRadius: "var(--r-1)" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderBottom: "1px solid var(--line-1)" }}>

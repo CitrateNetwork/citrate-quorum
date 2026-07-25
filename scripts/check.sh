@@ -116,6 +116,37 @@ run "no invoke in surfaces" "no src/surfaces yet (design prototype)" "$HAS_SRC" 
     bash -c '! grep -rn "from \"@tauri-apps/api" src/surfaces src/components 2>/dev/null'
 run "no sim data outside bridge" "no src/surfaces yet (design prototype)" "$HAS_SRC" \
     bash -c '! grep -rln "FIXTURE\|MOCK_\|fakeData" src/surfaces src/components 2>/dev/null'
+# The scan above looks for fixtures by NAME, so it never saw the way fabricated
+# data actually shipped: plain literals inline in a surface. The packaged app
+# rendered "1,204 actions recorded" and "62% budget burn" against a brand-new
+# empty tenant, and this gate was green the whole time.
+#
+# This catches the stat-shaped literals — thousands separators and percentages —
+# which is the form a fabricated metric almost always takes. It CANNOT catch
+# every invented value (a bare "4" is indistinguishable from a real one), so it
+# is a tripwire for the common case, not a proof of honesty. The proof is
+# running the packaged app against an empty tenant and reading what it claims.
+run "no fabricated stats in surfaces" "no src/surfaces yet (design prototype)" "$HAS_SRC" \
+    bash -c '
+      # Thousands-separated literals have no CSS analogue, so they are scanned
+      # everywhere. Percentages are scanned only outside style/geometry context,
+      # where "100%" is a layout value rather than a claim about the world.
+      seps=$(grep -rnE "\"[0-9]{1,3}(,[0-9]{3})+\"" src/surfaces src/components 2>/dev/null || true)
+      pcts=$(grep -rnE "\"[0-9]+(\.[0-9]+)?%\"" src/surfaces src/components 2>/dev/null \
+             | grep -vE "style=|width:|height:|inset:|translate|gradient" || true)
+      hits=$(printf "%s\n%s" "$seps" "$pcts" | grep -v "^$" | grep -v "^\S*:[0-9]*: *//" || true)
+      if [ -n "$hits" ]; then
+        echo "stat-shaped literals in a surface — is this read from the bridge?"
+        echo "$hits"
+        exit 1
+      fi
+      exit 0'
+# React hooks after a top-level conditional return crash at runtime only when
+# that return is taken — a path tsc and happy-path tests never walk. Two of the
+# S2D.4 honesty guards shipped with exactly that bug.
+run "no hooks after early return" "no src/ yet, or no python runner" \
+    "[ -d src ] && command -v ${PYRUN[0]}" \
+    "${PYRUN[@]}" "$ROOT/scripts/check_hooks_after_return.py"
 # Surfaces + components MUST use semantic tokens (var(--...)), never literal hex.
 # src/shell is excluded: the sidebar is fixed evergreen brand chrome that
 # hardcodes the same on-dark palette as citrate-core's Sidebar.tsx (no semantic

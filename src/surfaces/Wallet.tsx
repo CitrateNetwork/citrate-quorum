@@ -5,6 +5,7 @@
 // decision ids, agent spend. Reads bridge.wallet.summary(); signs via ceremony.
 import { useEffect, useMemo, useState } from "react";
 import { bridge } from "../bridge";
+import { DomainErrorPlate, useDomain } from "../components/DomainState";
 import type { Wallet as WalletData } from "../bridge";
 import { useCeremony } from "../ceremony/Ceremony";
 
@@ -16,9 +17,23 @@ export function Wallet() {
   const [panel, setPanel] = useState<"" | "send" | "recv" | "stake">("");
   const [to, setTo] = useState(""); const [amt, setAmt] = useState("");
   const ceremony = useCeremony();
-  useEffect(() => { bridge.wallet.summary().then(setW); }, []);
 
   const over = useMemo(() => parseFloat(amt || "0") > 150, [amt]);
+
+  // Honest failure (S2D.4/§5.1): this surface's primary read is wallet.summary().
+  // A read that cannot succeed must say so and offer a retry, not sit in a
+  // loading state forever.
+  const primary = useDomain(() => bridge.wallet.summary(), "wallet.summary()");
+  useEffect(() => {
+    if (primary.state.status === "ready") setW(primary.state.data);
+  }, [primary.state]);
+  if (primary.state.status === "error") {
+    return (
+      <div style={{ padding: 18 }}>
+        <DomainErrorPlate source="wallet.summary()" error={primary.state.error} onRetry={primary.retry} lands="It needs a live chain." />
+      </div>
+    );
+  }
   const send = async () => {
     const r = await ceremony.request({
       kind: "transfer", title: "Send SALT", origin: "user",

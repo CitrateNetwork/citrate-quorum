@@ -5,6 +5,7 @@
 // logs()/peers() and bridge.session for chain height.
 import { useEffect, useState } from "react";
 import { bridge } from "../bridge";
+import { DomainErrorPlate, useDomain } from "../components/DomainState";
 import type { Block, LogLine, NodePeer, Session } from "../bridge";
 
 const LVL_COLOR: Record<string, string> = { INFO: "var(--ok)", WARN: "var(--warn)", DEBUG: "var(--tx-3)", ERROR: "var(--danger)" };
@@ -18,11 +19,34 @@ export function Node() {
   const [lvl, setLvl] = useState<string>("all");
 
   useEffect(() => {
-    bridge.session.current().then((s) => { setSession(s); setBlocks(bridge.node.blocks(s.chain.height)); });
-    bridge.node.peers().then(setPeers);
-    const unsub = bridge.node.logs((l) => setLogs((p) => [l, ...p].slice(0, 40)));
+    bridge.session.current().then((s) => { setSession(s); setBlocks(bridge.node.blocks(s.chain.height)); }).catch(() => {});
+    
+    // Streams throw synchronously when unwired (they return an Unsubscribe,
+    // so there is no promise to reject). An unguarded subscribe in an effect
+    // takes the whole tree down; the surface's error plate covers the reason.
+    let unsub: (() => void) | undefined;
+    try {
+      unsub = bridge.node.logs((l) => setLogs((p) => [l, ...p].slice(0, 40)));
+    } catch {
+      /* no log stream — peers/blocks still render */
+    }
     return unsub;
   }, []);
+
+  // Honest failure (S2D.4/§5.1): this surface's primary read is node.peers().
+  // A read that cannot succeed must say so and offer a retry, not sit in a
+  // loading state forever.
+  const primary = useDomain(() => bridge.node.peers(), "node.peers()");
+  useEffect(() => {
+    if (primary.state.status === "ready") setPeers(primary.state.data);
+  }, [primary.state]);
+  if (primary.state.status === "error") {
+    return (
+      <div style={{ padding: 18 }}>
+        <DomainErrorPlate source="node.peers()" error={primary.state.error} onRetry={primary.retry} lands="It needs a live node connection." />
+      </div>
+    );
+  }
 
   const chainH = session ? session.chain.height.toLocaleString("en-US") : "…";
   const shownLogs = logs.filter((l) => lvl === "all" || l.lvl === lvl);

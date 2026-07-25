@@ -5,6 +5,7 @@
 // and the bridge.rooms.events transcript stream; humans and agents are peers.
 import { useEffect, useMemo, useState } from "react";
 import { bridge } from "../bridge";
+import { DomainErrorPlate, useDomain } from "../components/DomainState";
 import type { Room, RoomEvent, RosterMember } from "../bridge";
 import { VENDORS } from "../theme/vendors";
 
@@ -37,12 +38,17 @@ export function Rooms() {
   const [events, setEvents] = useState<RoomEvent[]>([]);
   const [roster, setRoster] = useState<RosterMember[]>([]);
 
-  useEffect(() => { bridge.rooms.list().then(setRooms); bridge.rooms.roster("r-std4").then(setRoster); }, []);
+  useEffect(() => { bridge.rooms.roster("r-std4").then(setRoster).catch(() => {}); }, []);
 
   useEffect(() => {
     if (view !== "room") return;
     setEvents([]);
-    const unsub = bridge.rooms.events((e) => setEvents((p) => [...p, e]));
+    let unsub: (() => void) | undefined;
+    try {
+      unsub = bridge.rooms.events((e) => setEvents((p) => [...p, e]));
+    } catch {
+      /* no transcript stream until the relay is wired (QRM-S3) */
+    }
     return unsub;
   }, [view]);
 
@@ -57,6 +63,21 @@ export function Rooms() {
     const tot = casts.reduce((a, c) => a + (c.weight ?? 0), 0) || 100;
     return { q: open.text!.replace("Vote opened — ", ""), casts, forW, abstW, tot, result: close?.text ?? null };
   }, [events]);
+
+  // Honest failure (S2D.4/§5.1): this surface's primary read is rooms.list().
+  // A read that cannot succeed must say so and offer a retry, not sit in a
+  // loading state forever.
+  const primary = useDomain(() => bridge.rooms.list(), "rooms.list()");
+  useEffect(() => {
+    if (primary.state.status === "ready") setRooms(primary.state.data);
+  }, [primary.state]);
+  if (primary.state.status === "error") {
+    return (
+      <div style={{ padding: 18 }}>
+        <DomainErrorPlate source="rooms.list()" error={primary.state.error} onRetry={primary.retry} lands="It lands in QRM-S3 (rooms), which is gated on the G1 export-control legal opinion." />
+      </div>
+    );
+  }
 
   const whoColor = (who?: string, human?: boolean) => whoColorFrom(roster, who, human);
   const escalation = events.find((e) => e.kind === "tool" && e.escalate);

@@ -5,6 +5,7 @@
 // Reads bridge.meetings.list()/get(); ratify routes through useCeremony().
 import { useEffect, useState } from "react";
 import { bridge } from "../bridge";
+import { DomainErrorPlate, useDomain } from "../components/DomainState";
 import type { Meeting, MeetingDetail } from "../bridge";
 import { useCeremony } from "../ceremony/Ceremony";
 
@@ -23,12 +24,26 @@ export function Meetings() {
   const [ratified, setRatified] = useState(false);
   const ceremony = useCeremony();
 
-  useEffect(() => { bridge.meetings.list().then(setMeetings); }, []);
+
+  // Honest failure (S2D.4/§5.1): this surface's primary read is meetings.list().
+  // A read that cannot succeed must say so and offer a retry, not sit in a
+  // loading state forever.
+  const primary = useDomain(() => bridge.meetings.list(), "meetings.list()");
+  useEffect(() => {
+    if (primary.state.status === "ready") setMeetings(primary.state.data);
+  }, [primary.state]);
+  if (primary.state.status === "error") {
+    return (
+      <div style={{ padding: 18 }}>
+        <DomainErrorPlate source="meetings.list()" error={primary.state.error} onRetry={primary.retry} lands="It lands in QRM-S5 (meetings + minutes)." />
+      </div>
+    );
+  }
 
   const open = (m: Meeting) => {
     setSelectedState(m.state);
     setRatified(m.state === "ratified");
-    bridge.meetings.get(m.id).then(setDetail);
+    bridge.meetings.get(m.id).then(setDetail).catch(() => {});
   };
 
   const ratify = async () => {

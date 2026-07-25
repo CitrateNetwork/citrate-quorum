@@ -6,6 +6,7 @@
 // bridge.governance.*.
 import { useEffect, useMemo, useState } from "react";
 import { bridge } from "../bridge";
+import { DomainErrorPlate, useDomain } from "../components/DomainState";
 import type {
   IngestFile, InterviewTurn, Protocol, Simulation, SpecClause,
 } from "../bridge";
@@ -29,11 +30,19 @@ export function Governance() {
   const ceremony = useCeremony();
 
   useEffect(() => {
-    bridge.governance.ingest().then(setIngest);
-    bridge.governance.interview().then(setInterview);
-    bridge.governance.clauses().then(setClauses);
-    bridge.governance.protocols().then(setProtocols);
+    bridge.governance.ingest().then(setIngest).catch(() => {});
+    bridge.governance.interview().then(setInterview).catch(() => {});
+    bridge.governance.clauses().then(setClauses).catch(() => {});
+    
   }, []);
+
+  // Honest failure (S2D.4/§5.1): this surface's primary read is governance.protocols().
+  // A read that cannot succeed must say so and offer a retry, not sit in a
+  // loading state forever.
+  const primary = useDomain(() => bridge.governance.protocols(), "governance.protocols()");
+  useEffect(() => {
+    if (primary.state.status === "ready") setProtocols(primary.state.data);
+  }, [primary.state]);
 
   const runSim = () => {
     setSimState("running");
@@ -77,6 +86,17 @@ export function Governance() {
     ["Escalation", "in-room → CCB after 24h"],
     ["Exceptions", "C4 retaliation — unmapped, T-request filed"],
   ] as [string, string][], []);
+
+  // Placed after EVERY hook: an early return above a useMemo makes the
+  // hook run conditionally, and React crashes with "rendered fewer hooks
+  // than expected" the moment this read fails.
+  if (primary.state.status === "error") {
+    return (
+      <div style={{ padding: 18 }}>
+        <DomainErrorPlate source="governance.protocols()" error={primary.state.error} onRetry={primary.retry} lands="It lands in QRM-S7 (authoring pipeline), on the contracts from QRM-S6." />
+      </div>
+    );
+  }
 
   return (
     <div style={{ padding: "22px 26px", display: "flex", flexDirection: "column", gap: 16, maxWidth: 1120 }}>

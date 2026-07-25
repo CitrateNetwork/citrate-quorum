@@ -4,6 +4,7 @@
 // timeline, time-travel, and the auditor evidence pack. Reads bridge.ledger.*.
 import { useEffect, useMemo, useState } from "react";
 import { bridge } from "../bridge";
+import { DomainErrorPlate, useDomain } from "../components/DomainState";
 import type { CorrelationEvent, Decision, DecisionDetail } from "../bridge";
 
 type View = "ribbon" | "decision" | "correlation";
@@ -48,17 +49,30 @@ export function Ledger() {
   const [exportOpen, setExportOpen] = useState(false);
 
   useEffect(() => {
-    bridge.ledger.query().then(setRows);
-    const unsub = bridge.ledger.stream((d) => setRows((p) => [d, ...p].slice(0, 60)));
+    
+    let unsub: (() => void) | undefined;
+    try {
+      unsub = bridge.ledger.stream((d) => setRows((p) => [d, ...p].slice(0, 60)));
+    } catch {
+      /* the query above already populated the table */
+    }
     return unsub;
   }, []);
 
+  // Honest failure (S2D.4/§5.1): this surface's primary read is ledger.query().
+  // A read that cannot succeed must say so and offer a retry, not sit in a
+  // loading state forever.
+  const primary = useDomain(() => bridge.ledger.query(), "ledger.query()");
+  useEffect(() => {
+    if (primary.state.status === "ready") setRows(primary.state.data);
+  }, [primary.state]);
+
   const openDecision = (id: string) => {
-    bridge.ledger.decision(id).then(setDetail);
+    bridge.ledger.decision(id).then(setDetail).catch(() => {});
     setView("decision");
   };
   const openCorrelation = () => {
-    bridge.ledger.correlation("X-7104").then(setCorr);
+    bridge.ledger.correlation("X-7104").then(setCorr).catch(() => {});
     setView("correlation");
   };
 
@@ -67,6 +81,17 @@ export function Ledger() {
       rows.filter((r) => (ungOnly ? r.verdict === "ungoverned" : true)).filter((r) => (verdict === "all" ? true : r.verdict === verdict)),
     [rows, ungOnly, verdict],
   );
+
+  // Placed after EVERY hook: an early return above a useMemo makes the
+  // hook run conditionally, and React crashes with "rendered fewer hooks
+  // than expected" the moment this read fails.
+  if (primary.state.status === "error") {
+    return (
+      <div style={{ padding: 18 }}>
+        <DomainErrorPlate source="ledger.query()" error={primary.state.error} onRetry={primary.retry} />
+      </div>
+    );
+  }
 
   const tabBtn = (v: View, label: string, onClick: () => void) => {
     const on = view === v;

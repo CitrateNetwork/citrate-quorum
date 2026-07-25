@@ -1,11 +1,17 @@
-// citrate-quorum — Dashboard surface (QRM-S2D). Instrument register.
-// Ported from design/CitrateQuorum.dc.html §DASHBOARD. Reads real (sim) data
-// through the bridge: session posture, the streaming decision ribbon, the
-// "needs you" queue, and the risk strip. Every number states its source
-// (Rule 11) via the ribbon footer.
+// citrate-quorum — Dashboard surface (QRM-S2D, honesty pass S2D.4).
+// Ported from design/CitrateQuorum.dc.html §DASHBOARD. Instrument register.
+//
+// EVERY TILE STATES ITS SOURCE (Rule 11) AND SHOWS NOTHING IT CANNOT READ
+// (Rule 1). The prototype shipped plausible constants here — "1,204 actions
+// recorded", "62% budget burn", "1 open contradiction" — which rendered
+// unchanged against a brand-new empty tenant in the packaged app. A dashboard
+// that invents its own numbers is the exact failure this product exists to
+// prevent, so tiles now derive from a real read or show an em dash naming the
+// call that would fill them.
 import { useEffect, useState } from "react";
 import { bridge } from "../bridge";
 import type { Decision, Session } from "../bridge";
+import { DomainErrorPlate, useDomain } from "../components/DomainState";
 
 const VERDICT_COLOR: Record<string, string> = {
   allow: "var(--ok)",
@@ -20,9 +26,19 @@ const HIC_COLOR: Record<string, string> = {
   X: "var(--danger)",
 };
 
+/** The risk strip's slots and the read each one waits on (Rule 11). */
+const RISK_SLOTS = [
+  { label: "Contradictions", source: "ContradictionLedger · QRM-S6" },
+  { label: "Expiring grants", source: "agents.grants() · QRM-S4" },
+  { label: "Budget", source: "agents.grants() · QRM-S4" },
+  { label: "Templates", source: "governance.protocols() · QRM-S7" },
+] as const;
+
 interface Tile {
   label: string;
-  value: string;
+  /** null = no live source for this number yet; the tile shows an em dash. */
+  value: string | null;
+  /** What the number means when present, or which call would supply it. */
   sub: string;
   color: string;
   top: string;
@@ -31,34 +47,45 @@ interface Tile {
 export function Dashboard({ onGo }: { onGo: (id: string) => void }) {
   const [session, setSession] = useState<Session | null>(null);
   const [ribbon, setRibbon] = useState<Decision[]>([]);
+  /** The full ledger read backs the counts; the stream keeps them moving. */
+  const ledger = useDomain(() => bridge.ledger.query(), "ledger.query()");
 
   useEffect(() => {
-    bridge.session.current().then(setSession);
-    bridge.ledger.query().then((rows) => setRibbon(rows.slice(0, 8)));
-    // Live stream: prepend new decisions, cap the visible window.
-    const unsub = bridge.ledger.stream((d) =>
-      setRibbon((prev) => [d, ...prev].slice(0, 8)),
-    );
-    return unsub;
+    // Session posture is optional chrome here — its absence must not blank the
+    // dashboard, so a failure just leaves the block-height note unresolved.
+    Promise.resolve()
+      .then(() => bridge.session.current())
+      .then(setSession)
+      .catch(() => setSession(null));
   }, []);
 
-  const ungoverned = ribbon.filter((r) => r.verdict === "ungoverned").length;
-  const pending = ribbon.filter((r) => r.verdict === "require-approval").length;
+  useEffect(() => {
+    if (ledger.state.status !== "ready") return;
+    setRibbon(ledger.state.data.slice(0, 8));
+    let unsub: (() => void) | undefined;
+    try {
+      unsub = bridge.ledger.stream((d) => setRibbon((prev) => [d, ...prev].slice(0, 8)));
+    } catch {
+      // No stream is survivable — the query above already populated the ribbon.
+    }
+    return unsub;
+  }, [ledger.state]);
+
+  const all = ledger.state.status === "ready" ? ledger.state.data : [];
+  const ungoverned = all.filter((r) => r.verdict === "ungoverned").length;
+  const pending = all.filter((r) => r.verdict === "require-approval").length;
+  const known = ledger.state.status === "ready";
 
   const tiles: Tile[] = [
-    { label: "Governed today", value: "1,204", sub: "actions recorded", color: "var(--tx-1)", top: "var(--accent)" },
-    { label: "Pending approvals", value: String(pending), sub: "in your ceremony queue", color: pending ? "var(--warn)" : "var(--tx-1)", top: pending ? "var(--warn)" : "var(--line-2)" },
-    { label: "Ungoverned", value: String(ungoverned), sub: "no live grant — review", color: ungoverned ? "var(--danger)" : "var(--tx-1)", top: ungoverned ? "var(--danger)" : "var(--line-2)" },
-    { label: "Active agents", value: "4", sub: "1 probation · 1 quarantined", color: "var(--tx-1)", top: "var(--info)" },
-    { label: "Budget burn", value: "62%", sub: "of weekly envelope", color: "var(--tx-1)", top: "var(--info)" },
-    { label: "Next meeting", value: "09:00", sub: "Standup — Line-4", color: "var(--tx-1)", top: "var(--line-2)" },
-  ];
-
-  const risks = [
-    { label: "Contradictions", text: "1 open — Line-4 coverage (84.2% vs 78.9%)", color: "var(--warn)" },
-    { label: "Expiring grants", text: "3 grants expire within 7 days", color: "var(--warn)" },
-    { label: "Budget", text: "codex at 90% of its weekly envelope", color: "var(--warn)" },
-    { label: "Deprecated template", text: "PRT-001 uses a deprecated template", color: "var(--danger)" },
+    // Real, from the tenant's own evidence chain.
+    { label: "Governed", value: known ? String(all.length) : null, sub: "decisions recorded · ledger.query()", color: "var(--tx-1)", top: "var(--accent)" },
+    { label: "Pending approvals", value: known ? String(pending) : null, sub: "in your ceremony queue", color: pending ? "var(--warn)" : "var(--tx-1)", top: pending ? "var(--warn)" : "var(--line-2)" },
+    { label: "Ungoverned", value: known ? String(ungoverned) : null, sub: "no live grant — review", color: ungoverned ? "var(--danger)" : "var(--tx-1)", top: ungoverned ? "var(--danger)" : "var(--line-2)" },
+    // No live source yet. An em dash and the call that would fill it — never a
+    // plausible number (Rule 1).
+    { label: "Active agents", value: null, sub: "needs agents.list() · QRM-S4", color: "var(--tx-1)", top: "var(--info)" },
+    { label: "Budget burn", value: null, sub: "needs agents.grants() · QRM-S4", color: "var(--tx-1)", top: "var(--info)" },
+    { label: "Next meeting", value: null, sub: "needs meetings.list() · QRM-S5", color: "var(--tx-1)", top: "var(--line-2)" },
   ];
 
   return (
@@ -68,7 +95,13 @@ export function Dashboard({ onGo }: { onGo: (id: string) => void }) {
         {tiles.map((st) => (
           <div key={st.label} className="surface" style={{ padding: "12px 14px", display: "flex", flexDirection: "column", gap: 6, borderTop: `2px solid ${st.top}` }}>
             <span className="mono" style={{ fontSize: 9, letterSpacing: ".13em", textTransform: "uppercase", color: "var(--tx-3)" }}>{st.label}</span>
-            <span className="tabular" style={{ fontFamily: "var(--font-display)", fontWeight: 460, fontSize: 24, color: st.color }}>{st.value}</span>
+            <span
+              className="tabular"
+              style={{ fontFamily: "var(--font-display)", fontWeight: 460, fontSize: 24, color: st.value === null ? "var(--tx-3)" : st.color }}
+              title={st.value === null ? "no live source for this number yet" : undefined}
+            >
+              {st.value ?? "—"}
+            </span>
             <span className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)" }}>{st.sub}</span>
           </div>
         ))}
@@ -80,7 +113,11 @@ export function Dashboard({ onGo }: { onGo: (id: string) => void }) {
           <span className="eyebrow">Needs you</span>
           <span className="mono tabular" style={{ fontSize: 10, color: pending ? "var(--warn)" : "var(--tx-3)" }}>{pending}</span>
         </div>
-        {pending === 0 ? (
+        {ledger.state.status === "error" ? (
+          <div style={{ padding: 14 }}>
+            <DomainErrorPlate source="ledger.query()" error={ledger.state.error} onRetry={ledger.retry} />
+          </div>
+        ) : pending === 0 && known ? (
           <div style={{ padding: "22px 14px", display: "flex", alignItems: "center", gap: 12 }}>
             <span style={{ width: 22, height: 22, borderRadius: 999, background: "var(--ok-bg)", border: "1px solid var(--ok)", color: "var(--ok)", display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
               <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M5 12 L10 17 L19 8" /></svg>
@@ -89,6 +126,8 @@ export function Dashboard({ onGo }: { onGo: (id: string) => void }) {
               Nothing is waiting on you. Every agent is inside its envelope — this is the state the system is designed to hold.
             </span>
           </div>
+        ) : !known ? (
+          <div className="mono" style={{ padding: "18px 14px", fontSize: 11, color: "var(--tx-3)" }}>reading ledger.query()…</div>
         ) : (
           ribbon.filter((r) => r.verdict === "require-approval").map((r) => (
             <div key={r.id} onClick={() => onGo("ledger")} style={{ display: "flex", alignItems: "center", gap: 12, padding: "9px 14px", borderBottom: "1px solid var(--line-1)", cursor: "pointer" }}>
@@ -127,12 +166,15 @@ export function Dashboard({ onGo }: { onGo: (id: string) => void }) {
         </div>
       </div>
 
-      {/* risk strip */}
+      {/* risk strip — the four signals it will carry, each naming the read that
+          will produce it. Empty until those land; a risk board that invents its
+          own risks is worse than no risk board. */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10 }}>
-        {risks.map((rk) => (
-          <div key={rk.label} className="surface" style={{ padding: "12px 14px", display: "flex", flexDirection: "column", gap: 6, borderTop: `2px solid ${rk.color}` }}>
-            <span className="mono" style={{ fontSize: 9, letterSpacing: ".13em", textTransform: "uppercase", color: rk.color }}>{rk.label}</span>
-            <span style={{ fontSize: 12.5, lineHeight: 1.45, color: "var(--tx-2)" }}>{rk.text}</span>
+        {RISK_SLOTS.map((rk) => (
+          <div key={rk.label} className="surface" style={{ padding: "12px 14px", display: "flex", flexDirection: "column", gap: 6, borderTop: "2px solid var(--line-2)" }}>
+            <span className="mono" style={{ fontSize: 9, letterSpacing: ".13em", textTransform: "uppercase", color: "var(--tx-3)" }}>{rk.label}</span>
+            <span style={{ fontSize: 12.5, lineHeight: 1.45, color: "var(--tx-3)" }}>No signal yet</span>
+            <span className="mono" style={{ fontSize: 9, color: "var(--tx-3)" }}>{rk.source}</span>
           </div>
         ))}
       </div>

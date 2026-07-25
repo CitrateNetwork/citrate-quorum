@@ -4,6 +4,7 @@
 // a governed-field sync conflict, and scheduling. Reads bridge.calendar.*.
 import { useEffect, useMemo, useState } from "react";
 import { bridge } from "../bridge";
+import { DomainErrorPlate, useDomain } from "../components/DomainState";
 import type { CalAccount, CalEvent } from "../bridge";
 
 const CLS_COLOR: Record<string, string> = { Public: "var(--z-silver)", Proprietary: "var(--info)", CUI: "var(--warn)", ITAR: "var(--danger)" };
@@ -12,7 +13,7 @@ const DOWS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 export function Calendar() {
   const [accounts, setAccounts] = useState<CalAccount[]>([]);
   const [events, setEvents] = useState<CalEvent[]>([]);
-  useEffect(() => { bridge.calendar.accounts().then(setAccounts); bridge.calendar.events().then(setEvents); }, []);
+  useEffect(() => { bridge.calendar.events().then(setEvents).catch(() => {}); }, []);
 
   // July 2026 starts on a Wednesday (offset 3); 31 days.
   const cells = useMemo(() => {
@@ -24,6 +25,21 @@ export function Calendar() {
     while (out.length % 7 !== 0) out.push({ d: null, evs: [] });
     return out;
   }, [events]);
+
+  // Honest failure (S2D.4/§5.1): this surface's primary read is calendar.accounts().
+  // A read that cannot succeed must say so and offer a retry, not sit in a
+  // loading state forever.
+  const primary = useDomain(() => bridge.calendar.accounts(), "calendar.accounts()");
+  useEffect(() => {
+    if (primary.state.status === "ready") setAccounts(primary.state.data);
+  }, [primary.state]);
+  if (primary.state.status === "error") {
+    return (
+      <div style={{ padding: 18 }}>
+        <DomainErrorPlate source="calendar.accounts()" error={primary.state.error} onRetry={primary.retry} lands="It lands in QRM-S8 (calendar + repos)." />
+      </div>
+    );
+  }
 
   return (
     <div style={{ padding: "20px 24px", display: "grid", gridTemplateColumns: "1fr 300px", gap: 16 }}>

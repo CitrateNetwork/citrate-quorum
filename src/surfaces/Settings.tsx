@@ -6,6 +6,7 @@
 // Compliance. Reads bridge.settings.tenancy().
 import { useEffect, useState } from "react";
 import { bridge } from "../bridge";
+import { DomainErrorPlate, useDomain } from "../components/DomainState";
 import type { TenancyNode } from "../bridge";
 
 type Tab = "tenancy" | "identity" | "models" | "license" | "compliance";
@@ -14,7 +15,21 @@ const CLS_COLOR: Record<string, string> = { Public: "var(--z-silver)", Proprieta
 export function Settings({ onGo }: { onGo: (id: string) => void }) {
   const [tab, setTab] = useState<Tab>("tenancy");
   const [tenancy, setTenancy] = useState<TenancyNode[]>([]);
-  useEffect(() => { bridge.settings.tenancy().then(setTenancy); }, []);
+
+  // Honest failure (S2D.4/§5.1): this surface's primary read is settings.tenancy().
+  // A read that cannot succeed must say so and offer a retry, not sit in a
+  // loading state forever.
+  const primary = useDomain(() => bridge.settings.tenancy(), "settings.tenancy()");
+  useEffect(() => {
+    if (primary.state.status === "ready") setTenancy(primary.state.data);
+  }, [primary.state]);
+  if (primary.state.status === "error") {
+    return (
+      <div style={{ padding: 18 }}>
+        <DomainErrorPlate source="settings.tenancy()" error={primary.state.error} onRetry={primary.retry} lands="It reads TenantHierarchy on chain and needs a live chain." />
+      </div>
+    );
+  }
 
   const tabBtn = (t: Tab, label: string) => {
     const on = tab === t;

@@ -5,6 +5,7 @@
 // (issue/revoke via the ceremony), and the kill switch. Reads bridge.agents.*.
 import { Fragment, useEffect, useState } from "react";
 import { bridge } from "../bridge";
+import { DomainErrorPlate, useDomain } from "../components/DomainState";
 import type { Agent, Grant } from "../bridge";
 import { VENDORS } from "../theme/vendors";
 import { useCeremony } from "../ceremony/Ceremony";
@@ -22,11 +23,25 @@ export function Agents() {
   const [revoked, setRevoked] = useState<Set<string>>(new Set());
   const ceremony = useCeremony();
 
-  useEffect(() => { bridge.agents.list().then(setFleet); }, []);
+
+  // Honest failure (S2D.4/§5.1): this surface's primary read is agents.list().
+  // A read that cannot succeed must say so and offer a retry, not sit in a
+  // loading state forever.
+  const primary = useDomain(() => bridge.agents.list(), "agents.list()");
+  useEffect(() => {
+    if (primary.state.status === "ready") setFleet(primary.state.data);
+  }, [primary.state]);
+  if (primary.state.status === "error") {
+    return (
+      <div style={{ padding: 18 }}>
+        <DomainErrorPlate source="agents.list()" error={primary.state.error} onRetry={primary.retry} lands="It lands in QRM-S4 (agent adapter layer)." />
+      </div>
+    );
+  }
 
   const open = (a: Agent) => {
     setSel(a); setRevoked(new Set());
-    bridge.agents.grants(a.id).then(setGrants);
+    bridge.agents.grants(a.id).then(setGrants).catch(() => {});
   };
 
   const revokeGrant = async (g: Grant) => {

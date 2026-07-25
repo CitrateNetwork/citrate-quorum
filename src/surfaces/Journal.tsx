@@ -4,15 +4,31 @@
 // bridge.journal.list()/brief().
 import { useEffect, useState } from "react";
 import { bridge } from "../bridge";
+import { DomainErrorPlate, useDomain } from "../components/DomainState";
 import type { JournalEntry, StandupBrief } from "../bridge";
 
 export function Journal() {
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [brief, setBrief] = useState<StandupBrief | null>(null);
   useEffect(() => {
-    bridge.journal.list().then(setEntries);
-    bridge.journal.brief("claude-code", "m-0723").then(setBrief);
+    
+    bridge.journal.brief("claude-code", "m-0723").then(setBrief).catch(() => {});
   }, []);
+
+  // Honest failure (S2D.4/§5.1): this surface's primary read is journal.list().
+  // A read that cannot succeed must say so and offer a retry, not sit in a
+  // loading state forever.
+  const primary = useDomain(() => bridge.journal.list(), "journal.list()");
+  useEffect(() => {
+    if (primary.state.status === "ready") setEntries(primary.state.data);
+  }, [primary.state]);
+  if (primary.state.status === "error") {
+    return (
+      <div style={{ padding: 18 }}>
+        <DomainErrorPlate source="journal.list()" error={primary.state.error} onRetry={primary.retry} lands="It lands in QRM-S5 (meetings + minutes)." />
+      </div>
+    );
+  }
   return (
     <div style={{ padding: "20px 24px", display: "grid", gridTemplateColumns: "1fr 340px", gap: 16, maxWidth: 1080 }}>
       <div className="surface" style={{ display: "flex", flexDirection: "column", height: "fit-content" }}>

@@ -5,6 +5,7 @@
 // bridge.repos.list()/prs()/peek().
 import { useEffect, useState } from "react";
 import { bridge } from "../bridge";
+import { DomainErrorPlate, useDomain } from "../components/DomainState";
 import type { Peek, Pr, Repo } from "../bridge";
 
 const CHECK_COLOR: Record<string, string> = { green: "var(--ok)", running: "var(--warn)", amber: "var(--warn)", red: "var(--danger)" };
@@ -13,7 +14,22 @@ export function Repos() {
   const [repos, setRepos] = useState<Repo[]>([]);
   const [prs, setPrs] = useState<Pr[]>([]);
   const [peek, setPeek] = useState<Peek | null>(null);
-  useEffect(() => { bridge.repos.list().then(setRepos); bridge.repos.prs().then(setPrs); bridge.repos.peek("").then(setPeek); }, []);
+  useEffect(() => { bridge.repos.prs().then(setPrs).catch(() => {}); bridge.repos.peek("").then(setPeek).catch(() => {}); }, []);
+
+  // Honest failure (S2D.4/§5.1): this surface's primary read is repos.list().
+  // A read that cannot succeed must say so and offer a retry, not sit in a
+  // loading state forever.
+  const primary = useDomain(() => bridge.repos.list(), "repos.list()");
+  useEffect(() => {
+    if (primary.state.status === "ready") setRepos(primary.state.data);
+  }, [primary.state]);
+  if (primary.state.status === "error") {
+    return (
+      <div style={{ padding: 18 }}>
+        <DomainErrorPlate source="repos.list()" error={primary.state.error} onRetry={primary.retry} lands="It lands in QRM-S8 (calendar + repos)." />
+      </div>
+    );
+  }
   return (
     <div style={{ padding: 18, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
