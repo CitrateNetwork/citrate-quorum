@@ -506,10 +506,18 @@ impl QuorumBackend {
         let decision = evaluate(&action, grants, now_ms);
 
         let ungoverned = decision.verdict == Verdict::Ungoverned;
-        // I-4: a governed record must name the accountable human. Without one
-        // there is no authority to walk the action back to, so say that plainly
-        // rather than emitting a record the chain will reject as inconsistent.
-        if !ungoverned && input.principal.is_none() {
+
+        // I-4: a governed record must name the accountable human — and that
+        // name comes from the GRANT, not from the agent's own claim about
+        // itself. An operator signed the grant naming who stands behind it; an
+        // agent reporting its own principal would be authority by assertion.
+        let accountable = decision.grant_id.as_ref().and_then(|gid| {
+            self.grants
+                .get(&key)
+                .and_then(|gs| gs.iter().find(|g| &g.id == gid))
+                .map(|g| g.principal.clone())
+        });
+        if !ungoverned && accountable.is_none() {
             return Err(
                 "a governed action must name an accountable principal — no identity resolved"
                     .to_string(),
@@ -517,11 +525,7 @@ impl QuorumBackend {
         }
         let record = DecisionRecord {
             agent: input.agent.clone(),
-            principal: if ungoverned {
-                None
-            } else {
-                input.principal.clone()
-            },
+            principal: if ungoverned { None } else { accountable },
             grant_id: if ungoverned {
                 None
             } else {
@@ -2053,24 +2057,37 @@ mod tests {
     }
 
     #[test]
-    fn a_governed_action_without_a_principal_is_refused_not_recorded() {
+    fn the_accountable_human_comes_from_the_grant_not_from_the_agent() {
         let mut b = QuorumBackend::default();
+        // The operator signed this grant naming themselves as accountable.
         b.issue_grant(
             &grant("sbt-41", &["repo.write"], "CUI", 100, "2"),
             &t("bca"),
             0,
         )
         .unwrap();
-        let mut a = action("sbt-41", "repo.write", "Public", 1);
-        a.principal = None;
-        let err = b
-            .evaluate_and_record(&a, &t("bca"), 1000)
-            .expect_err("a governed record must name its authority (I-4)");
-        assert!(err.contains("accountable principal"), "honest error: {err}");
-        assert!(
-            b.ledger_rows("bca").iter().all(|r| r.cls == "grant.issue"),
-            "nothing half-recorded on the way out — only the grant issuance itself"
-        );
+
+        // The agent claims someone else entirely — and reports no principal at
+        // all in the second case. Neither claim is load-bearing.
+        let mut lying = action("sbt-41", "repo.write", "Public", 1);
+        lying.principal = Some("Someone Else".into());
+        let d = b.evaluate_and_record(&lying, &t("bca"), 1000).unwrap();
+        assert_eq!(d.verdict, "allow");
+
+        let mut silent = action("sbt-41", "repo.write", "Public", 1);
+        silent.principal = None;
+        b.evaluate_and_record(&silent, &t("bca"), 1100).unwrap();
+
+        let rows = b.ledger_rows("bca");
+        let governed: Vec<&LedgerRow> = rows.iter().filter(|r| r.cls == "repo.write").collect();
+        assert_eq!(governed.len(), 2);
+        for r in governed {
+            assert_eq!(
+                r.principal, "R. Ortiz",
+                "the record must name the grant's principal — an agent naming its own \
+                 accountable human would be authority by assertion"
+            );
+        }
     }
 
     // ---- durability: what survives a restart -------------------------
