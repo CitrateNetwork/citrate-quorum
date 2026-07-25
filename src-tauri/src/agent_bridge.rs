@@ -464,6 +464,7 @@ mod tests {
             &GrantInput {
                 id: "G-1".into(),
                 agent: "claude-code".into(),
+                issued_by: "R. Ortiz".into(),
                 principal: "R. Ortiz".into(),
                 tenant_scope: "t3:bca".into(),
                 action_classes: vec!["repo.write".into(), "spend".into()],
@@ -473,6 +474,7 @@ mod tests {
                 hic: "2".into(),
             },
             &quorum_tenancy::TenantId::new("bca").unwrap(),
+            0,
         )
         .unwrap();
         Mutex::new(b)
@@ -513,10 +515,11 @@ mod tests {
     fn an_intent_without_a_bearer_is_refused() {
         let t = BridgeToken::mint();
         let b = backend_with_grant();
+        let before = b.lock().unwrap().ledger_rows("bca").len();
         let r = post(None, &intent_json("repo.write", 1), &t, &b);
         assert_eq!(r.status, 401);
         // Nothing was recorded: an unauthenticated caller is not an agent.
-        assert_eq!(b.lock().unwrap().ledger_rows("bca").len(), 0);
+        assert_eq!(b.lock().unwrap().ledger_rows("bca").len(), before);
     }
 
     #[test]
@@ -560,8 +563,10 @@ mod tests {
         assert_eq!(v["verdict"], "allow");
         assert_eq!(v["may_proceed"], true);
         assert_eq!(v["grant_id"], "G-1");
-        // Recorded BEFORE the agent acts — the record exists already.
-        assert_eq!(b.lock().unwrap().ledger_rows("bca").len(), 1);
+        // Recorded BEFORE the agent acts — the decision is already on the chain
+        // (after the grant.issue record the fixture's grant produced).
+        let rows = b.lock().unwrap().ledger_rows("bca");
+        assert_eq!(rows.last().map(|r| r.cls.as_str()), Some("repo.write"));
     }
 
     /// NOTE: the grant's budget must actually cover the spend, or `covers()`
@@ -690,6 +695,7 @@ mod tests {
     fn polling_a_decision_requires_the_bearer_and_cannot_change_anything() {
         let t = BridgeToken::mint();
         let b = backend_with_grant();
+        let before = b.lock().unwrap().ledger_rows("bca").len();
         let r = handle("GET", "/decision/0", None, "", &t, &b, 1000);
         assert_eq!(r.status, 401);
         // A nonsense id is a clean 400, not a panic.
@@ -714,7 +720,11 @@ mod tests {
             1000,
         );
         assert_eq!(unknown.status, 404);
-        assert_eq!(b.lock().unwrap().ledger_rows("bca").len(), 0);
+        assert_eq!(
+            b.lock().unwrap().ledger_rows("bca").len(),
+            before,
+            "reading a decision must not write one"
+        );
     }
 
     #[test]
@@ -740,9 +750,10 @@ mod tests {
     fn a_malformed_intent_is_a_400_and_records_nothing() {
         let t = BridgeToken::mint();
         let b = backend_with_grant();
+        let before = b.lock().unwrap().ledger_rows("bca").len();
         let r = post(Some(current(&t).as_str()), "not json", &t, &b);
         assert_eq!(r.status, 400);
-        assert_eq!(b.lock().unwrap().ledger_rows("bca").len(), 0);
+        assert_eq!(b.lock().unwrap().ledger_rows("bca").len(), before);
     }
 
     #[test]

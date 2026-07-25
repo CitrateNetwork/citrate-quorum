@@ -83,30 +83,47 @@ export interface AgentReputation {
   budget: RepMetric;
   grader: RepMetric;
 }
+/**
+ * An agent in the fleet.
+ *
+ * The first block is what this tenant can KNOW from its own evidence — grants
+ * it issued and decisions it recorded. Everything below is the `AgentSBT`
+ * registry's to say (vendor, model, sandbox, capsules, reputation), and is
+ * OPTIONAL because that registry is a chain read that has not landed. A surface
+ * renders an absent field as "—" naming its source; it never invents one.
+ */
 export interface Agent {
   id: string;
   name: string;
-  vendor: string;
-  sbt: string;
-  hic: number;
+  /** Live (unrevoked) capability grants. */
   grants: number;
   budgetUsed: number;
   budgetCap: number;
-  lastActive: string;
-  disputeRate: string;
-  status: AgentStatus;
-  did: string;
-  pubkey: string;
-  org: string;
-  model: string;
-  lora: string;
-  transport: "MCP" | "A2A" | "CLI";
-  sandbox: string;
-  egress: string;
-  capsules: Capsule[];
-  reputation: AgentReputation;
+  /** Decisions recorded for this agent in this tenant. */
+  decisions?: number;
+  /** How many of those had no live grant behind them. */
+  ungoverned?: number;
+
+  // ---- from the AgentSBT registry (chain) — absent until it is wired ----
+  vendor?: string;
+  sbt?: string;
+  hic?: number;
+  lastActive?: string;
+  disputeRate?: string;
+  status?: AgentStatus;
+  did?: string;
+  pubkey?: string;
+  org?: string;
+  model?: string;
+  lora?: string;
+  transport?: "MCP" | "A2A" | "CLI";
+  sandbox?: string;
+  egress?: string;
+  capsules?: Capsule[];
+  reputation?: AgentReputation;
   quarantine?: string;
 }
+
 export interface Grant {
   id: string;
   classes: string;
@@ -115,6 +132,22 @@ export interface Grant {
   expiry: string;
   hic: number;
   principal: string;
+  /** A revoked grant stays in the record — it is history, not an absence. */
+  revoked?: boolean;
+}
+
+/** The terms of a capability grant an operator is about to issue. */
+export interface GrantTerms {
+  id: string;
+  agent: string;
+  principal: string;
+  tenantScope: string;
+  actionClasses: string[];
+  classificationCeiling: Classification;
+  budgetUnits: number;
+  expiresAtMs: number;
+  /** "1" | "2" | "3" — the HIC level the grant confers. */
+  hic: string;
 }
 
 // ---- rooms ----------------------------------------------------------

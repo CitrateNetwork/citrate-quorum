@@ -51,8 +51,8 @@ use quorum_tenancy::TenantId;
 // owns the at-rest format — so a ledger row and the record persisted behind it
 // agree by construction rather than by two parallel match arms.
 use crate::store::{
-    classification_from_str, classification_str, grant_hic_from_str, hex32, hex_encode, hic_str,
-    verdict_str, Charge, EvidenceStore, PendingApproval, StoreError,
+    classification_from_str, classification_str, grant_hic_from_str, grant_hic_str, hex32,
+    hex_encode, hic_str, verdict_str, Charge, EvidenceStore, PendingApproval, StoreError,
 };
 
 /// What one governed action costs its grant.
@@ -114,6 +114,11 @@ pub struct ActionInput {
 pub struct GrantInput {
     pub id: String,
     pub agent: String,
+    /// The human issuing this grant. L-1 makes issuing a capability grant an
+    /// HIC-1 act, and I-4 makes the accountable human mandatory — a grant that
+    /// appeared from nowhere is exactly what an auditor is looking for.
+    #[serde(default)]
+    pub issued_by: String,
     pub principal: String,
     pub tenant_scope: String,
     pub action_classes: Vec<String>,
@@ -149,7 +154,7 @@ pub struct DecisionDto {
     pub ungoverned: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone, Debug)]
 pub struct LedgerRow {
     pub id: String,
     pub time: String,
@@ -159,6 +164,34 @@ pub struct LedgerRow {
     pub verdict: String,
     pub hic: String,
     pub corr: String,
+}
+
+/// One capability grant, as the Agents surface renders it.
+#[derive(Serialize, Clone, Debug)]
+pub struct GrantSummary {
+    pub id: String,
+    pub agent: String,
+    pub principal: String,
+    pub scope: String,
+    pub classes: String,
+    pub ceiling: String,
+    pub budget_units: u64,
+    pub consumed: u64,
+    pub hic: String,
+    pub expires_at_ms: i64,
+    pub revoked: bool,
+}
+
+/// An agent this tenant has evidence about. Derived from grants + decision
+/// records, never from a registry we cannot read yet.
+#[derive(Serialize, Clone, Debug)]
+pub struct AgentSummary {
+    pub id: String,
+    pub live_grants: usize,
+    pub budget_units: u64,
+    pub consumed: u64,
+    pub decisions: usize,
+    pub ungoverned: usize,
 }
 
 #[derive(Serialize)]
@@ -181,6 +214,10 @@ pub struct QuorumBackend {
     /// session flow establishes it; every tenant-keyed command fails closed
     /// until then rather than guessing (Rule 6).
     active_tenant: Option<TenantId>,
+    /// The human at the keyboard. Approvals are recorded against them, so an
+    /// installation without one can record agent decisions but cannot answer
+    /// them — which is why the session flow asks when the IdP cannot say.
+    operator: Option<String>,
     chains: HashMap<String, HashChain>,
     /// Grants keyed by `(tenant, agent)` — an agent's grant in one tenant must
     /// never authorize its actions in another (Rule 6, multi-tenant isolation).
@@ -223,6 +260,10 @@ impl QuorumBackend {
         if let Some(tenant) = backend.store.as_ref().and_then(EvidenceStore::load_scope) {
             let _ = backend.set_active_tenant(&tenant);
         }
+        backend.operator = backend
+            .store
+            .as_ref()
+            .and_then(EvidenceStore::load_operator);
         backend
     }
 
@@ -385,6 +426,27 @@ impl QuorumBackend {
         store
             .save_allowances(tenant, &allowances)
             .map_err(|e| self.degrade(e))
+    }
+
+    /// Name the human operating this installation.
+    pub fn set_operator(&mut self, operator: &str) -> Result<(), String> {
+        let name = operator.trim();
+        if name.is_empty() {
+            return Err(
+                "the operator's name cannot be empty — approvals are recorded against it".into(),
+            );
+        }
+        self.operator = Some(name.to_string());
+        if let Some(store) = self.store.clone() {
+            store
+                .save_operator(Some(name))
+                .map_err(|e| self.degrade(e))?;
+        }
+        Ok(())
+    }
+
+    pub fn operator(&self) -> Option<String> {
+        self.operator.clone()
     }
 
     /// The active tenant scope, if one has been established.
@@ -772,7 +834,139 @@ impl QuorumBackend {
             .unwrap_or(true)
     }
 
-    pub fn issue_grant(&mut self, input: &GrantInput, tenant: &TenantId) -> Result<(), String> {
+    /// Record something a human did themselves, at HIC-1, under their own
+    /// authority rather than a grant.
+    ///
+    /// This is NOT the policy gate: policy binds agents, and an operator has no
+    /// grant to be evaluated against. Running them through `evaluate` would
+    /// return `Ungoverned` and flood the alert state with the operator doing
+    /// their job — and HIC-X is "an alert state, never a configuration"
+    /// (04_HIC_MODEL §2). What matters is that the act is recorded and names
+    /// the human.
+    pub fn record_principal_action(
+        &mut self,
+        tenant: &TenantId,
+        principal: &str,
+        action_class: &str,
+        detail: &str,
+        now_ms: i64,
+    ) -> Result<DecisionDto, String> {
+        self.check_not_degraded()?;
+        if principal.trim().is_empty() {
+            return Err(format!(
+                "{action_class} must name the human who did it — no identity resolved"
+            ));
+        }
+        let record = DecisionRecord {
+            agent: principal.to_string(),
+            principal: Some(principal.to_string()),
+            grant_id: None,
+            action_class: action_class.to_string(),
+            params_hash: [0u8; 32],
+            verdict: Verdict::Approved,
+            hic: HicLevel::ApproveEach,
+            model_id: String::new(),
+            correlation_id: detail.to_string(),
+            timestamp_ms: now_ms,
+        };
+        let chain = self.chain_for(tenant);
+        let head = chain.append(record.clone()).map_err(|e| e.to_string())?;
+        let decision_id = (chain.len() - 1) as u64;
+        if let Some(store) = self.store.clone() {
+            store
+                .append_record(tenant.as_str(), &record, head)
+                .map_err(|e| self.degrade(e))?;
+        }
+        Ok(DecisionDto {
+            decision_id,
+            verdict: verdict_str(Verdict::Approved).to_string(),
+            hic: hic_str(HicLevel::ApproveEach).to_string(),
+            grant_id: None,
+            reason: format!("RC-302 {action_class} by {principal}"),
+            chain_head: hex_encode(&head),
+            ungoverned: false,
+        })
+    }
+
+    /// The grants one agent holds in this tenant, revoked ones included — a
+    /// revoked grant is part of the record, not an absence.
+    pub fn grants_for(&self, tenant: &str, agent: &str) -> Vec<GrantSummary> {
+        self.grants
+            .get(&(tenant.to_string(), agent.to_string()))
+            .map(|gs| {
+                gs.iter()
+                    .map(|g| GrantSummary {
+                        id: g.id.clone(),
+                        agent: g.agent.clone(),
+                        principal: g.principal.clone(),
+                        scope: g.tenant_scope.clone(),
+                        classes: g.action_classes.join(" · "),
+                        ceiling: classification_str(g.classification_ceiling).to_string(),
+                        budget_units: g.budget_units,
+                        consumed: g.consumed,
+                        hic: grant_hic_str(g.hic).to_string(),
+                        expires_at_ms: g.expires_at_ms,
+                        revoked: g.revoked,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Every agent this tenant has evidence about: one it has granted, or one
+    /// that has acted. NOT the AgentSBT registry — that is a chain read which
+    /// lands later — so it is named honestly at the surface.
+    pub fn known_agents(&self, tenant: &str) -> Vec<AgentSummary> {
+        let mut seen: std::collections::BTreeMap<String, AgentSummary> =
+            std::collections::BTreeMap::new();
+        for ((t, agent), grants) in &self.grants {
+            if t != tenant {
+                continue;
+            }
+            let live = grants.iter().filter(|g| !g.revoked).count();
+            let budget: u64 = grants.iter().map(|g| g.budget_units).sum();
+            let consumed: u64 = grants.iter().map(|g| g.consumed).sum();
+            seen.insert(
+                agent.clone(),
+                AgentSummary {
+                    id: agent.clone(),
+                    live_grants: live,
+                    budget_units: budget,
+                    consumed,
+                    decisions: 0,
+                    ungoverned: 0,
+                },
+            );
+        }
+        if let Some(chain) = self.chains.get(tenant) {
+            for r in chain.records() {
+                // A principal acting directly is not an agent in the fleet.
+                if r.principal.as_deref() == Some(r.agent.as_str()) {
+                    continue;
+                }
+                let e = seen.entry(r.agent.clone()).or_insert_with(|| AgentSummary {
+                    id: r.agent.clone(),
+                    live_grants: 0,
+                    budget_units: 0,
+                    consumed: 0,
+                    decisions: 0,
+                    ungoverned: 0,
+                });
+                e.decisions += 1;
+                if r.verdict == Verdict::Ungoverned {
+                    e.ungoverned += 1;
+                }
+            }
+        }
+        seen.into_values().collect()
+    }
+
+    pub fn issue_grant(
+        &mut self,
+        input: &GrantInput,
+        tenant: &TenantId,
+        now_ms: i64,
+    ) -> Result<(), String> {
         let ceiling = classification_from_str(&input.classification_ceiling)
             .ok_or_else(|| format!("unknown classification: {}", input.classification_ceiling))?;
         let grant = CapabilityGrant {
@@ -792,7 +986,17 @@ impl QuorumBackend {
             .entry((tenant.as_str().to_string(), input.agent.clone()))
             .or_default()
             .push(grant);
-        self.persist_grants(tenant.as_str())
+        self.persist_grants(tenant.as_str())?;
+        // A grant that exists without a record of someone issuing it is
+        // authority from nowhere. The record and the grant land together.
+        self.record_principal_action(
+            tenant,
+            &input.issued_by,
+            "grant.issue",
+            &format!("{} → {}", input.id, input.agent),
+            now_ms,
+        )?;
+        Ok(())
     }
 
     /// Revoke a grant by id within a tenant (immediate). Returns whether a grant
@@ -803,6 +1007,8 @@ impl QuorumBackend {
         tenant: &str,
         agent: &str,
         grant_id: &str,
+        revoked_by: &str,
+        now_ms: i64,
     ) -> Result<bool, String> {
         let mut found = false;
         if let Some(gs) = self
@@ -818,6 +1024,15 @@ impl QuorumBackend {
         }
         if found {
             self.persist_grants(tenant)?;
+            // L-1: a revocation is an HIC-1 act and is recorded like one.
+            let id = TenantId::new(tenant).map_err(|e| e.to_string())?;
+            self.record_principal_action(
+                &id,
+                revoked_by,
+                "grant.revoke",
+                &format!("{grant_id} → {agent}"),
+                now_ms,
+            )?;
         }
         Ok(found)
     }
@@ -930,6 +1145,18 @@ pub fn tenant_active(backend: Backend<'_>) -> Result<Option<String>, String> {
     Ok(lock(&backend)?.active_tenant())
 }
 
+/// Name the human at the keyboard. Every approval is recorded against them.
+#[tauri::command]
+pub fn operator_set(backend: Backend<'_>, operator: String) -> Result<(), String> {
+    lock(&backend)?.set_operator(&operator)
+}
+
+/// The operator, or `null` if nobody has been named yet.
+#[tauri::command]
+pub fn operator_get(backend: Backend<'_>) -> Result<Option<String>, String> {
+    Ok(lock(&backend)?.operator())
+}
+
 /// **The policy gate.** Evaluate a proposed action against the tenant's live
 /// grants, record the verdict in the tenant's evidence chain, and return what
 /// was recorded. Every governed action passes through here *before* it executes
@@ -1015,14 +1242,35 @@ pub fn ledger_ungoverned_count(backend: Backend<'_>) -> Result<usize, String> {
 pub fn grant_issue(backend: Backend<'_>, input: GrantInput) -> Result<(), String> {
     let mut b = lock(&backend)?;
     let tenant = b.require_tenant()?;
-    b.issue_grant(&input, &tenant)
+    b.issue_grant(&input, &tenant, now_ms())
+}
+
+/// Every agent this tenant has evidence about — granted, or seen acting.
+#[tauri::command]
+pub fn agents_known(backend: Backend<'_>) -> Result<Vec<AgentSummary>, String> {
+    let b = lock(&backend)?;
+    let tenant = b.require_tenant()?;
+    Ok(b.known_agents(tenant.as_str()))
+}
+
+/// The live capability grants held by one agent in the active tenant.
+#[tauri::command]
+pub fn grants_for_agent(backend: Backend<'_>, agent: String) -> Result<Vec<GrantSummary>, String> {
+    let b = lock(&backend)?;
+    let tenant = b.require_tenant()?;
+    Ok(b.grants_for(tenant.as_str(), &agent))
 }
 
 #[tauri::command]
-pub fn grant_revoke(backend: Backend<'_>, agent: String, grant_id: String) -> Result<bool, String> {
+pub fn grant_revoke(
+    backend: Backend<'_>,
+    agent: String,
+    grant_id: String,
+    revoked_by: String,
+) -> Result<bool, String> {
     let mut b = lock(&backend)?;
     let tenant = b.require_tenant()?;
-    b.revoke_grant(tenant.as_str(), &agent, &grant_id)
+    b.revoke_grant(tenant.as_str(), &agent, &grant_id, &revoked_by, now_ms())
 }
 
 #[tauri::command]
@@ -1115,6 +1363,7 @@ mod tests {
         GrantInput {
             id: "G-1".into(),
             agent: agent.into(),
+            issued_by: "R. Ortiz".into(),
             principal: "R. Ortiz".into(),
             tenant_scope: "t3:bca".into(),
             action_classes: classes.iter().map(|s| s.to_string()).collect(),
@@ -1146,6 +1395,7 @@ mod tests {
         b.issue_grant(
             &grant("sbt-41", &["repo.write"], "CUI", 100, "2"),
             &t("bca"),
+            0,
         )
         .unwrap();
         let head0 = b.ledger_head("bca");
@@ -1171,6 +1421,7 @@ mod tests {
         b.issue_grant(
             &grant("sbt-41", &["repo.write"], "CUI", 100, "2"),
             &t("bca"),
+            0,
         )
         .unwrap();
         // Same agent, same action, DIFFERENT tenant → no covering grant.
@@ -1199,7 +1450,7 @@ mod tests {
     #[test]
     fn over_ceiling_records_require_approval() {
         let mut b = QuorumBackend::default();
-        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 1000, "2"), &t("bca"))
+        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 1000, "2"), &t("bca"), 0)
             .unwrap();
         let mut a = action("sbt-41", "spend", "Public", 220);
         a.hic1_cost_threshold = 150;
@@ -1214,9 +1465,12 @@ mod tests {
         b.issue_grant(
             &grant("sbt-41", &["repo.write"], "CUI", 100, "2"),
             &t("bca"),
+            0,
         )
         .unwrap();
-        assert!(b.revoke_grant("bca", "sbt-41", "G-1").unwrap());
+        assert!(b
+            .revoke_grant("bca", "sbt-41", "G-1", "R. Ortiz", 0)
+            .unwrap());
         let d = b
             .evaluate_and_record(
                 &action("sbt-41", "repo.write", "Public", 1),
@@ -1233,6 +1487,7 @@ mod tests {
         b.issue_grant(
             &grant("sbt-41", &["repo.write"], "CUI", 100, "2"),
             &t("bca"),
+            0,
         )
         .unwrap();
         b.evaluate_and_record(
@@ -1336,8 +1591,12 @@ mod tests {
     fn every_governed_action_costs_at_least_one_unit() {
         let mut b = QuorumBackend::default();
         // Budget of 3, and repo.write declares no cost at all.
-        b.issue_grant(&grant("sbt-41", &["repo.write"], "CUI", 3, "2"), &t("bca"))
-            .unwrap();
+        b.issue_grant(
+            &grant("sbt-41", &["repo.write"], "CUI", 3, "2"),
+            &t("bca"),
+            0,
+        )
+        .unwrap();
         for i in 0..3 {
             let d = b
                 .evaluate_and_record(
@@ -1368,7 +1627,7 @@ mod tests {
     #[test]
     fn a_spend_charges_its_magnitude() {
         let mut b = QuorumBackend::default();
-        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 500, "2"), &t("bca"))
+        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 500, "2"), &t("bca"), 0)
             .unwrap();
         b.evaluate_and_record(&action("sbt-41", "spend", "Public", 300), &t("bca"), 1000)
             .unwrap();
@@ -1390,7 +1649,7 @@ mod tests {
     #[test]
     fn an_escalation_to_a_human_also_spends_the_envelope() {
         let mut b = QuorumBackend::default();
-        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 400, "2"), &t("bca"))
+        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 400, "2"), &t("bca"), 0)
             .unwrap();
         let mut a = action("sbt-41", "spend", "Public", 220);
         a.hic1_cost_threshold = 150;
@@ -1407,7 +1666,7 @@ mod tests {
     #[test]
     fn a_rejection_refunds_exactly_once_and_is_recorded() {
         let mut b = QuorumBackend::default();
-        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 400, "2"), &t("bca"))
+        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 400, "2"), &t("bca"), 0)
             .unwrap();
         let mut a = action("sbt-41", "spend", "Public", 220);
         a.hic1_cost_threshold = 150;
@@ -1416,7 +1675,11 @@ mod tests {
         let rejection = b.reject_decision(&t("bca"), d.decision_id, 2000).unwrap();
         assert_eq!(rejection.verdict, "rejected");
         assert_eq!(rejection.hic, "1");
-        assert_eq!(b.ledger_rows("bca").len(), 2, "the refusal is evidence too");
+        assert_eq!(
+            b.ledger_rows("bca").last().map(|r| r.verdict.as_str()),
+            Some("rejected"),
+            "the refusal is evidence too"
+        );
 
         // Refunded: the same 220 escalation fits again.
         let again = b.evaluate_and_record(&a, &t("bca"), 3000).unwrap();
@@ -1432,6 +1695,123 @@ mod tests {
         );
     }
 
+    // ---- a human acting directly -------------------------------------
+
+    #[test]
+    fn issuing_a_grant_records_who_issued_it() {
+        let mut b = QuorumBackend::default();
+        b.issue_grant(
+            &grant("sbt-41", &["repo.write"], "CUI", 100, "2"),
+            &t("bca"),
+            1000,
+        )
+        .unwrap();
+        let rows = b.ledger_rows("bca");
+        assert_eq!(rows.len(), 1, "a grant and its record land together");
+        assert_eq!(rows[0].cls, "grant.issue");
+        assert_eq!(rows[0].verdict, "approved", "the operator is the authority");
+        assert_eq!(rows[0].hic, "1", "L-1: a capability grant is always HIC-1");
+        assert_eq!(rows[0].principal, "R. Ortiz");
+        assert_eq!(
+            b.ledger_ungoverned_count("bca"),
+            0,
+            "an operator doing their job is NOT an alert state (HIC-X is never a configuration)"
+        );
+    }
+
+    #[test]
+    fn revoking_a_grant_records_who_revoked_it() {
+        let mut b = QuorumBackend::default();
+        b.issue_grant(
+            &grant("sbt-41", &["repo.write"], "CUI", 100, "2"),
+            &t("bca"),
+            1000,
+        )
+        .unwrap();
+        assert!(b
+            .revoke_grant("bca", "sbt-41", "G-1", "M. Okonkwo", 2000)
+            .unwrap());
+        let rows = b.ledger_rows("bca");
+        assert_eq!(rows.last().unwrap().cls, "grant.revoke");
+        assert_eq!(rows.last().unwrap().principal, "M. Okonkwo");
+        // A revocation that found nothing records nothing.
+        let before = b.ledger_rows("bca").len();
+        assert!(!b
+            .revoke_grant("bca", "sbt-41", "G-nope", "M. Okonkwo", 3000)
+            .unwrap());
+        assert_eq!(b.ledger_rows("bca").len(), before);
+    }
+
+    #[test]
+    fn a_grant_cannot_be_issued_by_nobody() {
+        let mut b = QuorumBackend::default();
+        let mut g = grant("sbt-41", &["repo.write"], "CUI", 100, "2");
+        g.issued_by = "  ".into();
+        let err = b
+            .issue_grant(&g, &t("bca"), 1000)
+            .expect_err("authority from nowhere is what an auditor hunts for");
+        assert!(err.contains("name the human"), "honest error: {err}");
+    }
+
+    #[test]
+    fn the_fleet_is_every_agent_this_tenant_has_evidence_about() {
+        let mut b = QuorumBackend::default();
+        assert!(
+            b.known_agents("bca").is_empty(),
+            "a new tenant knows no agents"
+        );
+
+        b.issue_grant(
+            &grant("sbt-41", &["repo.write"], "CUI", 100, "2"),
+            &t("bca"),
+            1000,
+        )
+        .unwrap();
+        // A granted agent is known before it ever acts.
+        let fleet = b.known_agents("bca");
+        assert_eq!(fleet.len(), 1);
+        assert_eq!(fleet[0].id, "sbt-41");
+        assert_eq!(fleet[0].live_grants, 1);
+        assert_eq!(fleet[0].decisions, 0);
+
+        // An UNGRANTED agent that acts is known too — that is the point.
+        b.evaluate_and_record(&action("rogue", "repo.write", "Public", 1), &t("bca"), 2000)
+            .unwrap();
+        let fleet = b.known_agents("bca");
+        assert_eq!(fleet.len(), 2);
+        let rogue = fleet.iter().find(|a| a.id == "rogue").unwrap();
+        assert_eq!(rogue.live_grants, 0);
+        assert_eq!(rogue.ungoverned, 1);
+        // The operator is not an agent in their own fleet.
+        assert!(!fleet.iter().any(|a| a.id == "R. Ortiz"));
+    }
+
+    #[test]
+    fn an_agents_grants_are_readable_including_revoked_ones() {
+        let mut b = QuorumBackend::default();
+        b.issue_grant(
+            &grant("sbt-41", &["repo.write"], "CUI", 100, "2"),
+            &t("bca"),
+            1000,
+        )
+        .unwrap();
+        let gs = b.grants_for("bca", "sbt-41");
+        assert_eq!(gs.len(), 1);
+        assert_eq!(gs[0].ceiling, "CUI");
+        assert_eq!(gs[0].classes, "repo.write");
+        assert_eq!(gs[0].hic, "2");
+        assert!(!gs[0].revoked);
+
+        b.revoke_grant("bca", "sbt-41", "G-1", "R. Ortiz", 2000)
+            .unwrap();
+        let gs = b.grants_for("bca", "sbt-41");
+        assert!(
+            gs[0].revoked,
+            "a revoked grant stays in the record — it is history, not an absence"
+        );
+        assert!(b.grants_for("bca", "never-seen").is_empty());
+    }
+
     // ---- the escalation reaches a human ------------------------------
 
     fn escalating_action() -> ActionInput {
@@ -1444,7 +1824,7 @@ mod tests {
     fn an_escalation_lands_in_the_ceremony_queue() {
         let mut b = QuorumBackend::default();
         assert!(b.pending_approvals("bca").is_empty());
-        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 1000, "2"), &t("bca"))
+        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 1000, "2"), &t("bca"), 0)
             .unwrap();
         let d = b
             .evaluate_and_record(&escalating_action(), &t("bca"), 1000)
@@ -1469,7 +1849,7 @@ mod tests {
     #[test]
     fn approving_records_who_approved_and_clears_the_queue() {
         let mut b = QuorumBackend::default();
-        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 1000, "2"), &t("bca"))
+        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 1000, "2"), &t("bca"), 0)
             .unwrap();
         let d = b
             .evaluate_and_record(&escalating_action(), &t("bca"), 1000)
@@ -1485,16 +1865,17 @@ mod tests {
             b.pending_approvals("bca").is_empty(),
             "the question is answered"
         );
-        assert_eq!(b.ledger_rows("bca").len(), 2);
         assert!(b.ledger_verify("bca"));
         // The approver is named in the record — that IS the evidence.
-        assert_eq!(b.ledger_rows("bca")[1].principal, "R. Ortiz");
+        let last = b.ledger_rows("bca").last().cloned().unwrap();
+        assert_eq!(last.verdict, "approved");
+        assert_eq!(last.principal, "R. Ortiz");
     }
 
     #[test]
     fn an_approved_action_keeps_its_charge_but_a_rejected_one_is_refunded() {
         let mut b = QuorumBackend::default();
-        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 400, "2"), &t("bca"))
+        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 400, "2"), &t("bca"), 0)
             .unwrap();
         let d = b
             .evaluate_and_record(&escalating_action(), &t("bca"), 1000)
@@ -1512,7 +1893,7 @@ mod tests {
 
         // The same flow, rejected, gives the budget back.
         let mut b2 = QuorumBackend::default();
-        b2.issue_grant(&grant("sbt-41", &["spend"], "CUI", 400, "2"), &t("bca"))
+        b2.issue_grant(&grant("sbt-41", &["spend"], "CUI", 400, "2"), &t("bca"), 0)
             .unwrap();
         let d2 = b2
             .evaluate_and_record(&escalating_action(), &t("bca"), 1000)
@@ -1529,7 +1910,7 @@ mod tests {
     #[test]
     fn a_rejection_also_clears_the_queue() {
         let mut b = QuorumBackend::default();
-        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 1000, "2"), &t("bca"))
+        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 1000, "2"), &t("bca"), 0)
             .unwrap();
         let d = b
             .evaluate_and_record(&escalating_action(), &t("bca"), 1000)
@@ -1541,7 +1922,7 @@ mod tests {
     #[test]
     fn approval_cannot_mint_authority_for_something_never_escalated() {
         let mut b = QuorumBackend::default();
-        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 1000, "2"), &t("bca"))
+        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 1000, "2"), &t("bca"), 0)
             .unwrap();
         // An ALLOWED action was never a question — approving it is meaningless.
         let allowed = b
@@ -1567,7 +1948,7 @@ mod tests {
     #[test]
     fn an_approval_must_name_the_human_who_gave_it() {
         let mut b = QuorumBackend::default();
-        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 1000, "2"), &t("bca"))
+        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 1000, "2"), &t("bca"), 0)
             .unwrap();
         let d = b
             .evaluate_and_record(&escalating_action(), &t("bca"), 1000)
@@ -1590,8 +1971,12 @@ mod tests {
     #[test]
     fn two_escalations_that_look_alike_do_not_borrow_each_others_answers() {
         let mut b = QuorumBackend::default();
-        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 10_000, "2"), &t("bca"))
-            .unwrap();
+        b.issue_grant(
+            &grant("sbt-41", &["spend"], "CUI", 10_000, "2"),
+            &t("bca"),
+            0,
+        )
+        .unwrap();
         let first = b
             .evaluate_and_record(&escalating_action(), &t("bca"), 1000)
             .unwrap();
@@ -1620,7 +2005,7 @@ mod tests {
     #[test]
     fn a_waiting_agent_can_learn_what_the_human_decided() {
         let mut b = QuorumBackend::default();
-        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 1000, "2"), &t("bca"))
+        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 1000, "2"), &t("bca"), 0)
             .unwrap();
         let d = b
             .evaluate_and_record(&escalating_action(), &t("bca"), 1000)
@@ -1631,7 +2016,7 @@ mod tests {
         assert_eq!(b.decision_status("bca", d.decision_id), Some("approved"));
 
         let mut b2 = QuorumBackend::default();
-        b2.issue_grant(&grant("sbt-41", &["spend"], "CUI", 1000, "2"), &t("bca"))
+        b2.issue_grant(&grant("sbt-41", &["spend"], "CUI", 1000, "2"), &t("bca"), 0)
             .unwrap();
         let d2 = b2
             .evaluate_and_record(&escalating_action(), &t("bca"), 1000)
@@ -1673,6 +2058,7 @@ mod tests {
         b.issue_grant(
             &grant("sbt-41", &["repo.write"], "CUI", 100, "2"),
             &t("bca"),
+            0,
         )
         .unwrap();
         let mut a = action("sbt-41", "repo.write", "Public", 1);
@@ -1682,8 +2068,8 @@ mod tests {
             .expect_err("a governed record must name its authority (I-4)");
         assert!(err.contains("accountable principal"), "honest error: {err}");
         assert!(
-            b.ledger_rows("bca").is_empty(),
-            "nothing half-recorded on the way out"
+            b.ledger_rows("bca").iter().all(|r| r.cls == "grant.issue"),
+            "nothing half-recorded on the way out — only the grant issuance itself"
         );
     }
 
@@ -1722,6 +2108,7 @@ mod tests {
             b.issue_grant(
                 &grant("sbt-41", &["repo.write"], "CUI", 100, "2"),
                 &t("bca"),
+                0,
             )
             .unwrap();
             b.evaluate_and_record(
@@ -1742,7 +2129,11 @@ mod tests {
             Some("bca"),
             "the scope resumes without re-onboarding"
         );
-        assert_eq!(b.ledger_rows("bca").len(), 2, "both records survive");
+        assert_eq!(
+            b.ledger_rows("bca").len(),
+            3,
+            "the grant issuance and both agent decisions survive"
+        );
         assert_eq!(b.ledger_head("bca"), head_before, "the head is identical");
         assert_eq!(b.ledger_ungoverned_count("bca"), 1, "the gap survives too");
         assert!(b.ledger_verify("bca"));
@@ -1757,6 +2148,7 @@ mod tests {
             b.issue_grant(
                 &grant("sbt-41", &["repo.write"], "CUI", 100, "2"),
                 &t("bca"),
+                0,
             )
             .unwrap();
         }
@@ -1770,7 +2162,9 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(d.verdict, "allow", "a persisted grant still authorizes");
-            assert!(b.revoke_grant("bca", "sbt-41", "G-1").unwrap());
+            assert!(b
+                .revoke_grant("bca", "sbt-41", "G-1", "R. Ortiz", 0)
+                .unwrap());
         }
         let mut b = root.boot();
         let d = b
@@ -1809,7 +2203,7 @@ mod tests {
         {
             let mut b = root.boot();
             b.set_active_tenant("bca").unwrap();
-            b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 400, "2"), &t("bca"))
+            b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 400, "2"), &t("bca"), 0)
                 .unwrap();
             let mut a = action("sbt-41", "spend", "Public", 220);
             a.hic1_cost_threshold = 150;
@@ -1837,7 +2231,7 @@ mod tests {
         {
             let mut b = root.boot();
             b.set_active_tenant("bca").unwrap();
-            b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 1000, "2"), &t("bca"))
+            b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 1000, "2"), &t("bca"), 0)
                 .unwrap();
             let mut a = action("sbt-41", "spend", "Public", 220);
             a.hic1_cost_threshold = 150;
@@ -1869,8 +2263,12 @@ mod tests {
         {
             let mut b = root.boot();
             b.set_active_tenant("bca").unwrap();
-            b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 10_000, "2"), &t("bca"))
-                .unwrap();
+            b.issue_grant(
+                &grant("sbt-41", &["spend"], "CUI", 10_000, "2"),
+                &t("bca"),
+                0,
+            )
+            .unwrap();
             let mut a = action("sbt-41", "spend", "Public", 220);
             a.hic1_cost_threshold = 150;
             approved = b

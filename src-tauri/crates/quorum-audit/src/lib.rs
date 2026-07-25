@@ -132,9 +132,16 @@ impl DecisionRecord {
             // it to `has_authority` would make the most important record in the
             // system the one we could not write.
             Verdict::Rejected => true,
-            // An approval names the human who gave it, always — that is the
-            // entire evidentiary value of an HIC-1 approval.
-            Verdict::Approved => has_authority,
+            // An approval names the human who gave it, ALWAYS — that is the
+            // entire evidentiary value of an HIC-1 approval. The grant is
+            // optional, because two different things are recorded as approved:
+            // a human answering an agent's escalation (which names the agent's
+            // grant), and a human acting directly (which names no grant,
+            // because the human IS the authority — they do not act under one).
+            // Recording the latter as `Ungoverned` would be a lie in the other
+            // direction: HIC-X is an alert state, never a description of the
+            // operator doing their job.
+            Verdict::Approved => self.principal.is_some(),
             _ => has_authority,
         }
     }
@@ -468,6 +475,24 @@ mod tests {
         c.append(governed("pr.open", "X-1", 2)).unwrap();
         let r2 = c.merkle_root();
         assert_ne!(r1, r2, "adding a record changes the anchor root");
+    }
+
+    #[test]
+    fn a_human_acting_directly_is_approved_not_ungoverned() {
+        // No grant: the operator does not act under one, they issue them.
+        let mut direct = governed("grant.issue", "X-1", 1);
+        direct.verdict = Verdict::Approved;
+        direct.hic = HicLevel::ApproveEach;
+        direct.grant_id = None;
+        assert!(
+            direct.is_consistent(),
+            "an operator issuing a grant is the authority, not an alert"
+        );
+
+        // But it must still name WHO. An approval nobody owns is not evidence.
+        let mut anonymous = direct.clone();
+        anonymous.principal = None;
+        assert!(!anonymous.is_consistent());
     }
 
     #[test]

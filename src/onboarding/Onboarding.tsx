@@ -35,6 +35,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const [tourIdx, setTourIdx] = useState(0);
   const [scopeErr, setScopeErr] = useState<string>("");
   const [scopeInput, setScopeInput] = useState("");
+  const [operatorInput, setOperatorInput] = useState("");
 
   useEffect(() => {
     if (phase !== "resolve") return;
@@ -71,9 +72,13 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
 
   const submitScope = async () => {
     const t = scopeInput.trim();
-    if (!t) return;
+    const who = operatorInput.trim();
+    if (!t || !who) return;
     try {
       await bridge.session.setActiveTenant(t);
+      // Every approval is recorded against a human. Without a name, an agent's
+      // escalation can be raised but never answered.
+      await bridge.session.setOperator(who);
       setScopeErr("");
       setPhase("tour");
     } catch (e) {
@@ -138,9 +143,10 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           <div className="eyebrow" style={{ color: "var(--warn)" }}>Identity provider did not resolve</div>
           <div style={{ fontFamily: "var(--font-display)", fontWeight: 420, fontSize: 26 }}>Name the tenant scope</div>
           <p style={{ fontSize: 14.5, lineHeight: 1.6, color: "var(--tx-2)", margin: 0 }}>
-            Quorum could not derive your tenant scope from the identity provider, so it will not guess one.
-            Until a scope is set, nothing is read from or written to any evidence chain. Enter the tenant
-            this installation governs; every decision recorded from here is keyed to it.
+            Quorum could not derive your identity or tenant scope from the identity provider, so it will not
+            guess either. Until a scope is set, nothing is read from or written to any evidence chain — and
+            until you are named, an agent&apos;s escalation can be raised but never answered, because every
+            approval is recorded against a human.
           </p>
           <div className="mono" style={{ fontSize: 10.5, color: "var(--tx-3)", border: "1px solid var(--line-1)", padding: "9px 12px", background: "var(--srf-inset)", wordBreak: "break-all" }}>
             session.current() — {scopeErr || "unavailable"}
@@ -154,10 +160,19 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             aria-label="Tenant scope"
             style={{ fontSize: 13, padding: "10px 12px", border: "1px solid var(--line-2)", background: "var(--srf-1)", color: "var(--tx-1)" }}
           />
+          <input
+            value={operatorInput}
+            onChange={(e) => setOperatorInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") void submitScope(); }}
+            placeholder="your name — recorded on every approval you give"
+            className="mono"
+            aria-label="Operator name"
+            style={{ fontSize: 13, padding: "10px 12px", border: "1px solid var(--line-2)", background: "var(--srf-1)", color: "var(--tx-1)" }}
+          />
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <button className="btn btn-ghost" onClick={() => setPhase("sign")}>Back to sign in</button>
             <div style={{ flex: 1 }} />
-            <button className="btn btn-primary" onClick={() => void submitScope()} disabled={!scopeInput.trim()}>Set scope</button>
+            <button className="btn btn-primary" onClick={() => void submitScope()} disabled={!scopeInput.trim() || !operatorInput.trim()}>Set scope</button>
           </div>
         </div>
       </div>

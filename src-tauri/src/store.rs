@@ -230,6 +230,9 @@ struct StoredAllowance {
 #[derive(Serialize, Deserialize, Default)]
 struct StoredScope {
     active_tenant: Option<String>,
+    /// The human operating this installation. Every approval is recorded
+    /// against them, so without it nothing can be approved at all.
+    operator: Option<String>,
 }
 
 /// What one decision took from its grant's budget. Kept so a rejection refunds
@@ -303,16 +306,36 @@ impl EvidenceStore {
 
     // ---- the active scope --------------------------------------------
 
-    pub fn load_scope(&self) -> Option<String> {
-        let raw = fs::read_to_string(self.root.join("scope.json")).ok()?;
-        serde_json::from_str::<StoredScope>(&raw)
-            .ok()?
-            .active_tenant
+    fn read_scope(&self) -> StoredScope {
+        fs::read_to_string(self.root.join("scope.json"))
+            .ok()
+            .and_then(|raw| serde_json::from_str::<StoredScope>(&raw).ok())
+            .unwrap_or_default()
     }
 
+    pub fn load_scope(&self) -> Option<String> {
+        self.read_scope().active_tenant
+    }
+
+    pub fn load_operator(&self) -> Option<String> {
+        self.read_scope().operator
+    }
+
+    /// Each writer preserves the other field — the scope and the operator live
+    /// in one file but are set at different moments.
     pub fn save_scope(&self, tenant: Option<&str>) -> Result<(), StoreError> {
         let body = serde_json::to_vec(&StoredScope {
             active_tenant: tenant.map(str::to_string),
+            operator: self.read_scope().operator,
+        })
+        .map_err(|e| StoreError::Io(e.to_string()))?;
+        write_atomic(&self.root.join("scope.json"), &body)
+    }
+
+    pub fn save_operator(&self, operator: Option<&str>) -> Result<(), StoreError> {
+        let body = serde_json::to_vec(&StoredScope {
+            active_tenant: self.read_scope().active_tenant,
+            operator: operator.map(str::to_string),
         })
         .map_err(|e| StoreError::Io(e.to_string()))?;
         write_atomic(&self.root.join("scope.json"), &body)
@@ -802,6 +825,19 @@ mod tests {
         let back = store.load_allowances("bca").unwrap();
         assert_eq!(back[0].spent, 4, "spent weight must not reset to zero");
         assert_eq!(back[0].weight_cap, 5);
+    }
+
+    #[test]
+    fn the_operator_survives_a_restart_and_does_not_clobber_the_scope() {
+        let root = TempRoot::new();
+        let store = root.store();
+        store.save_scope(Some("bca")).unwrap();
+        store.save_operator(Some("R. Ortiz")).unwrap();
+        // Each write must preserve the other field.
+        assert_eq!(root.store().load_scope().as_deref(), Some("bca"));
+        assert_eq!(root.store().load_operator().as_deref(), Some("R. Ortiz"));
+        store.save_scope(Some("sea")).unwrap();
+        assert_eq!(root.store().load_operator().as_deref(), Some("R. Ortiz"));
     }
 
     #[test]

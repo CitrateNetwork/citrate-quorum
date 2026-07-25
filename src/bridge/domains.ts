@@ -21,6 +21,7 @@ import type {
   GateDecision,
   GovernedAction,
   Grant,
+  GrantTerms,
   PendingApproval,
   IngestFile,
   InterviewTurn,
@@ -49,6 +50,13 @@ export interface SessionDomain {
   activeTenant(): Promise<string | null>;
   /** Establish the tenant scope everything else is keyed by (Rule 6). */
   setActiveTenant(tenant: string): Promise<void>;
+  /**
+   * The human at the keyboard. Approvals are recorded against them, so until
+   * one is named nothing can be approved — which is why the session flow asks
+   * when the identity provider cannot say.
+   */
+  operator(): Promise<string | null>;
+  setOperator(name: string): Promise<void>;
 }
 
 /**
@@ -92,7 +100,14 @@ export interface NodeDomain {
 export interface AgentsDomain {
   list(): Promise<Agent[]>;
   grants(agentId: string): Promise<Grant[]>;
-  // TODO(wire): issueGrant / revoke route through the ceremony (signing.request).
+  /**
+   * Issue a capability grant. L-1 makes this an HIC-1 act, so callers route it
+   * through the ceremony first and only commit on approval. `issuedBy` names
+   * the human — a grant that appeared from nowhere is what an auditor hunts for.
+   */
+  issue(terms: GrantTerms): Promise<void>;
+  /** Revoke a grant immediately (CG-2), naming who revoked it. */
+  revoke(agent: string, grantId: string, revokedBy: string): Promise<boolean>;
 }
 
 export interface RoomsDomain {

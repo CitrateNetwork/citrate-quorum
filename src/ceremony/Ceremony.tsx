@@ -123,18 +123,30 @@ export function CeremonyProvider({ children }: { children: ReactNode }) {
   // and the record honestly carries no principal rather than a guessed one.
   const principal = useRef<string | undefined>(undefined);
   useEffect(() => {
-    bridge.session
-      .current()
+    // The IdP names you when it can; otherwise the operator named at sign-in
+    // does. One of them must, because an approval is recorded against a human
+    // and the backend refuses an anonymous one.
+    Promise.resolve()
+      .then(() => bridge.session.current())
       .then((s) => {
         principal.current = s.user.name;
       })
-      .catch(() => {
-        principal.current = undefined;
-      });
+      .catch(() =>
+        Promise.resolve()
+          .then(() => bridge.session.operator())
+          .then((op) => {
+            principal.current = op ?? undefined;
+          })
+          .catch(() => {
+            principal.current = undefined;
+          }),
+      );
   }, []);
   const [phase, setPhase] = useState<CeremonyPhase>("review");
   const [ack, setAck] = useState(false);
   const [settledNote, setSettledNote] = useState<string>("");
+  /** A commit the backend refused. Shown instead of an "On record" stamp. */
+  const [commitError, setCommitError] = useState<string>("");
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   const head = queue[0] ?? null;
@@ -146,6 +158,7 @@ export function CeremonyProvider({ children }: { children: ReactNode }) {
       (a) => bridge.policy.evaluate(a),
       intent.action,
       principal.current,
+      intent.origin,
     );
     if (!outcome.open) return outcome.result;
     const { gate } = outcome;
@@ -205,22 +218,12 @@ export function CeremonyProvider({ children }: { children: ReactNode }) {
 
   const finish = (outcome: "settled" | "rejected", note?: string) => {
     if (!head) return;
-    // Both answers are acts of governance, and both are recorded. A refusal
-    // also refunds what the decision charged; an approval leaves it spent,
-    // because the action goes ahead.
-    if (outcome === "rejected") {
-      void bridge.policy.reject(head.gate.decisionId).catch(() => {
-        // The refusal still stands for the caller; the backend error surfaces
-        // through the ledger's own honest error path rather than being swallowed
-        // into a fake success here.
+    if (outcome === "rejected" && head.answering) {
+      // A refusal is an act of governance: it is recorded and it refunds what
+      // the decision charged. Failing to record it must be visible.
+      void bridge.policy.reject(head.gate.decisionId).catch((e: unknown) => {
+        setCommitError(e instanceof Error ? e.message : String(e));
       });
-    } else if (head.answering) {
-      void bridge.policy
-        .approve(head.gate.decisionId, principal.current ?? "")
-        .catch(() => {
-          // Same reasoning as above — an approval that could not be recorded
-          // must not be reported as a clean success anywhere else.
-        });
     }
     head.resolve({ outcome, note, gate: head.gate });
     clearTimers();
@@ -228,12 +231,29 @@ export function CeremonyProvider({ children }: { children: ReactNode }) {
     setPhase("review");
     setAck(false);
     setSettledNote("");
+    setCommitError("");
   };
 
-  const onSign = () => {
+  const onSign = async () => {
     if (!head) return;
     if (head.intent.rawUnverified && !ack) return; // Sign is gated on the ack
+    setCommitError("");
     setPhase("signing");
+
+    // Answering an escalation COMMITS here, before anything claims to be on
+    // record. Previously the approval was fired at close and its failure
+    // swallowed: the operator saw "On record" while the agent stayed blocked
+    // and the queue never cleared. A stamp that can be wrong is worse than no
+    // stamp.
+    if (head.answering) {
+      try {
+        await bridge.policy.approve(head.gate.decisionId, principal.current ?? "");
+      } catch (e) {
+        setPhase("review");
+        setCommitError(e instanceof Error ? e.message : String(e));
+        return;
+      }
+    }
     // signing → broadcasting → settled. Broadcasting compresses the real
     // checkpoint-finality wait (~25s / 50 blocks, BFT 67%); the Tauri adapter
     // keeps this loader and reports real progress (DESIGN_NOTES TODO(wire)).
@@ -244,7 +264,13 @@ export function CeremonyProvider({ children }: { children: ReactNode }) {
         // The real thing that happened: the gate appended this decision to the
         // tenant's evidence chain, at this head. Nothing claims an anchor —
         // there is no chain to anchor to yet (see the sub-line below).
-        setSettledNote(`decision recorded · chain head ${shortHead(head.gate.chainHead)}`);
+        // A human acting directly has no head to quote here: the act is
+        // recorded by the command that commits it, not by the gate.
+        setSettledNote(
+          head.gate.chainHead
+            ? `decision recorded · chain head ${shortHead(head.gate.chainHead)}`
+            : "recorded against your name in this tenant's evidence chain",
+        );
       }, 2400),
     );
   };
@@ -327,7 +353,11 @@ export function CeremonyProvider({ children }: { children: ReactNode }) {
                   {/* An answered escalation was recorded earlier, so this
                       dialog has no head of its own to quote — say nothing
                       rather than "recorded at " with a blank after it. */}
-                  {gate.chainHead ? ` · recorded at ${shortHead(gate.chainHead)}` : ` · decision #${gate.decisionId}, already on the chain`}
+                  {gate.chainHead
+                    ? ` · recorded at ${shortHead(gate.chainHead)}`
+                    : gate.decisionId >= 0
+                      ? ` · decision #${gate.decisionId}, already on the chain`
+                      : " · recorded when you sign"}
                 </span>
               </div>
             </div>
@@ -377,6 +407,15 @@ export function CeremonyProvider({ children }: { children: ReactNode }) {
               </div>
             )}
 
+            {commitError && (
+              <div style={{ border: "1px solid var(--danger)", background: "var(--danger-bg)", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 6 }}>
+                <span className="mono" style={{ fontSize: 10, letterSpacing: ".13em", textTransform: "uppercase", color: "var(--danger)" }}>Not recorded</span>
+                <span style={{ fontSize: 13, lineHeight: 1.5 }}>
+                  This was not written to the evidence chain, so nothing about it has changed.
+                </span>
+                <span className="mono" style={{ fontSize: 10.5, color: "var(--tx-2)" }}>{commitError}</span>
+              </div>
+            )}
             {isSettled && (
               <div className="cc-stamp" style={{ display: "flex", alignItems: "center", gap: 12, border: "1px solid var(--ok)", background: "var(--ok-bg)", padding: 14 }}>
                 <span style={{ width: 28, height: 28, borderRadius: 999, border: "1.5px solid var(--ok)", color: "var(--ok)", display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
@@ -407,8 +446,17 @@ export function CeremonyProvider({ children }: { children: ReactNode }) {
             {inReview && (
               <>
                 <button className="btn btn-ghost" onClick={onReject}>Reject</button>
-                <button className="btn btn-primary" onClick={onSign} disabled={signDisabled || !signersMet}>Sign</button>
+                <button className="btn btn-primary" onClick={() => void onSign()} disabled={signDisabled || !signersMet}>Sign</button>
               </>
+            )}
+            {commitError && (
+              <div style={{ border: "1px solid var(--danger)", background: "var(--danger-bg)", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 6 }}>
+                <span className="mono" style={{ fontSize: 10, letterSpacing: ".13em", textTransform: "uppercase", color: "var(--danger)" }}>Not recorded</span>
+                <span style={{ fontSize: 13, lineHeight: 1.5 }}>
+                  This was not written to the evidence chain, so nothing about it has changed.
+                </span>
+                <span className="mono" style={{ fontSize: 10.5, color: "var(--tx-2)" }}>{commitError}</span>
+              </div>
             )}
             {isSettled && (
               <button className="btn btn-primary" onClick={onNext}>{queue.length > 1 ? `Next in queue (${queue.length - 1})` : "Close"}</button>

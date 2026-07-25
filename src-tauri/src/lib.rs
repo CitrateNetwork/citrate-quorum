@@ -168,6 +168,8 @@ pub fn run() {
             // The tenant scope is backend-owned: no command below takes one.
             backend::tenant_set,
             backend::tenant_active,
+            backend::operator_set,
+            backend::operator_get,
             backend::action_evaluate_and_record,
             backend::action_reject,
             backend::action_approve,
@@ -178,6 +180,8 @@ pub fn run() {
             backend::ledger_verify,
             backend::ledger_ungoverned_count,
             backend::grant_issue,
+            backend::agents_known,
+            backend::grants_for_agent,
             backend::grant_revoke,
             backend::allowance_issue,
             backend::allowance_revoke,

@@ -38,11 +38,52 @@ export type GateOutcome =
  *                  already name one. Undefined leaves the record without a
  *                  principal rather than inventing one.
  */
+/**
+ * A human acting under their own authority — not an agent asking permission.
+ *
+ * The policy engine binds AGENTS: it answers "which grant lets this agent do
+ * this". An operator has no grant, so evaluating them returns `ungoverned` —
+ * and HIC-X is "an alert state, never a configuration" (04_HIC_MODEL §2).
+ * Running operators through the agent gate showed a red UNGOVERNED plate for
+ * issuing a grant, and wrote an ungoverned record for every human act, which
+ * inflates the one number the product exists to keep honest.
+ *
+ * The act is still recorded — by whichever command commits it, naming the
+ * human (`record_principal_action` in the backend) — so this is not a bypass.
+ * It is the difference between "nobody authorised this" and "a person did it".
+ */
+function principalAuthority(): GateDecision {
+  return {
+    decisionId: -1,
+    verdict: "approved",
+    hic: "1",
+    grantId: null,
+    reason: "you are acting under your own authority — recorded against your name",
+    chainHead: "",
+    ungoverned: false,
+  };
+}
+
+/** Human-origin intents come from the operator; anything else is an agent. */
+export function isPrincipalOrigin(origin: string): boolean {
+  return origin === "user";
+}
+
 export async function runGate(
   evaluate: (a: GovernedAction) => Promise<GateDecision>,
   action: GovernedAction,
-  principal?: string,
+  principal: string | undefined,
+  /**
+   * REQUIRED, and deliberately not defaulted: a default of "user" would mean
+   * that forgetting this argument silently skips the agent gate. The safe
+   * failure for an omitted origin is a compile error.
+   */
+  origin: string,
 ): Promise<GateOutcome> {
+  // L-1 makes these HIC-1 regardless; the ceremony IS that control.
+  if (isPrincipalOrigin(origin)) {
+    return { open: true, gate: principalAuthority() };
+  }
   let gate: GateDecision;
   try {
     gate = await evaluate({ ...action, principal: action.principal ?? principal });

@@ -6,13 +6,18 @@
 import { Fragment, useEffect, useState } from "react";
 import { bridge } from "../bridge";
 import { DomainErrorPlate, useDomain } from "../components/DomainState";
-import type { Agent, Grant } from "../bridge";
+import type { Agent, Classification, Grant } from "../bridge";
 import { VENDORS } from "../theme/vendors";
 import { useCeremony } from "../ceremony/Ceremony";
 
 const HIC_COLOR: Record<number, string> = { 0: "var(--tx-3)", 1: "var(--ok)", 2: "var(--info)", 3: "var(--warn)" };
 const STATUS_COLOR: Record<string, string> = { active: "var(--ok)", probation: "var(--warn)", quarantined: "var(--danger)" };
-const REP_LABELS: [keyof Agent["reputation"], string][] = [
+
+/** Registry-only fields are absent until the AgentSBT read lands. An em dash is
+ *  the honest render; a plausible value is not (Rule 1). */
+const orDash = (v: string | number | undefined | null) =>
+  v === undefined || v === null || v === "" ? "—" : String(v);
+const REP_LABELS: [keyof NonNullable<Agent["reputation"]>, string][] = [
   ["dispute", "Dispute rate"], ["contradiction", "Contradiction"], ["escalation", "Escalation"], ["budget", "Budget adherence"], ["grader", "Claim-grader"],
 ];
 
@@ -21,12 +26,35 @@ export function Agents() {
   const [sel, setSel] = useState<Agent | null>(null);
   const [grants, setGrants] = useState<Grant[]>([]);
   const [revoked, setRevoked] = useState<Set<string>>(new Set());
+  const [refresh, setRefresh] = useState(0);
+  const [formOpen, setFormOpen] = useState(false);
+  const [formError, setFormError] = useState("");
+  const [form, setForm] = useState({
+    id: "",
+    agent: "",
+    principal: "",
+    scope: "",
+    classes: "repo.write",
+    ceiling: "Public" as Classification,
+    budget: 100,
+    days: 45,
+    hic: "2",
+  });
   const ceremony = useCeremony();
 
 
   // Honest failure (S2D.4/§5.1): this surface's primary read is agents.list().
   // A read that cannot succeed must say so and offer a retry, not sit in a
   // loading state forever.
+  // Re-read after any issue/revoke: the backend is the record, not this state.
+  useEffect(() => {
+    if (refresh === 0) return;
+    bridge.agents.list().then(setFleet).catch(() => {});
+    if (sel) bridge.agents.grants(sel.id).then(setGrants).catch(() => {});
+    // `sel` is intentionally not a dep: this fires on an explicit change only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refresh]);
+
   const primary = useDomain(() => bridge.agents.list(), "agents.list()");
   useEffect(() => {
     if (primary.state.status === "ready") setFleet(primary.state.data);
@@ -41,6 +69,7 @@ export function Agents() {
 
   const open = (a: Agent) => {
     setSel(a); setRevoked(new Set());
+    setForm((f) => ({ ...f, agent: a.id }));
     bridge.agents.grants(a.id).then(setGrants).catch(() => {});
   };
 
@@ -52,7 +81,11 @@ export function Agents() {
       action: { actionClass: "grant.revoke", classification: "Proprietary", agent: "user", mandatoryHic1: true },
       rows: [{ k: "Grant", v: `${g.id} · ${g.classes}` }, { k: "Agent", v: `${sel.name} · ${sel.sbt}` }, { k: "Scope", v: g.scope }, { k: "Effect", v: "immediate — the capability is gone at the next checkpoint" }],
     });
-    if (r.outcome === "settled") setRevoked((s) => new Set(s).add(g.id));
+    if (r.outcome === "settled") {
+      setRevoked((s) => new Set(s).add(g.id));
+      await bridge.agents.revoke(sel.id, g.id, form.principal.trim() || "operator").catch(() => {});
+      setRefresh((n) => n + 1);
+    }
   };
 
   const killAll = async () => {
@@ -62,16 +95,65 @@ export function Agents() {
       action: { actionClass: "grant.revoke-all", classification: "Proprietary", agent: "user", mandatoryHic1: true },
       rows: [{ k: "Agent", v: `${sel.name} · ${sel.sbt}` }, { k: "Grants revoked", v: `${grants.length} live grants` }, { k: "Keeps", v: "identity + history" }, { k: "Loses", v: "every capability" }, { k: "Running actions", v: "abort at the next checkpoint (<25s)" }],
     });
-    if (r.outcome === "settled") setRevoked(new Set(grants.map((g) => g.id)));
+    if (r.outcome === "settled") {
+      setRevoked(new Set(grants.map((g) => g.id)));
+      for (const g of grants) {
+        await bridge.agents
+          .revoke(sel.id, g.id, form.principal.trim() || "operator")
+          .catch(() => {});
+      }
+      setRefresh((n) => n + 1);
+    }
   };
 
+  /**
+   * Issue a capability grant. L-1 makes this HIC-1, so the terms go to the
+   * ceremony FIRST and the grant is only written if a human signs — the
+   * ceremony is not a confirmation dialog after the fact.
+   */
   const issueGrant = async () => {
     if (!sel) return;
-    await ceremony.request({
-      kind: "grant", title: `Issue grant — ${sel.name}`, origin: "user",
-      action: { actionClass: "grant.issue", classification: "Proprietary", agent: "user", mandatoryHic1: true },
-      rows: [{ k: "Agent", v: `${sel.name} · ${sel.sbt}` }, { k: "Action classes", v: "(configured in the grant form)" }, { k: "HIC level", v: "HIC-2 · budgeted autonomy" }, { k: "Expiry", v: "45-day maximum" }],
+    const agent = form.agent.trim() || sel.id;
+    const classes = form.classes.split(/[,\s]+/).filter(Boolean);
+    if (!classes.length || !form.principal.trim()) {
+      setFormError("An action class and the issuing principal are both required.");
+      return;
+    }
+    setFormError("");
+    const expiresAtMs = Date.now() + form.days * 86_400_000;
+    const r = await ceremony.request({
+      kind: "grant",
+      title: `Issue grant — ${agent}`,
+      origin: "user",
+      action: { actionClass: "grant.issue", classification: form.ceiling, agent: "user", mandatoryHic1: true },
+      rows: [
+        { k: "Agent", v: agent },
+        { k: "Action classes", v: classes.join(" · ") },
+        { k: "Ceiling", v: form.ceiling },
+        { k: "Budget", v: `${form.budget} units` },
+        { k: "HIC level", v: `HIC-${form.hic}` },
+        { k: "Expires", v: `${form.days} days` },
+        { k: "Issued by", v: form.principal },
+      ],
     });
+    if (r.outcome !== "settled") return;
+    try {
+      await bridge.agents.issue({
+        id: form.id.trim() || `G-${Date.now()}`,
+        agent,
+        principal: form.principal.trim(),
+        tenantScope: form.scope.trim(),
+        actionClasses: classes,
+        classificationCeiling: form.ceiling,
+        budgetUnits: form.budget,
+        expiresAtMs,
+        hic: form.hic,
+      });
+      setFormOpen(false);
+      setRefresh((n) => n + 1);
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : String(e));
+    }
   };
 
   const liveGrants = grants.filter((g) => !revoked.has(g.id));
@@ -87,17 +169,19 @@ export function Agents() {
           const bc = pct >= 90 ? "var(--warn)" : "var(--accent)";
           return (
             <div key={a.id} onClick={() => open(a)} style={{ display: "grid", gridTemplateColumns: "150px 90px 60px 60px 150px 100px 110px", gap: 10, padding: "10px 14px", borderBottom: "1px solid var(--line-1)", cursor: "pointer", alignItems: "center", background: sel?.id === a.id ? "var(--srf-1)" : "transparent" }}>
-              <span style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}><span style={{ width: 8, height: 8, borderRadius: 999, background: VENDORS[a.vendor]?.color, flexShrink: 0 }} /><span style={{ fontSize: 13, fontWeight: 500 }}>{a.name}</span></span>
-              <span className="mono" style={{ fontSize: 10, color: "var(--tx-3)" }}>{a.sbt}</span>
-              <span className="mono" style={{ fontSize: 10, color: HIC_COLOR[a.hic] }}>HIC-{a.hic}</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}><span style={{ width: 8, height: 8, borderRadius: 999, background: a.vendor ? VENDORS[a.vendor]?.color : "var(--line-2)", flexShrink: 0 }} /><span style={{ fontSize: 13, fontWeight: 500 }}>{a.name}</span></span>
+              <span className="mono" style={{ fontSize: 10, color: "var(--tx-3)" }}>{orDash(a.sbt)}</span>
+              <span className="mono" style={{ fontSize: 10, color: a.hic === undefined ? "var(--tx-3)" : HIC_COLOR[a.hic] }}>{a.hic === undefined ? "—" : `HIC-${a.hic}`}</span>
               <span className="mono tabular" style={{ fontSize: 11 }}>{a.grants}</span>
               <span style={{ display: "flex", alignItems: "center", gap: 8 }}><div style={{ flex: 1, height: 7, background: "var(--srf-inset)", border: "1px solid var(--line-1)" }}><div style={{ height: "100%", width: `${pct}%`, background: bc }} /></div><span className="mono tabular" style={{ fontSize: 9.5, color: "var(--tx-3)" }}>{a.budgetUsed}/{a.budgetCap}</span></span>
-              <span className="mono tabular" style={{ fontSize: 10, color: "var(--tx-3)" }}>{a.disputeRate}</span>
-              <span className="mono" style={{ fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase", color: STATUS_COLOR[a.status] }}>{a.status}</span>
+              <span className="mono tabular" style={{ fontSize: 10, color: "var(--tx-3)" }}>{orDash(a.disputeRate)}</span>
+              <span className="mono" style={{ fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase", color: a.status ? STATUS_COLOR[a.status] : "var(--tx-3)" }}>{orDash(a.status)}</span>
             </div>
           );
         })}
-        <div className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)", padding: "8px 14px" }}>Read from agents.list() → AgentRegistry + GrantRegistry · lifecycle: register → probation HIC-0/1 → promotion, each step a ceremony</div>
+        <div className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)", padding: "8px 14px" }}>
+          Agent · Grants · Budget read from agents.list() → this tenant&apos;s grants + decision records. SBT · HIC · Disputes · Status come from the AgentSBT registry (a chain read) and show — until it is wired.
+        </div>
       </div>
 
       {sel && (
@@ -105,15 +189,20 @@ export function Agents() {
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <div className="surface" style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ width: 10, height: 10, borderRadius: 999, background: VENDORS[sel.vendor]?.color }} />
+                <span style={{ width: 10, height: 10, borderRadius: 999, background: sel.vendor ? VENDORS[sel.vendor]?.color : "var(--line-2)" }} />
                 <span style={{ fontFamily: "var(--font-display)", fontWeight: 460, fontSize: 20 }}>{sel.name}</span>
-                <span className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)" }}>{VENDORS[sel.vendor]?.name} · {sel.sbt}</span>
+                <span className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)" }}>{sel.vendor ? VENDORS[sel.vendor]?.name : "vendor —"} · {orDash(sel.sbt)}</span>
                 <div style={{ flex: 1 }} />
-                <span className="mono" style={{ fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase", color: STATUS_COLOR[sel.status], border: `1px solid ${STATUS_COLOR[sel.status]}`, padding: "2px 8px" }}>{sel.status}</span>
+                <span className="mono" style={{ fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase", color: sel.status ? STATUS_COLOR[sel.status] : "var(--tx-3)", border: `1px solid ${sel.status ? STATUS_COLOR[sel.status] : "var(--line-2)"}`, padding: "2px 8px" }}>{orDash(sel.status)}</span>
               </div>
               {sel.quarantine && <div style={{ border: "1px solid var(--danger)", background: "var(--danger-bg)", padding: "10px 12px", fontSize: 12.5, lineHeight: 1.5 }}>{sel.quarantine}</div>}
               <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", gap: "6px 10px", fontSize: 12 }}>
-                {([["DID", sel.did], ["Pubkey", sel.pubkey], ["Model", `${sel.model} · LoRA ${sel.lora}`], ["Adapter", `${sel.transport} · ${sel.sandbox} · egress ${sel.egress}`]] as [string, string][]).map(([k, v]) => (
+                {([
+                  ["DID", orDash(sel.did)],
+                  ["Pubkey", orDash(sel.pubkey)],
+                  ["Model", sel.model ? `${sel.model} · LoRA ${orDash(sel.lora)}` : "—"],
+                  ["Adapter", sel.transport ? `${sel.transport} · ${orDash(sel.sandbox)} · egress ${orDash(sel.egress)}` : "—"],
+                ] as [string, string][]).map(([k, v]) => (
                   <Fragment key={k}>
                     <span className="mono" style={{ fontSize: 9, letterSpacing: ".1em", textTransform: "uppercase", color: "var(--tx-3)", paddingTop: 2 }}>{k}</span>
                     <span className="mono" style={{ fontSize: 11 }}>{v}</span>
@@ -122,15 +211,26 @@ export function Agents() {
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 5, borderTop: "1px solid var(--line-1)", paddingTop: 10 }}>
                 <span className="eyebrow">Capsules — manifest-hash verified</span>
-                {sel.capsules.map((cp) => (
+                {!sel.capsules && (
+                  <span className="mono" style={{ fontSize: 10, color: "var(--tx-3)" }}>
+                    — CapsuleRegistry is a chain read; it lands with the registry
+                  </span>
+                )}
+                {(sel.capsules ?? []).map((cp) => (
                   <div key={cp.name} className="mono" style={{ display: "flex", gap: 10, fontSize: 10.5, alignItems: "baseline" }}><span>{cp.name}</span><span style={{ color: "var(--tx-3)" }}>{cp.hash}</span><span style={{ color: cp.verified ? "var(--ok)" : "var(--danger)" }}>{cp.verified ? "verified" : "UNVERIFIED — refuses to load"}</span></div>
                 ))}
               </div>
             </div>
             <div className="surface" style={{ padding: 16, display: "flex", flexDirection: "column", gap: 8 }}>
               <span className="eyebrow">Reputation — measured facts, with denominators</span>
-              {REP_LABELS.map(([key, label]) => {
-                const [v, d] = sel.reputation[key];
+              {!sel.reputation && (
+                <span className="mono" style={{ fontSize: 10, color: "var(--tx-3)" }}>
+                  — measured over disputes, contradictions and budget adherence; needs the
+                  AgentSBT registry and a dispute history to divide by
+                </span>
+              )}
+              {(sel.reputation ? REP_LABELS : []).map(([key, label]) => {
+                const [v, d] = sel.reputation![key];
                 return (
                   <div key={key} style={{ display: "grid", gridTemplateColumns: "150px 70px 1fr", gap: 10, borderBottom: "1px solid var(--line-1)", paddingBottom: 5, alignItems: "baseline" }}>
                     <span className="mono" style={{ fontSize: 9.5, letterSpacing: ".08em", textTransform: "uppercase", color: "var(--tx-3)" }}>{label}</span>
@@ -146,8 +246,48 @@ export function Agents() {
             <div className="surface" style={{ display: "flex", flexDirection: "column", borderTop: `2px solid ${liveGrants.length ? "var(--accent)" : "var(--line-2)"}` }}>
               <div style={{ display: "flex", alignItems: "center", padding: "10px 14px", borderBottom: "1px solid var(--line-1)", gap: 10 }}>
                 <span className="eyebrow">Grants — the envelope</span><div style={{ flex: 1 }} />
-                <button className="btn btn-primary btn-sm" onClick={issueGrant}>Issue grant</button>
+                <button className="btn btn-primary btn-sm" onClick={() => setFormOpen((o) => !o)}>
+                  {formOpen ? "Cancel" : "Issue grant"}
+                </button>
               </div>
+              {formOpen && (
+                <div style={{ padding: "12px 14px", display: "flex", flexDirection: "column", gap: 10, borderBottom: "1px solid var(--line-1)", background: "var(--srf-inset)" }}>
+                  <span className="mono" style={{ fontSize: 9.5, letterSpacing: ".12em", textTransform: "uppercase", color: "var(--tx-3)" }}>
+                    New capability grant — signed in a ceremony (L-1)
+                  </span>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                    <div><div className="lbl">Agent</div>
+                      <input className="input" style={{ width: "100%" }} value={form.agent} onChange={(e) => setForm({ ...form, agent: e.target.value })} placeholder="agent id" /></div>
+                    <div><div className="lbl">Issued by</div>
+                      <input className="input" style={{ width: "100%" }} value={form.principal} onChange={(e) => setForm({ ...form, principal: e.target.value })} placeholder="your name — recorded" /></div>
+                    <div style={{ gridColumn: "1 / -1" }}><div className="lbl">Action classes</div>
+                      <input className="input" style={{ width: "100%" }} value={form.classes} onChange={(e) => setForm({ ...form, classes: e.target.value })} placeholder="repo.write pr.open spend" /></div>
+                    <div><div className="lbl">Classification ceiling</div>
+                      <select className="input" style={{ width: "100%" }} value={form.ceiling} onChange={(e) => setForm({ ...form, ceiling: e.target.value as Classification })}>
+                        <option>Public</option><option>Proprietary</option><option>CUI</option><option>ITAR</option>
+                      </select></div>
+                    <div><div className="lbl">HIC level</div>
+                      <select className="input" style={{ width: "100%" }} value={form.hic} onChange={(e) => setForm({ ...form, hic: e.target.value })}>
+                        <option value="1">HIC-1 · approve each</option>
+                        <option value="2">HIC-2 · budgeted autonomy</option>
+                        <option value="3">HIC-3 · post-hoc review</option>
+                      </select></div>
+                    <div><div className="lbl">Budget (units)</div>
+                      <input className="input" style={{ width: "100%" }} type="number" value={form.budget} onChange={(e) => setForm({ ...form, budget: Number(e.target.value) })} /></div>
+                    <div><div className="lbl">Expires in (days)</div>
+                      <input className="input" style={{ width: "100%" }} type="number" value={form.days} onChange={(e) => setForm({ ...form, days: Number(e.target.value) })} /></div>
+                  </div>
+                  <span className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)" }}>
+                    Every governed action charges at least one unit; the envelope depletes and returns to you.
+                  </span>
+                  {formError && (
+                    <span className="mono" style={{ fontSize: 10.5, color: "var(--danger)" }}>{formError}</span>
+                  )}
+                  <div>
+                    <button className="btn btn-primary btn-sm" onClick={() => void issueGrant()}>Review &amp; sign</button>
+                  </div>
+                </div>
+              )}
               {liveGrants.length === 0 ? (
                 <div style={{ padding: "16px 14px", fontSize: 12.5, color: "var(--tx-3)" }}>No live grants. This agent can observe and speak, and nothing else.</div>
               ) : (

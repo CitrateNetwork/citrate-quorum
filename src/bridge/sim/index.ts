@@ -27,6 +27,8 @@ const delay = <T>(ms: number, v: T): Promise<T> =>
  * flow runs in both modes.
  */
 let simTenant: string | null = null;
+/** The prototype signs in as its scripted user. */
+let simOperator: string | null = D.SESSION.user.name;
 
 /**
  * The SCRIPTED policy gate — the sim's stand-in for `quorum-policy`.
@@ -122,6 +124,11 @@ export function createSimBridge(): BridgeContract {
         simTenant = tenant;
         return delay(40, undefined);
       },
+      operator: () => delay(40, simOperator),
+      setOperator: (name: string) => {
+        simOperator = name;
+        return delay(40, undefined);
+      },
     },
     policy: {
       evaluate: (a: GovernedAction) => {
@@ -182,6 +189,10 @@ export function createSimBridge(): BridgeContract {
     agents: {
       list: () => delay(200, D.AGENTS),
       grants: (id: string) => delay(150, D.GRANTS[id] ?? []),
+      // The prototype has no store to write to; the flow's shape is what
+      // matters here, and the real adapter is what proves it.
+      issue: () => delay(150, undefined),
+      revoke: () => delay(150, true),
     },
     rooms: {
       list: () => delay(150, D.ROOMS),

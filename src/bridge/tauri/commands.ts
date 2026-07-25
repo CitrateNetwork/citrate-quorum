@@ -24,6 +24,16 @@ export function tenantActive(): Promise<string | null> {
   return invoke<string | null>("tenant_active");
 }
 
+/** The human at the keyboard, or null if nobody has been named. */
+export function operatorGet(): Promise<string | null> {
+  return invoke<string | null>("operator_get");
+}
+
+/** Name the human at the keyboard. Rejects an empty name. */
+export function operatorSet(operator: string): Promise<void> {
+  return invoke<void>("operator_set", { operator });
+}
+
 /** Establish the active tenant scope. Rejects a malformed tenant id. */
 export function tenantSet(tenant: string): Promise<void> {
   return invoke<void>("tenant_set", { tenant });
@@ -118,6 +128,8 @@ export function approvalsPending(): Promise<PendingApprovalRow[]> {
 export interface GrantInput {
   id: string;
   agent: string;
+  /** The human issuing it. The backend refuses an anonymous grant. */
+  issued_by: string;
   principal: string;
   tenant_scope: string;
   action_classes: string[];
@@ -126,11 +138,46 @@ export interface GrantInput {
   expires_at_ms: number;
   hic: string; // "1" | "2" | "3"
 }
+export interface AgentRow {
+  id: string;
+  live_grants: number;
+  budget_units: number;
+  consumed: number;
+  decisions: number;
+  ungoverned: number;
+}
+/** Agents this tenant has evidence about — granted, or seen acting. */
+export function agentsKnown(): Promise<AgentRow[]> {
+  return invoke<AgentRow[]>("agents_known");
+}
+
+export interface GrantRow {
+  id: string;
+  agent: string;
+  principal: string;
+  scope: string;
+  classes: string;
+  ceiling: Classification;
+  budget_units: number;
+  consumed: number;
+  hic: string;
+  expires_at_ms: number;
+  revoked: boolean;
+}
+/** The capability grants one agent holds, revoked ones included. */
+export function grantsForAgent(agent: string): Promise<GrantRow[]> {
+  return invoke<GrantRow[]>("grants_for_agent", { agent });
+}
+
 export function grantIssue(input: GrantInput): Promise<void> {
   return invoke<void>("grant_issue", { input });
 }
-export function grantRevoke(agent: string, grantId: string): Promise<boolean> {
-  return invoke<boolean>("grant_revoke", { agent, grantId });
+export function grantRevoke(
+  agent: string,
+  grantId: string,
+  revokedBy: string,
+): Promise<boolean> {
+  return invoke<boolean>("grant_revoke", { agent, grantId, revokedBy });
 }
 
 // ---- vote allowances (the delegated voting franchise) --------------

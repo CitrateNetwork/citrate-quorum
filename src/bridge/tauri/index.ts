@@ -23,13 +23,22 @@ import {
   Unavailable,
   type Decision,
   type GateDecision,
+  type Agent,
   type GovernedAction,
+  type Grant,
+  type GrantTerms,
   type HicLevel,
   type PendingApproval,
   type Unsubscribe,
 } from "../types";
 import {
   actionApprove,
+  agentsKnown,
+  grantIssue,
+  grantRevoke,
+  grantsForAgent,
+  operatorGet,
+  operatorSet,
   actionEvaluateAndRecord,
   actionReject,
   approvalsPending,
@@ -89,6 +98,8 @@ export function createTauriBridge(): BridgeContract {
       // LIVE: backend-owned tenant scope.
       activeTenant: () => tenantActive(),
       setActiveTenant: (tenant: string) => tenantSet(tenant),
+      operator: () => operatorGet(),
+      setOperator: (name: string) => operatorSet(name),
     },
     policy: {
       // LIVE: quorum-policy evaluate → quorum-audit DecisionRecord → the
@@ -131,7 +142,50 @@ export function createTauriBridge(): BridgeContract {
     },
     wallet: { summary: na("wallet.summary") },
     node: { peers: na("node.peers"), logs: naStream("node.logs"), blocks: naSync("node.blocks") },
-    agents: { list: na("agents.list"), grants: na("agents.grants") },
+    agents: {
+      // LIVE: the fleet this tenant has evidence about (`agents_known`). The
+      // registry-only fields (vendor, model, capsules, reputation) are simply
+      // absent — the surface renders them as "—" naming their source rather
+      // than inventing a vendor for an agent we have only seen act.
+      list: async (): Promise<Agent[]> =>
+        (await agentsKnown()).map((a) => ({
+          id: a.id,
+          name: a.id,
+          grants: a.live_grants,
+          budgetUsed: a.consumed,
+          budgetCap: a.budget_units,
+          decisions: a.decisions,
+          ungoverned: a.ungoverned,
+        })),
+      // LIVE: real capability grants (`grants_for_agent`).
+      grants: async (agentId: string): Promise<Grant[]> =>
+        (await grantsForAgent(agentId)).map((g) => ({
+          id: g.id,
+          classes: g.classes,
+          scope: g.scope,
+          budget: `${g.consumed}/${g.budget_units}`,
+          expiry:
+            g.expires_at_ms >= Number.MAX_SAFE_INTEGER ? "no expiry" : String(g.expires_at_ms),
+          hic: Number(g.hic),
+          principal: g.principal,
+          revoked: g.revoked,
+        })),
+      issue: (terms: GrantTerms) =>
+        grantIssue({
+          id: terms.id,
+          agent: terms.agent,
+          issued_by: terms.principal,
+          principal: terms.principal,
+          tenant_scope: terms.tenantScope,
+          action_classes: terms.actionClasses,
+          classification_ceiling: terms.classificationCeiling,
+          budget_units: terms.budgetUnits,
+          expires_at_ms: terms.expiresAtMs,
+          hic: terms.hic,
+        }),
+      revoke: (agent: string, grantId: string, revokedBy: string) =>
+        grantRevoke(agent, grantId, revokedBy),
+    },
     rooms: { list: na("rooms.list"), roster: na("rooms.roster"), events: naStream("rooms.events") },
     ledger: {
       // LIVE: the real per-tenant hash chain.
