@@ -26,6 +26,7 @@
 use citrate_core_kit::{ceremony, config, custody, oidc};
 use tauri::Manager;
 
+mod agent_bridge;
 mod backend;
 mod store;
 
@@ -94,12 +95,44 @@ pub fn run() {
             // it must not start up pretending otherwise, so a store that will
             // not open is a hard startup failure rather than a silent fall back
             // to memory.
-            let evidence_root = app.path().app_data_dir()?.join("evidence");
-            let store = store::EvidenceStore::open(evidence_root)
+            let app_data = app.path().app_data_dir()?;
+            let store = store::EvidenceStore::open(app_data.join("evidence"))
                 .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?;
-            app.manage(std::sync::Mutex::new(backend::QuorumBackend::with_store(
-                store,
-            )));
+            let backend = std::sync::Arc::new(std::sync::Mutex::new(
+                backend::QuorumBackend::with_store(store),
+            ));
+            app.manage(std::sync::Arc::clone(&backend));
+
+            // The keyless agent bridge (WP-S4.1): loopback-only, bearer-authed
+            // intake where an agent submits an UNSIGNED intent and gets back a
+            // recorded verdict. It shares the backend, so an agent's tool call
+            // and an operator's click hit the same gate, chain and budget. It
+            // cannot sign: the kit's gated signer is `pub(crate)` to the kit.
+            //
+            // A bridge that cannot start is not fatal — the app is still usable
+            // by a human — but it must be visible, never a silent absence that
+            // looks like "no agents connected".
+            let token = std::sync::Arc::new(agent_bridge::BridgeToken::mint());
+            let agent_dir = app_data.join("agent");
+            match agent_bridge::serve(
+                0,
+                agent_dir.join("token"),
+                std::sync::Arc::clone(&backend),
+                token,
+            ) {
+                Ok(running) => {
+                    let endpoint = serde_json::json!({
+                        "addr": running.addr.to_string(),
+                        "token_file": running.token_path.to_string_lossy(),
+                    });
+                    let _ = std::fs::write(
+                        agent_dir.join("endpoint.json"),
+                        endpoint.to_string(),
+                    );
+                    eprintln!("[quorum] agent bridge listening on {}", running.addr);
+                }
+                Err(e) => eprintln!("[quorum] agent bridge FAILED to start: {e} — no agent can be governed until this is fixed"),
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -156,37 +189,82 @@ pub fn run() {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
+    /// Every quorum-authored source file. The scan below claimed to cover "the
+    /// backend source" while only reading `lib.rs`; it now actually does, which
+    /// matters most for `agent_bridge.rs` — the surface agents talk to.
+    const QUORUM_SOURCES: [(&str, &str); 4] = [
+        ("lib.rs", include_str!("lib.rs")),
+        ("backend.rs", include_str!("backend.rs")),
+        ("store.rs", include_str!("store.rs")),
+        ("agent_bridge.rs", include_str!("agent_bridge.rs")),
+    ];
+
     /// The single-signing-path guard, quorum side (WP-S1.2 acceptance: the
-    /// ceremony source-scan test "runs in both repos"). The gated signer is
-    /// `pub(crate)` to citrate-core-kit, so quorum code CANNOT invoke it — this
-    /// is compiler-enforced. This test additionally scans quorum's own backend
-    /// source to ensure no one adds a competing signing site (a `sign_message(` /
-    /// `sign_transaction(` invocation, or a `#[tauri::command]` that signs). It is
-    /// a forward guard for when quorum grows its own domains.
+    /// ceremony source-scan test "runs in both repos"; QRM-S4 exit gate: "an
+    /// agent cannot obtain a signature without a ceremony"). The gated signer is
+    /// `pub(crate)` to citrate-core-kit, so quorum code CANNOT invoke it — that
+    /// part is compiler-enforced. This scans every quorum-authored module to
+    /// ensure no one adds a competing signing site.
     ///
-    /// NEGATIVE CONTROL: add `let _ = something.sign_message(&v, b"x");` anywhere
-    /// in this crate and this fails. Needles are assembled from parts so this
+    /// NEGATIVE CONTROL: add `let _ = something.sign_message(&v, b"x");` to any
+    /// scanned file and this fails. Needles are assembled from parts so this
     /// test's own prose cannot self-match.
     #[test]
     fn no_competing_signing_site_in_quorum() {
-        let src = include_str!("lib.rs");
         let calls = [
             "sign_".to_string() + "message(",
             "sign_".to_string() + "transaction(",
         ];
+        for (name, src) in QUORUM_SOURCES {
+            for line in src.lines() {
+                let t = line.trim_start();
+                if t.starts_with("//") || t.starts_with("///") || t.starts_with("*") {
+                    continue;
+                }
+                for call in &calls {
+                    assert!(
+                        !t.contains(call.as_str()),
+                        "quorum must route all signing through the kit ceremony, never \
+                         invoke a signer directly ({name}): `{}`",
+                        line.trim()
+                    );
+                }
+            }
+        }
+    }
+
+    /// QRM-S4: the agent bridge is an INTAKE, not a signing surface. An agent
+    /// submits an unsigned intent and receives a verdict; there is no route by
+    /// which it obtains a signature, key or seed. This pins the absence of the
+    /// endpoint an attacker would look for first.
+    #[test]
+    fn the_agent_bridge_exposes_no_signing_route() {
+        let src = include_str!("agent_bridge.rs");
         for line in src.lines() {
             let t = line.trim_start();
             if t.starts_with("//") || t.starts_with("///") {
                 continue;
             }
-            for call in &calls {
+            // The only routes are /health and /intent. Any other matched path
+            // must be added here deliberately, with a reason.
+            if t.contains("path == ") {
                 assert!(
-                    !t.contains(call.as_str()),
-                    "quorum must route all signing through the kit ceremony, never \
-                     invoke a signer directly: `{}`",
-                    line.trim()
+                    t.contains("\"/health\"") || t.contains("\"/intent\""),
+                    "an unexpected agent-bridge route appeared: `{}` — an agent \
+                     intake must not grow endpoints without review",
+                    t
                 );
             }
+        }
+        // The wire shapes live in the non-test code. The test module names these
+        // very strings (it asserts responses never contain them), so scanning it
+        // would make this test fail on its own sibling's vocabulary.
+        let wire = src.split("#[cfg(test)]").next().unwrap_or(src);
+        for banned in ["signature:", "private_key", "seed:", "mnemonic"] {
+            assert!(
+                !wire.contains(banned),
+                "the agent bridge must never carry `{banned}` in its wire shapes"
+            );
         }
     }
 

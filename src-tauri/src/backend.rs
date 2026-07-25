@@ -71,6 +71,22 @@ fn charge_for(cost: u64) -> u64 {
     cost.max(1)
 }
 
+/// `HH:MM:SS` UTC from epoch-ms, for the Ledger's TIME column.
+///
+/// The column was rendering the raw epoch integer, which overflowed into the
+/// next column and told an auditor nothing. Done by hand rather than pulling in
+/// a date library for one format; UTC because an evidence ledger read across
+/// sites must not shift under the reader.
+fn clock_utc(ms: i64) -> String {
+    let secs = ms.div_euclid(1000).rem_euclid(86_400);
+    format!(
+        "{:02}:{:02}:{:02}",
+        secs / 3600,
+        (secs % 3600) / 60,
+        secs % 60
+    )
+}
+
 // ---- input / output DTOs --------------------------------------------
 
 /// A proposed governed action, as the frontend describes it. There is
@@ -312,6 +328,13 @@ impl QuorumBackend {
         self.active_tenant.as_ref().map(|t| t.as_str().to_string())
     }
 
+    /// The active tenant as a validated id, for in-process callers that are not
+    /// Tauri commands (the agent bridge). `None` means no scope is established,
+    /// and the caller must refuse rather than pick one.
+    pub fn active_tenant_id(&self) -> Option<TenantId> {
+        self.active_tenant.clone()
+    }
+
     /// The active tenant, or an honest error. This is the fail-closed boundary:
     /// no tenant scope means no evidence is read or written, ever.
     fn require_tenant(&self) -> Result<TenantId, String> {
@@ -518,7 +541,7 @@ impl QuorumBackend {
             .enumerate()
             .map(|(i, r)| LedgerRow {
                 id: format!("D-{}", 90001 + i as u64),
-                time: format!("{}", r.timestamp_ms),
+                time: clock_utc(r.timestamp_ms),
                 principal: r.principal.clone().unwrap_or_else(|| "—".to_string()),
                 agent: r.agent.clone(),
                 cls: r.action_class.clone(),
@@ -683,7 +706,11 @@ impl QuorumBackend {
 
 /// Shorthand for the managed-state handle Tauri hands each command. The lifetime
 /// is elided per invocation (a `'static` alias breaks the command macro's borrow).
-type Backend<'a> = State<'a, Mutex<QuorumBackend>>;
+///
+/// `Arc` because the agent bridge serves on its own threads and shares exactly
+/// this state — an agent's intent and an operator's click land on one backend,
+/// one evidence chain, one budget.
+type Backend<'a> = State<'a, std::sync::Arc<Mutex<QuorumBackend>>>;
 
 fn now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1404,6 +1431,17 @@ mod tests {
         assert!(err.contains("failed to verify"), "honest error: {err}");
         // And with no scope, nothing is served.
         assert!(b.require_tenant().is_err());
+    }
+
+    #[test]
+    fn the_ledger_clock_is_readable_and_utc() {
+        assert_eq!(clock_utc(0), "00:00:00");
+        // The record the packaged app wrote during the QRM-S4 bridge run. The
+        // file listing showed 18:44 LOCAL; the ledger is UTC, and that gap is
+        // the point of fixing the column to UTC rather than local time.
+        assert_eq!(clock_utc(1_784_943_915_399), "01:45:15");
+        // Negative (pre-epoch) timestamps must not panic or go nonsensical.
+        assert_eq!(clock_utc(-1).len(), 8);
     }
 
     #[test]

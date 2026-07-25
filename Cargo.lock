@@ -676,6 +676,7 @@ version = "0.0.0"
 dependencies = [
  "blake3",
  "citrate-core-kit",
+ "hex",
  "quorum-audit",
  "quorum-clearance",
  "quorum-license",
@@ -683,12 +684,14 @@ dependencies = [
  "quorum-rbac",
  "quorum-session",
  "quorum-tenancy",
+ "rand 0.8.7",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
  "tauri-plugin-store",
+ "zeroize",
 ]
 
 [[package]]
