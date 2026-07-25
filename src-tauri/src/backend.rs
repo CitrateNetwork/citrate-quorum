@@ -52,7 +52,7 @@ use quorum_tenancy::TenantId;
 // agree by construction rather than by two parallel match arms.
 use crate::store::{
     classification_from_str, classification_str, grant_hic_from_str, hex32, hex_encode, hic_str,
-    verdict_str, Charge, EvidenceStore, StoreError,
+    verdict_str, Charge, EvidenceStore, PendingApproval, StoreError,
 };
 
 /// What one governed action costs its grant.
@@ -191,6 +191,17 @@ pub struct QuorumBackend {
     /// Outstanding charges by `(tenant, decision index)` — what each decision
     /// took from its grant, so a rejection refunds exactly that and only once.
     charges: HashMap<(String, u64), Charge>,
+    /// Escalations waiting on a human, by `(tenant, decision index)`. An agent
+    /// that was told `require-approval` is sitting here until someone acts.
+    pending: HashMap<(String, u64), PendingApproval>,
+    /// How each answered escalation was answered, by `(tenant, decision index)`.
+    ///
+    /// Recorded against the EXACT decision rather than inferred from later
+    /// records: two escalations from one agent for one tool share an action
+    /// class and correlation id, and matching on those made one report the
+    /// other's outcome — an agent could be told "approved" for something a
+    /// human had refused.
+    resolved: HashMap<(String, u64), String>,
     /// Where evidence actually lives. `None` only in unit tests of the pure
     /// state logic; the running app always has one.
     store: Option<EvidenceStore>,
@@ -226,12 +237,16 @@ impl QuorumBackend {
             let grants = store.load_grants(&key).map_err(|e| e.to_string())?;
             let allowances = store.load_allowances(&key).map_err(|e| e.to_string())?;
             let charges = store.load_charges(&key).map_err(|e| e.to_string())?;
+            let pending = store.load_pending(&key).map_err(|e| e.to_string())?;
+            let resolved = store.load_resolved(&key).map_err(|e| e.to_string())?;
 
             // Replace, never merge: re-establishing a scope must not duplicate
             // what is already in memory for it.
             self.grants.retain(|(t, _), _| t != &key);
             self.allowances.retain(|(t, _), _| t != &key);
             self.charges.retain(|(t, _), _| t != &key);
+            self.pending.retain(|(t, _), _| t != &key);
+            self.resolved.retain(|(t, _), _| t != &key);
             self.chains.insert(key.clone(), chain);
             for g in grants {
                 self.grants
@@ -244,6 +259,12 @@ impl QuorumBackend {
             }
             for c in charges {
                 self.charges.insert((key.clone(), c.decision), c);
+            }
+            for pa in pending {
+                self.pending.insert((key.clone(), pa.decision), pa);
+            }
+            for (decision, outcome) in resolved {
+                self.resolved.insert((key.clone(), decision), outcome);
             }
             store.save_scope(Some(&key)).map_err(|e| e.to_string())?;
         }
@@ -311,6 +332,49 @@ impl QuorumBackend {
         store
             .save_charges(tenant, &charges)
             .map_err(|e| self.degrade(e))
+    }
+
+    fn persist_pending(&mut self, tenant: &str) -> Result<(), String> {
+        let Some(store) = self.store.clone() else {
+            return Ok(());
+        };
+        let pending: Vec<PendingApproval> = self
+            .pending
+            .iter()
+            .filter(|((t, _), _)| t == tenant)
+            .map(|(_, p)| p.clone())
+            .collect();
+        store
+            .save_pending(tenant, &pending)
+            .map_err(|e| self.degrade(e))
+    }
+
+    fn persist_resolved(&mut self, tenant: &str) -> Result<(), String> {
+        let Some(store) = self.store.clone() else {
+            return Ok(());
+        };
+        let resolved: Vec<(u64, String)> = self
+            .resolved
+            .iter()
+            .filter(|((t, _), _)| t == tenant)
+            .map(|((_, d), outcome)| (*d, outcome.clone()))
+            .collect();
+        store
+            .save_resolved(tenant, &resolved)
+            .map_err(|e| self.degrade(e))
+    }
+
+    /// The escalations a human still has to answer, oldest first — the ceremony
+    /// queue's actual contents.
+    pub fn pending_approvals(&self, tenant: &str) -> Vec<PendingApproval> {
+        let mut v: Vec<PendingApproval> = self
+            .pending
+            .iter()
+            .filter(|((t, _), _)| t == tenant)
+            .map(|(_, p)| p.clone())
+            .collect();
+        v.sort_by_key(|p| (p.requested_at_ms, p.decision));
+        v
     }
 
     fn persist_allowances(&mut self, tenant: &str) -> Result<(), String> {
@@ -444,6 +508,26 @@ impl QuorumBackend {
             self.persist_charges(&tenant_key)?;
         }
 
+        // An escalation is a QUESTION ASKED OF A HUMAN. Park it where the
+        // ceremony queue can find it; an agent stopped and is waiting on this.
+        if decision.verdict == Verdict::RequireApproval {
+            let tenant_key = tenant.as_str().to_string();
+            self.pending.insert(
+                (tenant_key.clone(), decision_id),
+                PendingApproval {
+                    decision: decision_id,
+                    agent: input.agent.clone(),
+                    principal: input.principal.clone(),
+                    action_class: input.class.clone(),
+                    classification: input.classification.clone(),
+                    cost: input.cost,
+                    correlation_id: input.correlation_id.clone(),
+                    requested_at_ms: now_ms,
+                },
+            );
+            self.persist_pending(&tenant_key)?;
+        }
+
         // Durable BEFORE we report success. A decision the operator is told was
         // recorded, but which would vanish on restart, is not evidence.
         if let Some(store) = self.store.clone() {
@@ -484,6 +568,19 @@ impl QuorumBackend {
             .get(&tenant_key)
             .and_then(|c| c.records().nth(decision_id as usize).cloned())
             .ok_or_else(|| format!("no decision {decision_id} in this tenant's ledger"))?;
+
+        // The question has been answered; it leaves the queue either way, and
+        // the answer is recorded against THIS decision id.
+        if self
+            .pending
+            .remove(&(tenant_key.clone(), decision_id))
+            .is_some()
+        {
+            self.persist_pending(&tenant_key)?;
+        }
+        self.resolved
+            .insert((tenant_key.clone(), decision_id), "rejected".to_string());
+        self.persist_resolved(&tenant_key)?;
 
         // Refund, once. Taking the charge out of the map first means a repeated
         // rejection cannot pay out twice.
@@ -530,6 +627,100 @@ impl QuorumBackend {
             chain_head: hex_encode(&head),
             ungoverned: false,
         })
+    }
+
+    /// The human said yes. Records the approval as its own decision — naming
+    /// who approved it — and takes the escalation out of the queue.
+    ///
+    /// The charge STAYS spent: an approved action goes ahead, so it consumes
+    /// the envelope it was always going to consume. Only a rejection refunds.
+    ///
+    /// `approver` is the human accountable for the decision. I-4 makes it
+    /// mandatory: an approval nobody signed for is not evidence of anything.
+    pub fn approve_decision(
+        &mut self,
+        tenant: &TenantId,
+        decision_id: u64,
+        approver: &str,
+        now_ms: i64,
+    ) -> Result<DecisionDto, String> {
+        self.check_not_degraded()?;
+        if approver.trim().is_empty() {
+            return Err("an approval must name the human who gave it".to_string());
+        }
+        let tenant_key = tenant.as_str().to_string();
+
+        // Only a live escalation can be approved. Approving something that was
+        // never escalated — or was already answered — must not mint authority.
+        let pending = self
+            .pending
+            .remove(&(tenant_key.clone(), decision_id))
+            .ok_or_else(|| {
+                format!("decision {decision_id} is not awaiting approval in this tenant")
+            })?;
+        self.persist_pending(&tenant_key)?;
+        self.resolved
+            .insert((tenant_key.clone(), decision_id), "approved".to_string());
+        self.persist_resolved(&tenant_key)?;
+
+        let original = self
+            .chains
+            .get(&tenant_key)
+            .and_then(|c| c.records().nth(decision_id as usize).cloned())
+            .ok_or_else(|| format!("no decision {decision_id} in this tenant's ledger"))?;
+
+        let record = DecisionRecord {
+            agent: original.agent.clone(),
+            principal: Some(approver.to_string()),
+            grant_id: original.grant_id.clone(),
+            action_class: original.action_class.clone(),
+            params_hash: original.params_hash,
+            verdict: Verdict::Approved,
+            hic: HicLevel::ApproveEach,
+            model_id: original.model_id.clone(),
+            correlation_id: original.correlation_id.clone(),
+            timestamp_ms: now_ms,
+        };
+        let chain = self.chain_for(tenant);
+        let head = chain.append(record.clone()).map_err(|e| e.to_string())?;
+        let new_id = (chain.len() - 1) as u64;
+        if let Some(store) = self.store.clone() {
+            store
+                .append_record(tenant.as_str(), &record, head)
+                .map_err(|e| self.degrade(e))?;
+        }
+
+        Ok(DecisionDto {
+            decision_id: new_id,
+            verdict: verdict_str(Verdict::Approved).to_string(),
+            hic: hic_str(HicLevel::ApproveEach).to_string(),
+            grant_id: original.grant_id,
+            reason: format!("RC-301 approved by {approver} for {}", pending.agent),
+            chain_head: hex_encode(&head),
+            ungoverned: false,
+        })
+    }
+
+    /// What an agent polling on its escalation should be told.
+    pub fn decision_status(&self, tenant: &str, decision_id: u64) -> Option<&'static str> {
+        let key = (tenant.to_string(), decision_id);
+        if self.pending.contains_key(&key) {
+            return Some("pending");
+        }
+        if let Some(outcome) = self.resolved.get(&key) {
+            return match outcome.as_str() {
+                "approved" => Some("approved"),
+                "rejected" => Some("rejected"),
+                _ => Some("pending"),
+            };
+        }
+        // A known decision that was never escalated (allowed, or ungoverned
+        // outright) is not waiting on anyone — and was never approved.
+        self.chains
+            .get(tenant)?
+            .records()
+            .nth(decision_id as usize)
+            .map(|_| "pending")
     }
 
     pub fn ledger_rows(&self, tenant: &str) -> Vec<LedgerRow> {
@@ -751,6 +942,27 @@ pub fn action_evaluate_and_record(
     let mut b = lock(&backend)?;
     let tenant = b.require_tenant()?;
     b.evaluate_and_record(&input, &tenant, now_ms())
+}
+
+/// The escalations waiting on a human — the ceremony queue's contents.
+#[tauri::command]
+pub fn approvals_pending(backend: Backend<'_>) -> Result<Vec<PendingApproval>, String> {
+    let b = lock(&backend)?;
+    let tenant = b.require_tenant()?;
+    Ok(b.pending_approvals(tenant.as_str()))
+}
+
+/// The human approved this escalated decision. Records who approved it; the
+/// charge stays spent because the action now goes ahead.
+#[tauri::command]
+pub fn action_approve(
+    backend: Backend<'_>,
+    decision_id: u64,
+    approver: String,
+) -> Result<DecisionDto, String> {
+    let mut b = lock(&backend)?;
+    let tenant = b.require_tenant()?;
+    b.approve_decision(&tenant, decision_id, &approver, now_ms())
 }
 
 /// The human refused this decision: refund what it charged and record the
@@ -1220,6 +1432,219 @@ mod tests {
         );
     }
 
+    // ---- the escalation reaches a human ------------------------------
+
+    fn escalating_action() -> ActionInput {
+        let mut a = action("sbt-41", "spend", "Public", 220);
+        a.hic1_cost_threshold = 150;
+        a
+    }
+
+    #[test]
+    fn an_escalation_lands_in_the_ceremony_queue() {
+        let mut b = QuorumBackend::default();
+        assert!(b.pending_approvals("bca").is_empty());
+        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 1000, "2"), &t("bca"))
+            .unwrap();
+        let d = b
+            .evaluate_and_record(&escalating_action(), &t("bca"), 1000)
+            .unwrap();
+        assert_eq!(d.verdict, "require-approval");
+
+        let queue = b.pending_approvals("bca");
+        assert_eq!(
+            queue.len(),
+            1,
+            "an agent stopped and asked — a human must see it"
+        );
+        assert_eq!(queue[0].decision, d.decision_id);
+        assert_eq!(queue[0].agent, "sbt-41");
+        assert_eq!(queue[0].cost, 220);
+        // An allowed action is not a question, so it does not queue.
+        b.evaluate_and_record(&action("sbt-41", "spend", "Public", 5), &t("bca"), 1100)
+            .unwrap();
+        assert_eq!(b.pending_approvals("bca").len(), 1);
+    }
+
+    #[test]
+    fn approving_records_who_approved_and_clears_the_queue() {
+        let mut b = QuorumBackend::default();
+        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 1000, "2"), &t("bca"))
+            .unwrap();
+        let d = b
+            .evaluate_and_record(&escalating_action(), &t("bca"), 1000)
+            .unwrap();
+
+        let approval = b
+            .approve_decision(&t("bca"), d.decision_id, "R. Ortiz", 2000)
+            .unwrap();
+        assert_eq!(approval.verdict, "approved");
+        assert_eq!(approval.hic, "1");
+        assert!(approval.reason.contains("R. Ortiz"));
+        assert!(
+            b.pending_approvals("bca").is_empty(),
+            "the question is answered"
+        );
+        assert_eq!(b.ledger_rows("bca").len(), 2);
+        assert!(b.ledger_verify("bca"));
+        // The approver is named in the record — that IS the evidence.
+        assert_eq!(b.ledger_rows("bca")[1].principal, "R. Ortiz");
+    }
+
+    #[test]
+    fn an_approved_action_keeps_its_charge_but_a_rejected_one_is_refunded() {
+        let mut b = QuorumBackend::default();
+        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 400, "2"), &t("bca"))
+            .unwrap();
+        let d = b
+            .evaluate_and_record(&escalating_action(), &t("bca"), 1000)
+            .unwrap();
+        b.approve_decision(&t("bca"), d.decision_id, "R. Ortiz", 2000)
+            .unwrap();
+        // 220 of 400 stays spent, so a second 220 cannot fit.
+        assert_eq!(
+            b.evaluate_and_record(&escalating_action(), &t("bca"), 3000)
+                .unwrap()
+                .verdict,
+            "ungoverned",
+            "an approved action goes ahead, so it keeps consuming its envelope"
+        );
+
+        // The same flow, rejected, gives the budget back.
+        let mut b2 = QuorumBackend::default();
+        b2.issue_grant(&grant("sbt-41", &["spend"], "CUI", 400, "2"), &t("bca"))
+            .unwrap();
+        let d2 = b2
+            .evaluate_and_record(&escalating_action(), &t("bca"), 1000)
+            .unwrap();
+        b2.reject_decision(&t("bca"), d2.decision_id, 2000).unwrap();
+        assert_eq!(
+            b2.evaluate_and_record(&escalating_action(), &t("bca"), 3000)
+                .unwrap()
+                .verdict,
+            "require-approval"
+        );
+    }
+
+    #[test]
+    fn a_rejection_also_clears_the_queue() {
+        let mut b = QuorumBackend::default();
+        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 1000, "2"), &t("bca"))
+            .unwrap();
+        let d = b
+            .evaluate_and_record(&escalating_action(), &t("bca"), 1000)
+            .unwrap();
+        b.reject_decision(&t("bca"), d.decision_id, 2000).unwrap();
+        assert!(b.pending_approvals("bca").is_empty());
+    }
+
+    #[test]
+    fn approval_cannot_mint_authority_for_something_never_escalated() {
+        let mut b = QuorumBackend::default();
+        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 1000, "2"), &t("bca"))
+            .unwrap();
+        // An ALLOWED action was never a question — approving it is meaningless.
+        let allowed = b
+            .evaluate_and_record(&action("sbt-41", "spend", "Public", 5), &t("bca"), 1000)
+            .unwrap();
+        assert!(b
+            .approve_decision(&t("bca"), allowed.decision_id, "R. Ortiz", 2000)
+            .is_err());
+        // Nor can a decision be approved twice.
+        let d = b
+            .evaluate_and_record(&escalating_action(), &t("bca"), 1100)
+            .unwrap();
+        assert!(b
+            .approve_decision(&t("bca"), d.decision_id, "R. Ortiz", 2000)
+            .is_ok());
+        assert!(
+            b.approve_decision(&t("bca"), d.decision_id, "R. Ortiz", 3000)
+                .is_err(),
+            "an answered question cannot be answered again"
+        );
+    }
+
+    #[test]
+    fn an_approval_must_name_the_human_who_gave_it() {
+        let mut b = QuorumBackend::default();
+        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 1000, "2"), &t("bca"))
+            .unwrap();
+        let d = b
+            .evaluate_and_record(&escalating_action(), &t("bca"), 1000)
+            .unwrap();
+        let err = b
+            .approve_decision(&t("bca"), d.decision_id, "   ", 2000)
+            .expect_err("an anonymous approval is not evidence");
+        assert!(err.contains("name the human"), "honest error: {err}");
+        assert_eq!(
+            b.pending_approvals("bca").len(),
+            1,
+            "a refused approval must leave the escalation waiting, not drop it"
+        );
+    }
+
+    /// RED: two escalations from the same agent for the same tool share an
+    /// action class and correlation id. Answering them differently must not
+    /// make one report the other's outcome — an agent told "approved" when a
+    /// human said no would act on a refusal.
+    #[test]
+    fn two_escalations_that_look_alike_do_not_borrow_each_others_answers() {
+        let mut b = QuorumBackend::default();
+        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 10_000, "2"), &t("bca"))
+            .unwrap();
+        let first = b
+            .evaluate_and_record(&escalating_action(), &t("bca"), 1000)
+            .unwrap();
+        let second = b
+            .evaluate_and_record(&escalating_action(), &t("bca"), 1100)
+            .unwrap();
+        assert_ne!(first.decision_id, second.decision_id);
+
+        b.approve_decision(&t("bca"), first.decision_id, "R. Ortiz", 2000)
+            .unwrap();
+        b.reject_decision(&t("bca"), second.decision_id, 2100)
+            .unwrap();
+
+        assert_eq!(
+            b.decision_status("bca", first.decision_id),
+            Some("approved")
+        );
+        assert_eq!(
+            b.decision_status("bca", second.decision_id),
+            Some("rejected"),
+            "the human REFUSED this one — telling its agent 'approved' would be \
+             acting on a refusal"
+        );
+    }
+
+    #[test]
+    fn a_waiting_agent_can_learn_what_the_human_decided() {
+        let mut b = QuorumBackend::default();
+        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 1000, "2"), &t("bca"))
+            .unwrap();
+        let d = b
+            .evaluate_and_record(&escalating_action(), &t("bca"), 1000)
+            .unwrap();
+        assert_eq!(b.decision_status("bca", d.decision_id), Some("pending"));
+        b.approve_decision(&t("bca"), d.decision_id, "R. Ortiz", 2000)
+            .unwrap();
+        assert_eq!(b.decision_status("bca", d.decision_id), Some("approved"));
+
+        let mut b2 = QuorumBackend::default();
+        b2.issue_grant(&grant("sbt-41", &["spend"], "CUI", 1000, "2"), &t("bca"))
+            .unwrap();
+        let d2 = b2
+            .evaluate_and_record(&escalating_action(), &t("bca"), 1000)
+            .unwrap();
+        b2.reject_decision(&t("bca"), d2.decision_id, 2000).unwrap();
+        assert_eq!(b2.decision_status("bca", d2.decision_id), Some("rejected"));
+        assert_eq!(
+            b2.decision_status("bca", 999),
+            None,
+            "unknown decision is unknown"
+        );
+    }
+
     #[test]
     fn rejecting_an_ungoverned_decision_records_it_and_refunds_nothing() {
         let mut b = QuorumBackend::default();
@@ -1402,6 +1827,71 @@ mod tests {
             b.evaluate_and_record(&a, &t("bca"), 3000).unwrap().verdict,
             "require-approval",
             "the refund must know what yesterday's decision charged"
+        );
+    }
+
+    #[test]
+    fn an_agent_still_waiting_is_still_waiting_after_a_restart() {
+        let root = TempRoot::new("pending");
+        let decision_id;
+        {
+            let mut b = root.boot();
+            b.set_active_tenant("bca").unwrap();
+            b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 1000, "2"), &t("bca"))
+                .unwrap();
+            let mut a = action("sbt-41", "spend", "Public", 220);
+            a.hic1_cost_threshold = 150;
+            decision_id = b
+                .evaluate_and_record(&a, &t("bca"), 1000)
+                .unwrap()
+                .decision_id;
+            assert_eq!(b.pending_approvals("bca").len(), 1);
+        }
+        let mut b = root.boot();
+        let queue = b.pending_approvals("bca");
+        assert_eq!(
+            queue.len(),
+            1,
+            "an escalation must not evaporate across a restart — the agent is still blocked"
+        );
+        assert_eq!(queue[0].decision, decision_id);
+        // And it can still be answered.
+        assert!(b
+            .approve_decision(&t("bca"), decision_id, "R. Ortiz", 5000)
+            .is_ok());
+        assert!(b.pending_approvals("bca").is_empty());
+    }
+
+    #[test]
+    fn the_answer_a_human_gave_survives_a_restart() {
+        let root = TempRoot::new("resolved");
+        let (approved, rejected);
+        {
+            let mut b = root.boot();
+            b.set_active_tenant("bca").unwrap();
+            b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 10_000, "2"), &t("bca"))
+                .unwrap();
+            let mut a = action("sbt-41", "spend", "Public", 220);
+            a.hic1_cost_threshold = 150;
+            approved = b
+                .evaluate_and_record(&a, &t("bca"), 1000)
+                .unwrap()
+                .decision_id;
+            rejected = b
+                .evaluate_and_record(&a, &t("bca"), 1100)
+                .unwrap()
+                .decision_id;
+            b.approve_decision(&t("bca"), approved, "R. Ortiz", 2000)
+                .unwrap();
+            b.reject_decision(&t("bca"), rejected, 2100).unwrap();
+        }
+        // A blocked agent polls again tomorrow. It must get the same answers.
+        let b = root.boot();
+        assert_eq!(b.decision_status("bca", approved), Some("approved"));
+        assert_eq!(
+            b.decision_status("bca", rejected),
+            Some("rejected"),
+            "a refusal must not decay into anything an agent could act on"
         );
     }
 

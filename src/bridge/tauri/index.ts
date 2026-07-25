@@ -25,11 +25,14 @@ import {
   type GateDecision,
   type GovernedAction,
   type HicLevel,
+  type PendingApproval,
   type Unsubscribe,
 } from "../types";
 import {
+  actionApprove,
   actionEvaluateAndRecord,
   actionReject,
+  approvalsPending,
   ledgerRecords,
   tenantActive,
   tenantSet,
@@ -110,6 +113,21 @@ export function createTauriBridge(): BridgeContract {
       // LIVE: refunds the charge and records the refusal (`action_reject`).
       reject: async (decisionId: number): Promise<GateDecision> =>
         toGate(await actionReject(decisionId)),
+      // LIVE: records the approval, naming the human (`action_approve`).
+      approve: async (decisionId: number, approver: string): Promise<GateDecision> =>
+        toGate(await actionApprove(decisionId, approver)),
+      // LIVE: the escalations an agent is blocked on (`approvals_pending`).
+      pending: async (): Promise<PendingApproval[]> =>
+        (await approvalsPending()).map((p) => ({
+          decision: p.decision,
+          agent: p.agent,
+          principal: p.principal,
+          actionClass: p.action_class,
+          classification: p.classification,
+          cost: p.cost,
+          correlationId: p.correlation_id,
+          requestedAtMs: p.requested_at_ms,
+        })),
     },
     wallet: { summary: na("wallet.summary") },
     node: { peers: na("node.peers"), logs: naStream("node.logs"), blocks: naSync("node.blocks") },

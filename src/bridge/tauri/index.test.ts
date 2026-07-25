@@ -115,6 +115,66 @@ describe("tauri adapter — policy gate", () => {
   });
 });
 
+describe("tauri adapter — the escalation queue", () => {
+  beforeEach(() => {
+    invoke.mockReset();
+  });
+
+  it("maps a queued escalation onto the bridge contract", async () => {
+    invoke.mockResolvedValue([
+      {
+        decision: 3,
+        agent: "claude-code",
+        principal: "R. Ortiz",
+        action_class: "spend",
+        classification: "Public",
+        cost: 220,
+        correlation_id: "X-7104",
+        requested_at_ms: 1000,
+      },
+    ]);
+    const queue = await createTauriBridge().policy.pending();
+    expect(invoke).toHaveBeenCalledWith("approvals_pending");
+    expect(queue).toEqual([
+      {
+        decision: 3,
+        agent: "claude-code",
+        principal: "R. Ortiz",
+        actionClass: "spend",
+        classification: "Public",
+        cost: 220,
+        correlationId: "X-7104",
+        requestedAtMs: 1000,
+      },
+    ]);
+  });
+
+  it("names the approving human on the wire", async () => {
+    invoke.mockResolvedValue({
+      decision_id: 4,
+      verdict: "approved",
+      hic: "1",
+      grant_id: "G-1",
+      reason: "RC-301 approved by R. Ortiz for claude-code",
+      chain_head: "0xabc",
+      ungoverned: false,
+    });
+    const gate = await createTauriBridge().policy.approve(3, "R. Ortiz");
+    expect(invoke).toHaveBeenCalledWith("action_approve", {
+      decisionId: 3,
+      approver: "R. Ortiz",
+    });
+    expect(gate.verdict).toBe("approved");
+    // The approval is its own decision, not a mutation of the escalation.
+    expect(gate.decisionId).toBe(4);
+  });
+
+  it("an empty queue is an empty array, never a thrown error", async () => {
+    invoke.mockResolvedValue([]);
+    await expect(createTauriBridge().policy.pending()).resolves.toEqual([]);
+  });
+});
+
 describe("tauri adapter — tenant scope + ledger", () => {
   beforeEach(() => {
     invoke.mockReset();

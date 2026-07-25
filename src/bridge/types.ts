@@ -265,8 +265,18 @@ export interface InterviewTurn {
 }
 
 // ---- ledger ---------------------------------------------------------
-/** `deny` = the rules said no. `rejected` = the human said no. Different facts. */
-export type Verdict = "allow" | "require-approval" | "deny" | "ungoverned" | "rejected";
+/**
+ * `deny` = the rules said no; `rejected` = the human said no.
+ * `allow` = the rules said yes; `approved` = the human said yes.
+ * Keeping each pair distinct is what lets an auditor see who actually decided.
+ */
+export type Verdict =
+  | "allow"
+  | "require-approval"
+  | "deny"
+  | "ungoverned"
+  | "rejected"
+  | "approved";
 export interface Decision {
   id: string;
   time: string;
@@ -469,13 +479,30 @@ export interface GateDecision {
   /** This decision's index in the tenant's chain — the handle `policy.reject`
    *  refers back to when the human refuses. */
   decisionId: number;
-  verdict: "allow" | "require-approval" | "deny" | "ungoverned" | "rejected";
+  verdict: Verdict;
   hic: HicLevel;
   grantId: string | null;
   reason: string;
   /** The tenant's evidence-chain head after this decision was appended. */
   chainHead: string;
   ungoverned: boolean;
+}
+
+/**
+ * An escalation waiting on a human: an agent asked to do something at HIC-1 and
+ * stopped. It is already recorded — approving or rejecting it answers a question
+ * that has been asked, rather than proposing a new action.
+ */
+export interface PendingApproval {
+  /** The escalated decision's index in the tenant's chain. */
+  decision: number;
+  agent: string;
+  principal: string | null;
+  actionClass: string;
+  classification: Classification;
+  cost: number;
+  correlationId: string;
+  requestedAtMs: number;
 }
 
 export interface SignatureIntent {

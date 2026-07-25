@@ -36,6 +36,7 @@
 //! ```text
 //!   GET  /health          open      → {"ok":true}          (liveness only)
 //!   POST /intent          bearer    → the recorded verdict
+//!   GET  /decision/{id}   bearer    → pending | approved | rejected
 //!   anything else                   → 404
 //!   missing/bad bearer              → 401, no detail
 //! ```
@@ -235,6 +236,37 @@ pub fn handle(
     };
     if !token.matches(presented) {
         return Response::error(401, "bearer token required");
+    }
+
+    // An escalated agent polls here to learn what the human decided. It is a
+    // read: it cannot change a verdict, and it never carries anything but a
+    // status. Without it, `require-approval` would be a dead end for the agent
+    // — it stops, and never learns it may go.
+    if method == "GET" {
+        if let Some(raw) = path.strip_prefix("/decision/") {
+            let Ok(id) = raw.parse::<u64>() else {
+                return Response::error(400, "decision id must be a number");
+            };
+            let guard = match backend.lock() {
+                Ok(g) => g,
+                Err(_) => return Response::error(500, "backend lock poisoned"),
+            };
+            let Some(tenant) = guard.active_tenant_id() else {
+                return Response::error(409, "no active tenant scope");
+            };
+            return match guard.decision_status(tenant.as_str(), id) {
+                Some(status) => Response::json(
+                    200,
+                    serde_json::json!({
+                        "decision_id": id,
+                        "status": status,
+                        "may_proceed": status == "approved",
+                    })
+                    .to_string(),
+                ),
+                None => Response::error(404, "no such decision in this tenant"),
+            };
+        }
     }
 
     if !(method == "POST" && path == "/intent") {
@@ -604,6 +636,85 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_blocked_agent_can_poll_until_the_human_answers() {
+        let t = BridgeToken::mint();
+        let b = backend_with_grant();
+        let tok = current(&t);
+        // Escalate: 220 is over the 150 threshold.
+        let r = post(Some(tok.as_str()), &intent_json("spend", 220), &t, &b);
+        let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+        assert_eq!(v["verdict"], "require-approval");
+        let id = v["decision_id"].as_u64().unwrap();
+
+        let poll = |b: &Mutex<QuorumBackend>| -> serde_json::Value {
+            let r = handle(
+                "GET",
+                &format!("/decision/{id}"),
+                Some(tok.as_str()),
+                "",
+                &t,
+                b,
+                2000,
+            );
+            assert_eq!(r.status, 200);
+            serde_json::from_str(&r.body).unwrap()
+        };
+
+        let before = poll(&b);
+        assert_eq!(before["status"], "pending");
+        assert_eq!(before["may_proceed"], false);
+
+        // The human approves in the ceremony.
+        b.lock()
+            .unwrap()
+            .approve_decision(
+                &quorum_tenancy::TenantId::new("bca").unwrap(),
+                id,
+                "R. Ortiz",
+                3000,
+            )
+            .unwrap();
+
+        let after = poll(&b);
+        assert_eq!(after["status"], "approved");
+        assert_eq!(
+            after["may_proceed"], true,
+            "only now may the agent act — and only because a human said so"
+        );
+    }
+
+    #[test]
+    fn polling_a_decision_requires_the_bearer_and_cannot_change_anything() {
+        let t = BridgeToken::mint();
+        let b = backend_with_grant();
+        let r = handle("GET", "/decision/0", None, "", &t, &b, 1000);
+        assert_eq!(r.status, 401);
+        // A nonsense id is a clean 400, not a panic.
+        let bad = handle(
+            "GET",
+            "/decision/abc",
+            Some(current(&t).as_str()),
+            "",
+            &t,
+            &b,
+            1000,
+        );
+        assert_eq!(bad.status, 400);
+        // Unknown decision → 404, and nothing was recorded by looking.
+        let unknown = handle(
+            "GET",
+            "/decision/99",
+            Some(current(&t).as_str()),
+            "",
+            &t,
+            &b,
+            1000,
+        );
+        assert_eq!(unknown.status, 404);
+        assert_eq!(b.lock().unwrap().ledger_rows("bca").len(), 0);
     }
 
     #[test]

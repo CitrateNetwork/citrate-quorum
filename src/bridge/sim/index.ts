@@ -13,6 +13,7 @@ import type {
   GateDecision,
   GovernedAction,
   LogLine,
+  PendingApproval,
   Unsubscribe,
 } from "../types";
 import * as D from "./data";
@@ -43,6 +44,8 @@ const SIM_GRANTED: Record<string, { grantId: string; hic: "1" | "2" | "3" }> = {
   hermes: { grantId: "G-2301", hic: "3" },
   user: { grantId: "G-1000", hic: "1" },
 };
+/** Escalations the scripted gate has raised and no one has answered yet. */
+const simPending = new Map<number, PendingApproval>();
 let simChainSeq = 0x4a71;
 let simDecisionSeq = 0;
 /** Decisions the scripted gate has issued, so `reject` has something to name. */
@@ -124,6 +127,18 @@ export function createSimBridge(): BridgeContract {
       evaluate: (a: GovernedAction) => {
         const d = simGate(a);
         simIssued.set(d.decisionId, d);
+        if (d.verdict === "require-approval") {
+          simPending.set(d.decisionId, {
+            decision: d.decisionId,
+            agent: a.agent,
+            principal: a.principal ?? null,
+            actionClass: a.actionClass,
+            classification: a.classification,
+            cost: a.cost ?? 0,
+            correlationId: a.correlationId ?? "",
+            requestedAtMs: 0,
+          });
+        }
         return delay(220, d);
       },
       // The prototype has no budget to refund; it records the refusal so the
@@ -135,7 +150,23 @@ export function createSimBridge(): BridgeContract {
           verdict: "rejected" as const,
           hic: "1" as const,
           reason: "RC-300 refused by the human it was escalated to",
+        }).then((r) => {
+          simPending.delete(decisionId);
+          return r;
         }),
+      approve: (decisionId: number, approver: string) =>
+        delay(180, {
+          ...(simIssued.get(decisionId) ??
+            simGate({ actionClass: "unknown", classification: "Public", agent: "user" })),
+          decisionId: simDecisionSeq++,
+          verdict: "approved" as const,
+          hic: "1" as const,
+          reason: `RC-301 approved by ${approver}`,
+        }).then((r) => {
+          simPending.delete(decisionId);
+          return r;
+        }),
+      pending: () => delay(120, [...simPending.values()]),
     },
     wallet: { summary: () => delay(150, D.WALLET) },
     node: {

@@ -21,6 +21,7 @@ import type {
   GateDecision,
   GovernedAction,
   Grant,
+  PendingApproval,
   IngestFile,
   InterviewTurn,
   JournalEntry,
@@ -67,6 +68,13 @@ export interface PolicyDomain {
    * said no" is evidence in a way that a missing record is not.
    */
   reject(decisionId: number): Promise<GateDecision>;
+  /**
+   * The human approved an escalation. Records who approved it; the charge stays
+   * spent, because the action now goes ahead.
+   */
+  approve(decisionId: number, approver: string): Promise<GateDecision>;
+  /** Escalations still waiting on a human — the ceremony queue's contents. */
+  pending(): Promise<PendingApproval[]>;
 }
 
 export interface WalletDomain {

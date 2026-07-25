@@ -91,6 +91,28 @@ export function actionReject(decisionId: number): Promise<DecisionResult> {
   return invoke<DecisionResult>("action_reject", { decisionId });
 }
 
+/** Approve an escalation, naming the human who gave the approval. */
+export function actionApprove(decisionId: number, approver: string): Promise<DecisionResult> {
+  return invoke<DecisionResult>("action_approve", { decisionId, approver });
+}
+
+/** The Rust shape of a queued escalation (snake_case on the wire). */
+export interface PendingApprovalRow {
+  decision: number;
+  agent: string;
+  principal: string | null;
+  action_class: string;
+  classification: Classification;
+  cost: number;
+  correlation_id: string;
+  requested_at_ms: number;
+}
+
+/** Escalations awaiting a human in the active tenant. */
+export function approvalsPending(): Promise<PendingApprovalRow[]> {
+  return invoke<PendingApprovalRow[]>("approvals_pending");
+}
+
 // ---- capability grants ---------------------------------------------
 
 export interface GrantInput {

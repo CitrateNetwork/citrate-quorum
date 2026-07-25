@@ -52,7 +52,9 @@ export function Ledger() {
     
     let unsub: (() => void) | undefined;
     try {
-      unsub = bridge.ledger.stream((d) => setRows((p) => [d, ...p].slice(0, 60)));
+      unsub = bridge.ledger.stream((d) =>
+        setRows((p) => (p.some((r) => r.id === d.id) ? p : [d, ...p].slice(0, 60))),
+      );
     } catch {
       /* the query above already populated the table */
     }

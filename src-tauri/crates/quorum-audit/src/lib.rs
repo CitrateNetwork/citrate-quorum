@@ -38,6 +38,11 @@ pub enum Verdict {
     /// fact about the organisation than "the rules said no", and an auditor
     /// needs to tell them apart.
     Rejected,
+    /// A human the action was escalated to APPROVED it. Distinct from `Allow`
+    /// for the same reason `Rejected` is distinct from `Deny`: "a person
+    /// decided" and "the rules decided" are different facts, and the whole
+    /// point of HIC-1 is being able to show which one happened.
+    Approved,
 }
 
 impl Verdict {
@@ -48,6 +53,7 @@ impl Verdict {
             Verdict::Deny => 2,
             Verdict::Ungoverned => 3,
             Verdict::Rejected => 4,
+            Verdict::Approved => 5,
         }
     }
 }
@@ -126,6 +132,9 @@ impl DecisionRecord {
             // it to `has_authority` would make the most important record in the
             // system the one we could not write.
             Verdict::Rejected => true,
+            // An approval names the human who gave it, always — that is the
+            // entire evidentiary value of an HIC-1 approval.
+            Verdict::Approved => has_authority,
             _ => has_authority,
         }
     }

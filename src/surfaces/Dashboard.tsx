@@ -10,8 +10,9 @@
 // call that would fill them.
 import { useEffect, useState } from "react";
 import { bridge } from "../bridge";
-import type { Decision, Session } from "../bridge";
+import type { Decision, PendingApproval, Session } from "../bridge";
 import { DomainErrorPlate, useDomain } from "../components/DomainState";
+import { useCeremony } from "../ceremony/Ceremony";
 
 const VERDICT_COLOR: Record<string, string> = {
   allow: "var(--ok)",
@@ -25,6 +26,10 @@ const HIC_COLOR: Record<string, string> = {
   "3": "var(--warn)",
   X: "var(--danger)",
 };
+
+/** How often the dashboard re-reads its counts and the escalation queue. The
+ *  chain is append-only and low-rate; polling is honest and simple. */
+const COUNT_REFRESH_MS = 4000;
 
 /** The risk strip's slots and the read each one waits on (Rule 11). */
 const RISK_SLOTS = [
@@ -49,6 +54,26 @@ export function Dashboard({ onGo }: { onGo: (id: string) => void }) {
   const [ribbon, setRibbon] = useState<Decision[]>([]);
   /** The full ledger read backs the counts; the stream keeps them moving. */
   const ledger = useDomain(() => bridge.ledger.query(), "ledger.query()");
+  /**
+   * The REAL ceremony queue: escalations an agent is blocked on right now.
+   * Counting `require-approval` rows in the ledger was wrong — those include
+   * escalations that have already been answered, so the number only ever grew.
+   */
+  const [queue, setQueue] = useState<PendingApproval[]>([]);
+  const [tick, setTick] = useState(0);
+  /**
+   * The counts are a LIVE view, not a snapshot at mount. They were read once
+   * and never again, so the packaged app sat showing "Governed 0" while an
+   * agent's decision was already on the chain — stale in a way that reads
+   * exactly like wrong.
+   */
+  const [rows, setRows] = useState<Decision[] | null>(null);
+  const ceremony = useCeremony();
+
+  useEffect(() => {
+    const iv = setInterval(() => setTick((t) => t + 1), COUNT_REFRESH_MS);
+    return () => clearInterval(iv);
+  }, []);
 
   useEffect(() => {
     // Session posture is optional chrome here — its absence must not blank the
@@ -64,22 +89,51 @@ export function Dashboard({ onGo }: { onGo: (id: string) => void }) {
     setRibbon(ledger.state.data.slice(0, 8));
     let unsub: (() => void) | undefined;
     try {
-      unsub = bridge.ledger.stream((d) => setRibbon((prev) => [d, ...prev].slice(0, 8)));
+      unsub = bridge.ledger.stream((d) =>
+        // Dedupe: a decision can arrive from both the query and the stream, and
+        // the same record must never render twice.
+        setRibbon((prev) => (prev.some((p) => p.id === d.id) ? prev : [d, ...prev].slice(0, 8))),
+      );
     } catch {
       // No stream is survivable — the query above already populated the ribbon.
     }
     return unsub;
   }, [ledger.state]);
 
-  const all = ledger.state.status === "ready" ? ledger.state.data : [];
+  useEffect(() => {
+    let live = true;
+    Promise.resolve()
+      .then(() => bridge.policy.pending())
+      .then((q) => live && setQueue(q))
+      .catch(() => live && setQueue([]));
+    // Refreshed on the same beat, so a decision recorded by an agent shows up
+    // in the counts without the operator reloading anything.
+    Promise.resolve()
+      .then(() => bridge.ledger.query())
+      .then((r) => live && setRows(r))
+      .catch(() => {
+        /* the error plate below already reports a failed read */
+      });
+    return () => {
+      live = false;
+    };
+  }, [tick, ledger.state]);
+
+  /** Answer an escalation in the one ceremony, then refresh immediately. */
+  const answer = async (pa: PendingApproval) => {
+    await ceremony.review(pa);
+    setTick((t) => t + 1);
+  };
+
+  const all = rows ?? (ledger.state.status === "ready" ? ledger.state.data : []);
   const ungoverned = all.filter((r) => r.verdict === "ungoverned").length;
-  const pending = all.filter((r) => r.verdict === "require-approval").length;
-  const known = ledger.state.status === "ready";
+  const pending = queue.length;
+  const known = rows !== null || ledger.state.status === "ready";
 
   const tiles: Tile[] = [
     // Real, from the tenant's own evidence chain.
     { label: "Governed", value: known ? String(all.length) : null, sub: "decisions recorded · ledger.query()", color: "var(--tx-1)", top: "var(--accent)" },
-    { label: "Pending approvals", value: known ? String(pending) : null, sub: "in your ceremony queue", color: pending ? "var(--warn)" : "var(--tx-1)", top: pending ? "var(--warn)" : "var(--line-2)" },
+    { label: "Pending approvals", value: String(pending), sub: "agents blocked · policy.pending()", color: pending ? "var(--warn)" : "var(--tx-1)", top: pending ? "var(--warn)" : "var(--line-2)" },
     { label: "Ungoverned", value: known ? String(ungoverned) : null, sub: "no live grant — review", color: ungoverned ? "var(--danger)" : "var(--tx-1)", top: ungoverned ? "var(--danger)" : "var(--line-2)" },
     // No live source yet. An em dash and the call that would fill it — never a
     // plausible number (Rule 1).
@@ -129,11 +183,21 @@ export function Dashboard({ onGo }: { onGo: (id: string) => void }) {
         ) : !known ? (
           <div className="mono" style={{ padding: "18px 14px", fontSize: 11, color: "var(--tx-3)" }}>reading ledger.query()…</div>
         ) : (
-          ribbon.filter((r) => r.verdict === "require-approval").map((r) => (
-            <div key={r.id} onClick={() => onGo("ledger")} style={{ display: "flex", alignItems: "center", gap: 12, padding: "9px 14px", borderBottom: "1px solid var(--line-1)", cursor: "pointer" }}>
+          queue.map((pa) => (
+            <div
+              key={pa.decision}
+              onClick={() => void answer(pa)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") void answer(pa); }}
+              style={{ display: "flex", alignItems: "center", gap: 12, padding: "9px 14px", borderBottom: "1px solid var(--line-1)", cursor: "pointer" }}
+            >
               <span className="mono" style={{ fontSize: 9, letterSpacing: ".12em", textTransform: "uppercase", color: "var(--warn)", border: "1px solid var(--warn)", padding: "2px 7px", flexShrink: 0 }}>APPROVE</span>
-              <span style={{ fontSize: 13, flex: 1 }}>{r.agent} · {r.cls}</span>
-              <span className="mono" style={{ fontSize: 10, color: "var(--tx-3)" }}>{r.time}</span>
+              <span style={{ fontSize: 13, flex: 1 }}>
+                {pa.agent} · {pa.actionClass}
+                {pa.cost ? ` · ${pa.cost}` : ""}
+              </span>
+              <span className="mono" style={{ fontSize: 10, color: "var(--tx-3)" }}>#{pa.decision}</span>
             </div>
           ))
         )}

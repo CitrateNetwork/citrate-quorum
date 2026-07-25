@@ -39,7 +39,13 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { bridge, type CeremonyPhase, type GateDecision, type SignatureIntent } from "../bridge";
+import {
+  bridge,
+  type CeremonyPhase,
+  type GateDecision,
+  type PendingApproval,
+  type SignatureIntent,
+} from "../bridge";
 import { LoaderMark } from "../components/LoaderMark";
 import { runGate, type CeremonyResult } from "./gate";
 
@@ -49,6 +55,13 @@ interface Pending {
   intent: SignatureIntent;
   /** The verdict recorded BEFORE this dialog opened. */
   gate: GateDecision;
+  /**
+   * Set when this is an agent's escalation being ANSWERED rather than a new
+   * action being proposed. Signing approves the existing decision; rejecting
+   * refuses it. Either way no second decision is evaluated — the question was
+   * already asked and recorded.
+   */
+  answering?: PendingApproval;
   resolve: (r: CeremonyResult) => void;
 }
 
@@ -59,6 +72,12 @@ interface CeremonyApi {
    * or is rejected. A denied or ungateable action never reaches the dialog.
    */
   request: (intent: SignatureIntent) => Promise<CeremonyResult>;
+  /**
+   * Open the ceremony on an agent's escalation. This is the human half of
+   * HIC-1: an agent stopped and asked, and this is where someone answers.
+   * Unlike `request`, it does NOT run the gate — the decision already exists.
+   */
+  review: (pending: PendingApproval) => Promise<CeremonyResult>;
 }
 
 /** The first 10 hex chars of a chain head — enough to recognize, short enough to read. */
@@ -70,6 +89,7 @@ const VERDICT_STYLE: Record<GateDecision["verdict"], { label: string; color: str
   deny: { label: "Denied by policy", color: "var(--danger)" },
   ungoverned: { label: "Ungoverned", color: "var(--danger)" },
   rejected: { label: "Refused by a human", color: "var(--danger)" },
+  approved: { label: "Approved by a human", color: "var(--ok)" },
 };
 
 const Ctx = createContext<CeremonyApi | null>(null);
@@ -134,7 +154,49 @@ export function CeremonyProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const api = useMemo<CeremonyApi>(() => ({ request }), [request]);
+  /**
+   * Answer an agent's escalation. The decision is already on the chain, so this
+   * opens the dialog directly on it — no second evaluation, no second record
+   * for the same act. Signing approves it; rejecting refuses it.
+   */
+  const review = useCallback(async (pa: PendingApproval): Promise<CeremonyResult> => {
+    const gate: GateDecision = {
+      decisionId: pa.decision,
+      verdict: "require-approval",
+      hic: "1",
+      grantId: null,
+      reason: "escalated by an agent — awaiting your decision",
+      chainHead: "",
+      ungoverned: false,
+    };
+    const intent: SignatureIntent = {
+      kind: "grant",
+      title: `${pa.agent} — approve ${pa.actionClass}?`,
+      origin: `agent:${pa.agent}`,
+      action: {
+        actionClass: pa.actionClass,
+        classification: pa.classification,
+        agent: pa.agent,
+        principal: pa.principal ?? undefined,
+        cost: pa.cost,
+        correlationId: pa.correlationId,
+      },
+      rows: [
+        { k: "Agent", v: pa.agent },
+        { k: "Action", v: pa.actionClass },
+        { k: "Classification", v: pa.classification },
+        ...(pa.cost ? [{ k: "Cost", v: String(pa.cost) }] : []),
+        { k: "On behalf of", v: pa.principal ?? "— no principal resolved" },
+        { k: "Correlation", v: pa.correlationId || "—" },
+        { k: "Decision", v: `#${pa.decision} — already recorded, awaiting you` },
+      ],
+    };
+    return new Promise<CeremonyResult>((resolve) => {
+      setQueue((q) => [...q, { intent, gate, answering: pa, resolve }]);
+    });
+  }, []);
+
+  const api = useMemo<CeremonyApi>(() => ({ request, review }), [request, review]);
 
   const clearTimers = () => {
     timers.current.forEach(clearTimeout);
@@ -143,14 +205,22 @@ export function CeremonyProvider({ children }: { children: ReactNode }) {
 
   const finish = (outcome: "settled" | "rejected", note?: string) => {
     if (!head) return;
-    // A refusal is an act of governance, not an absence of one: tell the
-    // backend, which refunds what the decision charged and records the "no".
+    // Both answers are acts of governance, and both are recorded. A refusal
+    // also refunds what the decision charged; an approval leaves it spent,
+    // because the action goes ahead.
     if (outcome === "rejected") {
       void bridge.policy.reject(head.gate.decisionId).catch(() => {
         // The refusal still stands for the caller; the backend error surfaces
         // through the ledger's own honest error path rather than being swallowed
         // into a fake success here.
       });
+    } else if (head.answering) {
+      void bridge.policy
+        .approve(head.gate.decisionId, principal.current ?? "")
+        .catch(() => {
+          // Same reasoning as above — an approval that could not be recorded
+          // must not be reported as a clean success anywhere else.
+        });
     }
     head.resolve({ outcome, note, gate: head.gate });
     clearTimers();
@@ -253,7 +323,11 @@ export function CeremonyProvider({ children }: { children: ReactNode }) {
                     : gate.reason}
                 </span>
                 <span className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)" }}>
-                  {intent.action.actionClass} · {intent.action.classification} · recorded at {shortHead(gate.chainHead)}
+                  {intent.action.actionClass} · {intent.action.classification}
+                  {/* An answered escalation was recorded earlier, so this
+                      dialog has no head of its own to quote — say nothing
+                      rather than "recorded at " with a blank after it. */}
+                  {gate.chainHead ? ` · recorded at ${shortHead(gate.chainHead)}` : ` · decision #${gate.decisionId}, already on the chain`}
                 </span>
               </div>
             </div>

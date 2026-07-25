@@ -170,6 +170,8 @@ pub fn run() {
             backend::tenant_active,
             backend::action_evaluate_and_record,
             backend::action_reject,
+            backend::action_approve,
+            backend::approvals_pending,
             backend::ledger_records,
             backend::ledger_head,
             backend::ledger_merkle_root,
@@ -245,11 +247,14 @@ mod tests {
             if t.starts_with("//") || t.starts_with("///") {
                 continue;
             }
-            // The only routes are /health and /intent. Any other matched path
+            // The routes are /health, /intent and the read-only
+            // /decision/{id} an escalated agent polls. Any other matched path
             // must be added here deliberately, with a reason.
-            if t.contains("path == ") {
+            if t.contains("path == ") || t.contains("path.strip_prefix(") {
                 assert!(
-                    t.contains("\"/health\"") || t.contains("\"/intent\""),
+                    t.contains("\"/health\"")
+                        || t.contains("\"/intent\"")
+                        || t.contains("\"/decision/\""),
                     "an unexpected agent-bridge route appeared: `{}` — an agent \
                      intake must not grow endpoints without review",
                     t

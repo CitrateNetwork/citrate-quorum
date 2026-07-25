@@ -63,6 +63,7 @@ pub fn verdict_str(v: Verdict) -> &'static str {
         Verdict::Deny => "deny",
         Verdict::Ungoverned => "ungoverned",
         Verdict::Rejected => "rejected",
+        Verdict::Approved => "approved",
     }
 }
 pub fn verdict_from_str(s: &str) -> Option<Verdict> {
@@ -72,6 +73,7 @@ pub fn verdict_from_str(s: &str) -> Option<Verdict> {
         "deny" => Some(Verdict::Deny),
         "ungoverned" => Some(Verdict::Ungoverned),
         "rejected" => Some(Verdict::Rejected),
+        "approved" => Some(Verdict::Approved),
         _ => None,
     }
 }
@@ -242,6 +244,25 @@ pub struct Charge {
 }
 
 // ---- the store -------------------------------------------------------
+
+/// An escalation waiting on a human: a decision that came back
+/// `require-approval` and has not yet been approved or rejected.
+///
+/// Persisted, because an agent that stopped and asked must still be waiting
+/// after a restart — the alternative is an escalation that quietly evaporates,
+/// which is the failure mode the whole HIC model exists to prevent.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct PendingApproval {
+    /// Index of the escalated decision in the tenant's chain.
+    pub decision: u64,
+    pub agent: String,
+    pub principal: Option<String>,
+    pub action_class: String,
+    pub classification: String,
+    pub cost: u64,
+    pub correlation_id: String,
+    pub requested_at_ms: i64,
+}
 
 /// A durable, crash-atomic home for one installation's evidence.
 #[derive(Debug, Clone)]
@@ -489,6 +510,52 @@ impl EvidenceStore {
         serde_json::from_str(&raw).map_err(|e| StoreError::Corrupt {
             line: 0,
             detail: format!("charges.json does not parse ({e})"),
+        })
+    }
+
+    // ---- escalations waiting on a human ------------------------------
+
+    pub fn save_pending(
+        &self,
+        tenant: &str,
+        pending: &[PendingApproval],
+    ) -> Result<(), StoreError> {
+        let dir = self.ensure_tenant_dir(tenant)?;
+        let body = serde_json::to_vec(pending).map_err(|e| StoreError::Io(e.to_string()))?;
+        write_atomic(&dir.join("pending.json"), &body)
+    }
+
+    pub fn load_pending(&self, tenant: &str) -> Result<Vec<PendingApproval>, StoreError> {
+        let path = self.tenant_dir(tenant).join("pending.json");
+        let Ok(raw) = fs::read_to_string(&path) else {
+            return Ok(Vec::new());
+        };
+        serde_json::from_str(&raw).map_err(|e| StoreError::Corrupt {
+            line: 0,
+            detail: format!("pending.json does not parse ({e})"),
+        })
+    }
+
+    // ---- answered escalations ----------------------------------------
+
+    pub fn save_resolved(
+        &self,
+        tenant: &str,
+        resolved: &[(u64, String)],
+    ) -> Result<(), StoreError> {
+        let dir = self.ensure_tenant_dir(tenant)?;
+        let body = serde_json::to_vec(resolved).map_err(|e| StoreError::Io(e.to_string()))?;
+        write_atomic(&dir.join("resolved.json"), &body)
+    }
+
+    pub fn load_resolved(&self, tenant: &str) -> Result<Vec<(u64, String)>, StoreError> {
+        let path = self.tenant_dir(tenant).join("resolved.json");
+        let Ok(raw) = fs::read_to_string(&path) else {
+            return Ok(Vec::new());
+        };
+        serde_json::from_str(&raw).map_err(|e| StoreError::Corrupt {
+            line: 0,
+            detail: format!("resolved.json does not parse ({e})"),
         })
     }
 
@@ -778,6 +845,29 @@ mod tests {
         let stored = back.records().next().unwrap();
         assert_eq!(stored.verdict, Verdict::Rejected);
         assert_eq!(back.head(), chain.head());
+    }
+
+    #[test]
+    fn an_escalation_waiting_on_a_human_survives_a_restart() {
+        let root = TempRoot::new();
+        let store = root.store();
+        assert!(store.load_pending("bca").unwrap().is_empty());
+        let pending = vec![PendingApproval {
+            decision: 3,
+            agent: "claude-code".into(),
+            principal: Some("R. Ortiz".into()),
+            action_class: "spend".into(),
+            classification: "Public".into(),
+            cost: 220,
+            correlation_id: "X-7104".into(),
+            requested_at_ms: 1000,
+        }];
+        store.save_pending("bca", &pending).unwrap();
+        assert_eq!(
+            root.store().load_pending("bca").unwrap(),
+            pending,
+            "an agent that stopped and asked must still be waiting after a restart"
+        );
     }
 
     #[test]
