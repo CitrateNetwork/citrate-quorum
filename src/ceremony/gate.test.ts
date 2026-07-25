@@ -6,7 +6,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { GateDecision, GovernedAction } from "../bridge";
-import { runGate } from "./gate";
+import { runGate, settledNote } from "./gate";
 
 /** The gate exists for agent-origin actions; every case below is one. */
 const AGENT_ORIGIN = "agent:claude-code";
@@ -141,3 +141,37 @@ describe("runGate", () => {
     expect(evaluate).toHaveBeenCalledWith(expect.objectContaining({ principal: undefined }));
   });
 });
+
+describe("settledNote — the ceremony may only claim what happened", () => {
+  it("uses the commit's own words when it reported them", () => {
+    expect(settledNote({ commitNote: "grant G-1 revoked", hasCommit: true })).toBe(
+      "grant G-1 revoked",
+    );
+  });
+
+  it("names the chain head when the gate actually recorded a decision", () => {
+    expect(settledNote({ chainHead: "0xfeedfacefeedface", hasCommit: false })).toContain(
+      "decision recorded",
+    );
+  });
+
+  it("claims a record only when a commit ran", () => {
+    expect(settledNote({ hasCommit: true })).toContain("recorded against your name");
+  });
+
+  it("does NOT claim a record when nothing was written", () => {
+    // The regression this exists for: a human-origin intent skips the agent
+    // gate, so there is no chain head and nothing has been recorded — yet the
+    // dialog used to say "recorded against your name in this tenant's evidence
+    // chain" anyway, with a provably empty chain behind it.
+    const note = settledNote({ hasCommit: false });
+    expect(note).not.toContain("recorded against your name");
+    expect(note).toContain("recorded nothing");
+  });
+
+  it("prefers the commit's words over a stale chain head", () => {
+    expect(
+      settledNote({ commitNote: "ratified", chainHead: "0xabc", hasCommit: true }),
+    ).toBe("ratified");
+  });
+})

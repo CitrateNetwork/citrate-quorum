@@ -121,10 +121,15 @@ try:
     s.shot("lc_ceremony", None)              # FULL window: the modal is chrome-level
     before_chain = chain_len()
     s.click(870, 650, settle=6)              # Sign  (measured on the full window)
-    check("the ceremony reaches On record", True, "modal shows the settled state")
-    # `ceremony.request()` resolves when the operator DISMISSES the ceremony,
-    # not when it reaches "on record" — so the backend write happens after
-    # Close. Clicking Sign alone leaves the record untouched.
+    # THE assertion this whole fix exists for. The ceremony displays "On
+    # record" the moment it settles; the record must already exist by then.
+    # Before the fix `ceremony.request()` resolved on DISMISS, so the write
+    # happened after Close and this read returned "awaiting" while the dialog
+    # said the record was made.
+    r = rec()
+    check("the record exists at Sign, before Close",
+          r and r["state"] == "ratified",
+          f'{r["state"] if r else "?"} (was "awaiting" before the commit fix)')
     s.click(*A(641, 638), settle=5)          # Close
     r = rec()
     check("the meeting is ratified on disk", r and r["state"] == "ratified", r["state"] if r else "")

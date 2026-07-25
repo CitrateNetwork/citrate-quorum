@@ -189,14 +189,19 @@ export function Meetings() {
         // imprecise.
         { k: "Effect", v: "records your signature over the hash above, in this tenant's evidence chain. It does NOT anchor on chain — see the anchor row." },
       ],
+      // The write runs INSIDE the ceremony, before it can claim to be on
+      // record. Doing it after `request()` resolved meant it ran on dismiss —
+      // after the dialog had already said the record existed.
+      commit: async () => {
+        await bridge.meetings.ratify(detail.id, operator, contentHash);
+        return "ratified · minutes hash-chained locally, not anchored on chain";
+      },
     });
     if (r.outcome !== "settled") return;
-
+    // Re-read rather than setting a local flag: the backend is the record, and
+    // a surface that decides for itself that it is ratified is exactly the
+    // "stamped On record while the write failed" bug from S4.
     try {
-      await bridge.meetings.ratify(detail.id, operator, contentHash);
-      // Re-read rather than setting a local flag: the backend is the record,
-      // and a surface that decides for itself that it is ratified is exactly
-      // the "stamped On record while the write failed" bug from S4.
       await refresh(detail.id);
     } catch (e) {
       setRatifyError(e instanceof Error ? e.message : String(e));

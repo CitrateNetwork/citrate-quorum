@@ -597,6 +597,23 @@ export interface SignatureIntent {
   /** Undecodable calldata forces an explicit ack before Sign enables. */
   rawUnverified?: boolean;
   cost?: string;
+  /**
+   * The write this signature authorises, run BY the ceremony.
+   *
+   * Callers used to await `request()` and then perform the write themselves.
+   * But `request()` resolves when the operator DISMISSES the dialog, and the
+   * dialog reaches "On record" well before that — so the ceremony announced a
+   * record that did not exist yet, and a write that then failed left the
+   * operator believing it had succeeded. One caller even swallowed the error.
+   *
+   * Supplying `commit` closes that window: the ceremony awaits it between
+   * signing and settling, a rejection returns the dialog to review with the
+   * reason shown, and only a successful commit is allowed to say "on record".
+   * Return a string to become the settled note (e.g. a chain head).
+   *
+   * This mirrors what answering an escalation already does — see `onSign`.
+   */
+  commit?: () => Promise<string | void>;
 }
 
 /** A stream subscription: register a listener, get an unsubscribe fn (§6.4). */

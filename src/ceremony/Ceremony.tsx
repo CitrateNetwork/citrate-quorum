@@ -47,7 +47,7 @@ import {
   type SignatureIntent,
 } from "../bridge";
 import { LoaderMark } from "../components/LoaderMark";
-import { runGate, type CeremonyResult } from "./gate";
+import { runGate, settledNote as computeSettledNote, type CeremonyResult } from "./gate";
 
 export type { CeremonyResult } from "./gate";
 
@@ -254,6 +254,23 @@ export function CeremonyProvider({ children }: { children: ReactNode }) {
         return;
       }
     }
+
+    // The SAME rule for every other signed action. Callers used to await
+    // `request()` and write afterwards — but `request()` resolves on DISMISS,
+    // long after this dialog says "On record", so the write happened after the
+    // claim and its failure arrived behind a closed modal. `Agents.revokeGrant`
+    // went further and swallowed it: the operator was told "the capability is
+    // gone at the next checkpoint" while the grant stayed live.
+    let commitNote: string | void;
+    if (head.intent.commit) {
+      try {
+        commitNote = await head.intent.commit();
+      } catch (e) {
+        setPhase("review");
+        setCommitError(e instanceof Error ? e.message : String(e));
+        return;
+      }
+    }
     // signing → broadcasting → settled. Broadcasting compresses the real
     // checkpoint-finality wait (~25s / 50 blocks, BFT 67%); the Tauri adapter
     // keeps this loader and reports real progress (DESIGN_NOTES TODO(wire)).
@@ -266,10 +283,17 @@ export function CeremonyProvider({ children }: { children: ReactNode }) {
         // there is no chain to anchor to yet (see the sub-line below).
         // A human acting directly has no head to quote here: the act is
         // recorded by the command that commits it, not by the gate.
+        // Say only what actually happened. The fallback here used to be the
+        // flat claim "recorded against your name in this tenant's evidence
+        // chain" — asserted for a human-origin action, which skips the agent
+        // gate and therefore records NOTHING at this point. The chain was
+        // provably empty while this text was on screen.
         setSettledNote(
-          head.gate.chainHead
-            ? `decision recorded · chain head ${shortHead(head.gate.chainHead)}`
-            : "recorded against your name in this tenant's evidence chain",
+          computeSettledNote({
+            commitNote,
+            chainHead: head.gate.chainHead,
+            hasCommit: Boolean(head.intent.commit),
+          }),
         );
       }, 2400),
     );
