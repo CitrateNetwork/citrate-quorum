@@ -36,6 +36,7 @@ quorum-session = { path = "crates/quorum-session" }
 quorum-clearance = { path = "crates/quorum-clearance" }
 quorum-audit = { path = "crates/quorum-audit" }
 quorum-policy = { path = "crates/quorum-policy" }
+quorum-meetings = { path = "crates/quorum-meetings" }
 
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"

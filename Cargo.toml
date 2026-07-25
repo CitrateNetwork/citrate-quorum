@@ -13,6 +13,7 @@ members = [
     "src-tauri/crates/quorum-clearance",
     "src-tauri/crates/quorum-audit",
     "src-tauri/crates/quorum-policy",
+    "src-tauri/crates/quorum-meetings",
     "src-tauri/crates/quorum-adapter",
 ]
 
