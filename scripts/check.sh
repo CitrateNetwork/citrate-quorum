@@ -154,6 +154,18 @@ run "no hooks after early return" "no src/ yet, or no python runner" \
 run "no hardcoded hex" "no src/surfaces yet (design prototype)" "$HAS_SRC" \
     bash -c '! grep -rnE "#[0-9a-fA-F]{6}\b" src/surfaces src/components 2>/dev/null'
 
+# ---- the packaged binary ---------------------------------------------------
+# Nine real bugs in QRM-S4 were found by launching the .deb and clicking, with
+# every check above green. This runs that by hand-free — but it needs a built
+# binary and an X server and takes minutes, so it is OPT-IN rather than part of
+# the default gate. It reports SKIP with the reason when it is not enabled,
+# never PASS (the honesty rule at the top of this file).
+echo
+echo "packaged binary"
+run "packaged smoke run" "set QUORUM_SMOKE=1 (needs a release build + Xvfb; takes ~2min)" \
+    "[ -n \"\${QUORUM_SMOKE:-}\" ] && [ -x target/release/citrate-quorum ] && command -v Xvfb && command -v ${PYRUN[0]}" \
+    "${PYRUN[@]}" "$ROOT/scripts/smoke_packaged.py"
+
 # ---- @rule8: no signing / updater key material -----------------------------
 # WP-S1.8: the installer skeleton is UNSIGNED and has NO auto-updater. Signing
 # identities + the update signing key are @rule8 secrets deferred to QRM-S9 and
