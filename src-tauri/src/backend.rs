@@ -50,7 +50,7 @@ use quorum_tenancy::TenantId;
 // The string codec (verdict/HIC/classification/hex) lives in `store`, which
 // owns the at-rest format — so a ledger row and the record persisted behind it
 // agree by construction rather than by two parallel match arms.
-use quorum_meetings::{agenda_source, Attendee, Meeting, MeetingState, Template};
+use quorum_meetings::{agenda_source, journal_source, Attendee, Meeting, MeetingState, Template};
 
 use crate::store::{
     classification_from_str, classification_str, grant_hic_from_str, grant_hic_str, hex32,
@@ -195,6 +195,33 @@ pub struct AgentSummary {
     pub consumed: u64,
     pub decisions: usize,
     pub ungoverned: usize,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct JournalEntryDto {
+    pub id: String,
+    pub date: String,
+    pub who: String,
+    pub kind: String,
+    pub text: String,
+    /// `None` when the author line names both a model and the human directing
+    /// it, which is the normal case. Never guessed.
+    pub human: Option<bool>,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct JournalListDto {
+    pub entries: Vec<JournalEntryDto>,
+    /// Rule 11: where these came from, or why there are none.
+    pub source: String,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct StandupBriefDto {
+    pub agent: String,
+    pub meeting: String,
+    pub sections: Vec<(String, String)>,
+    pub source: String,
 }
 
 // ---- meetings DTOs (WP-S5.5) ----------------------------------------
@@ -375,6 +402,9 @@ pub struct QuorumBackend {
     /// Meetings by tenant (WP-S5). Keyed like everything else here: a meeting
     /// in one tenant is invisible in another (Rule 6).
     meetings: HashMap<String, Vec<MeetingRecord>>,
+    /// Where each tenant's `.agentile` artifacts live — the source for both
+    /// generated agendas and standup briefs (WP-S5.7).
+    workspaces: HashMap<String, String>,
 }
 
 impl QuorumBackend {
@@ -419,6 +449,7 @@ impl QuorumBackend {
             let pending = store.load_pending(&key).map_err(|e| e.to_string())?;
             let resolved = store.load_resolved(&key).map_err(|e| e.to_string())?;
             let meetings = store.load_meetings(&key).map_err(|e| e.to_string())?;
+            let workspace = store.load_workspace(&key);
 
             // Replace, never merge: re-establishing a scope must not duplicate
             // what is already in memory for it.
@@ -447,6 +478,14 @@ impl QuorumBackend {
                 self.resolved.insert((key.clone(), decision), outcome);
             }
             self.meetings.insert(key.clone(), meetings);
+            match workspace {
+                Some(w) => {
+                    self.workspaces.insert(key.clone(), w);
+                }
+                None => {
+                    self.workspaces.remove(&key);
+                }
+            }
             store.save_scope(Some(&key)).map_err(|e| e.to_string())?;
         }
         self.active_tenant = Some(id);
@@ -1019,6 +1058,15 @@ impl QuorumBackend {
             class,
         );
 
+        if let Some(root) = workspace {
+            self.workspaces
+                .insert(tenant.as_str().to_string(), root.to_string());
+            if let Some(store) = self.store.clone() {
+                store
+                    .save_workspace(tenant.as_str(), root)
+                    .map_err(|e| self.degrade(e))?;
+            }
+        }
         let source = match workspace {
             Some(root) => {
                 let (agenda, src) = agenda_source::from_workspace(std::path::Path::new(root));
@@ -1277,6 +1325,141 @@ impl QuorumBackend {
                     text: d.text.clone(),
                 })
                 .collect(),
+        })
+    }
+
+    // ---- journals + standup briefs (WP-S5.7) -------------------------
+
+    /// The workspace this tenant's artifacts live in, if one has been named.
+    fn workspace(&self, tenant: &str) -> Option<&str> {
+        self.workspaces.get(tenant).map(String::as_str)
+    }
+
+    /// Journals and retros, newest first.
+    ///
+    /// Returns the entries AND the provenance line, because an empty list has
+    /// two very different causes — no workspace, or a workspace with nothing in
+    /// it — and a surface that cannot tell them apart will imply the wrong one.
+    pub fn journal_entries(&self, tenant: &str) -> (Vec<JournalEntryDto>, String) {
+        let Some(root) = self.workspace(tenant) else {
+            return (
+                Vec::new(),
+                "no workspace configured for this tenant — schedule a meeting with one to \
+                 point Quorum at your .agentile artifacts"
+                    .to_string(),
+            );
+        };
+        let (entries, src) = journal_source::from_workspace(std::path::Path::new(root));
+        (
+            entries
+                .into_iter()
+                .map(|e| JournalEntryDto {
+                    id: e.id,
+                    date: e.date,
+                    who: e.who,
+                    kind: e.kind,
+                    text: e.text,
+                    human: e.human,
+                })
+                .collect(),
+            src.describe(),
+        )
+    }
+
+    /// A standup brief for `agent`, grounded in artifacts plus the live
+    /// governance state only this backend knows.
+    ///
+    /// §3.2's requirement is that a brief is assembled from artifacts rather
+    /// than model recall. The artifact half comes from `.agentile` files; the
+    /// two sections below come from the policy engine, which is the other kind
+    /// of fact a standup needs — what this agent is waiting on, and what it has
+    /// left to spend.
+    pub fn standup_brief(
+        &self,
+        tenant: &str,
+        agent: &str,
+        meeting_id: &str,
+    ) -> Result<StandupBriefDto, String> {
+        let meeting_name = self
+            .meetings
+            .get(tenant)
+            .and_then(|ms| ms.iter().find(|r| r.meeting.id == meeting_id))
+            .map(|r| r.meeting.name.clone())
+            .unwrap_or_else(|| meeting_id.to_string());
+
+        let mut sections: Vec<(String, String)> = Vec::new();
+        let source = match self.workspace(tenant) {
+            Some(root) => {
+                let (mut s, src) =
+                    journal_source::brief_from_artifacts(std::path::Path::new(root), agent);
+                sections.append(&mut s);
+                src.describe()
+            }
+            None => {
+                sections.push((
+                    "Since last time".to_string(),
+                    "no workspace configured — this brief has no artifacts to draw on".to_string(),
+                ));
+                "no workspace configured for this tenant".to_string()
+            }
+        };
+
+        // Live governance state. Pending FIRST: an agent blocked on a human is
+        // the single most useful thing a standup can surface, and burying it
+        // under prose is how it goes unanswered for another week.
+        let pending: Vec<&PendingApproval> = self
+            .pending
+            .iter()
+            .filter(|((t, _), p)| t == tenant && p.agent == agent)
+            .map(|(_, p)| p)
+            .collect();
+        sections.insert(
+            0,
+            (
+                "Waiting on a human".to_string(),
+                if pending.is_empty() {
+                    "nothing pending".to_string()
+                } else {
+                    format!(
+                        "{} escalation(s) blocked: {}",
+                        pending.len(),
+                        pending
+                            .iter()
+                            .map(|p| p.action_class.clone())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                },
+            ),
+        );
+
+        let grants: Vec<&CapabilityGrant> = self
+            .grants
+            .iter()
+            .filter(|((t, a), _)| t == tenant && a == agent)
+            .flat_map(|(_, gs)| gs.iter())
+            .filter(|g| !g.revoked)
+            .collect();
+        sections.push((
+            "Authority".to_string(),
+            if grants.is_empty() {
+                "no live grant — this agent is ungoverned and anything it does is recorded as such"
+                    .to_string()
+            } else {
+                format!(
+                    "{} live grant(s); budget {}/{}",
+                    grants.len(),
+                    grants.iter().map(|g| g.consumed).sum::<u64>(),
+                    grants.iter().map(|g| g.budget_units).sum::<u64>()
+                )
+            },
+        ));
+
+        Ok(StandupBriefDto {
+            agent: agent.to_string(),
+            meeting: meeting_name,
+            sections,
+            source,
         })
     }
 
@@ -1820,6 +2003,27 @@ pub fn meeting_ratify(
     let tenant = b.require_tenant()?;
     let now = now_ms();
     b.ratify_meeting(&tenant, &id, &by, &expect_hash, now)
+}
+
+// ---- journal commands (WP-S5.7) -------------------------------------
+
+#[tauri::command]
+pub fn journal_list(backend: Backend<'_>) -> Result<JournalListDto, String> {
+    let b = lock(&backend)?;
+    let tenant = b.require_tenant()?;
+    let (entries, source) = b.journal_entries(tenant.as_str());
+    Ok(JournalListDto { entries, source })
+}
+
+#[tauri::command]
+pub fn journal_brief(
+    backend: Backend<'_>,
+    agent: String,
+    meeting: String,
+) -> Result<StandupBriefDto, String> {
+    let b = lock(&backend)?;
+    let tenant = b.require_tenant()?;
+    b.standup_brief(tenant.as_str(), &agent, &meeting)
 }
 
 #[tauri::command]

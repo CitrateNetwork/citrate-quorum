@@ -598,6 +598,7 @@ impl std::fmt::Display for MeetingError {
 impl std::error::Error for MeetingError {}
 
 pub mod agenda_source;
+pub mod journal_source;
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]

@@ -732,6 +732,25 @@ impl EvidenceStore {
             .collect())
     }
 
+    // ---- the workspace (WP-S5.7) -------------------------------------
+
+    /// The directory this tenant's `.agentile` artifacts live in.
+    ///
+    /// A tenant-level fact, not a per-meeting one: the same workspace feeds
+    /// every agenda AND every standup brief, so storing it on one meeting
+    /// would leave briefs guessing which meeting to ask.
+    pub fn save_workspace(&self, tenant: &str, workspace: &str) -> Result<(), StoreError> {
+        let dir = self.ensure_tenant_dir(tenant)?;
+        let body = serde_json::json!({ "workspace": workspace }).to_string();
+        write_atomic(&dir.join("workspace.json"), body.as_bytes())
+    }
+
+    pub fn load_workspace(&self, tenant: &str) -> Option<String> {
+        let raw = fs::read_to_string(self.tenant_dir(tenant).join("workspace.json")).ok()?;
+        let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+        v.get("workspace")?.as_str().map(str::to_string)
+    }
+
     // ---- meetings (WP-S5.3) ------------------------------------------
 
     pub fn save_meetings(

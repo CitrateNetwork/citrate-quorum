@@ -185,6 +185,8 @@ pub fn run() {
             backend::meeting_close,
             backend::meeting_content_hash,
             backend::meeting_ratify,
+            backend::journal_list,
+            backend::journal_brief,
             backend::ledger_records,
             backend::ledger_head,
             backend::ledger_merkle_root,

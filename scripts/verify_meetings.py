@@ -134,6 +134,36 @@ try:
           f"chain {before_chain} -> {chain_len()}")
     check("the signed agenda hash is unchanged", r and r["agenda_hash"] == frozen)
     s.shot("lc_ratified", smoke.CONTENT_CROP)
+
+    # WP-S5.7: the workspace named at schedule time is what journals read from,
+    # so the brief is only meaningful once a meeting has established it.
+    print("\nstandup briefs (S5.7)")
+    ws = None
+    tdir = APP / "evidence/tenants"
+    for d in tdir.iterdir():
+        f = d / "workspace.json"
+        if f.exists():
+            ws = json.loads(f.read_text()).get("workspace")
+    check("the workspace persisted for the tenant", ws == REPO, str(ws))
+
+    # Give the tenant an agent to brief. Posting an intent over the keyless
+    # bridge is how an agent becomes known — the same path an adapter uses —
+    # so the brief is assembled about an agent that really acted.
+    b = s.bridge()
+    # The response is CHECKED. An unchecked post here failed silently (the body
+    # used "class" where the bridge expects "tool") and the brief then read
+    # "no agent has acted in this tenant yet" — which is a true sentence about
+    # a state the verification itself created. A verification step that can
+    # fail quietly proves nothing.
+    code, body = s.post_intent(addr := b[0], b[1], {
+        "agent": "sbt-41", "tool": "repo.write", "classification": "Public",
+        "correlation_id": "X-brief",
+    }) if b else (0, "no agent bridge")
+    check("an agent acted, so there is somebody to brief", code == 200, f"HTTP {code} {body[:60]}")
+    s.click(smoke.SIDEBAR_X, dict(smoke.SURFACES)["Journal"], settle=3)
+    img = s.shot("lc_journal", smoke.CONTENT_CROP)
+    check("the Journal surface renders with real artifacts", s.stddev(img) > smoke.BLANK_STDDEV,
+          f"stddev {s.stddev(img):.0f}")
     print("workdir:", s.work)
 finally:
     s.stop_app()

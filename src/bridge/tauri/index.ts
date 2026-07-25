@@ -31,8 +31,10 @@ import {
   type GovernedAction,
   type Grant,
   type GrantTerms,
+  type JournalEntry,
   type Meeting,
   type MeetingDetail,
+  type StandupBrief,
   type MeetingState,
   type Classification,
   type HicLevel,
@@ -50,6 +52,8 @@ import {
   actionEvaluateAndRecord,
   actionReject,
   approvalsPending,
+  journalBrief,
+  journalList,
   ledgerRecords,
   meetingAdmit,
   meetingClose,
@@ -318,7 +322,27 @@ export function createTauriBridge(): BridgeContract {
       ingest: na("governance.ingest"),
       interview: na("governance.interview"),
     },
-    journal: { list: na("journal.list"), brief: na("journal.brief") },
+    // LIVE (QRM-S5.7): journals and retros read from the tenant's workspace
+    // `.agentile` files; the brief adds the live governance state (what this
+    // agent is blocked on, and what authority it holds).
+    journal: {
+      list: async (): Promise<JournalEntry[]> =>
+        (await journalList()).entries.map((e) => ({
+          id: e.id,
+          date: e.date,
+          who: e.who,
+          kind: e.kind as JournalEntry["kind"],
+          text: e.text,
+          // `null` from Rust means "not decided", which is not the same as
+          // `false`. Passing it through as undefined keeps the surface from
+          // rendering an agent as a human.
+          human: e.human ?? undefined,
+        })),
+      brief: async (agentId: string, meetingId: string): Promise<StandupBrief> => {
+        const b = await journalBrief(agentId, meetingId);
+        return { agent: b.agent, meeting: b.meeting, sections: b.sections };
+      },
+    },
     calendar: { accounts: na("calendar.accounts"), events: na("calendar.events") },
     repos: { list: na("repos.list"), prs: na("repos.prs"), peek: na("repos.peek") },
     settings: { tenancy: na("settings.tenancy") },

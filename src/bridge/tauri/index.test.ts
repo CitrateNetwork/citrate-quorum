@@ -315,3 +315,35 @@ describe("tauri adapter — meetings (QRM-S5)", () => {
     });
   });
 });
+
+describe("tauri adapter — journals + briefs (QRM-S5.7)", () => {
+  beforeEach(() => {
+    invoke.mockReset();
+  });
+
+  it("passes an undecided authorship through as undefined, never false", async () => {
+    // Rust sends `null` for "we did not decide". Coercing that to `false`
+    // would render an agent as a human in an attributed record.
+    invoke.mockResolvedValue({
+      entries: [
+        { id: "j1", date: "2026-07-25", who: "Claude Opus 4.8, directed by @SaulBuilds", kind: "journal", text: "Running it is the test", human: null },
+      ],
+      source: "6 journals + 4 retros",
+    });
+    const [e] = await createTauriBridge().journal.list();
+    expect(e.human).toBeUndefined();
+    expect(e.who).toBe("Claude Opus 4.8, directed by @SaulBuilds");
+  });
+
+  it("maps a brief's sections in order", async () => {
+    invoke.mockResolvedValue({
+      agent: "sbt-41",
+      meeting: "Weekly Standup",
+      sections: [["Waiting on a human", "nothing pending"], ["Since last time", "3 entries"]],
+      source: "6 journals + 4 retros",
+    });
+    const b = await createTauriBridge().journal.brief("sbt-41", "m-1");
+    expect(b.sections[0][0]).toBe("Waiting on a human");
+    expect(invoke).toHaveBeenCalledWith("journal_brief", { agent: "sbt-41", meeting: "m-1" });
+  });
+});

@@ -275,6 +275,35 @@ export function meetingRatify(
   return invoke<DecisionResult>("meeting_ratify", { id, by, expectHash });
 }
 
+// ---- journals + standup briefs (QRM-S5.7) --------------------------
+
+export interface JournalEntryDto {
+  id: string;
+  date: string;
+  who: string;
+  kind: string;
+  text: string;
+  human: boolean | null;
+}
+export interface JournalListDto {
+  entries: JournalEntryDto[];
+  /** Rule 11: where these came from, or why there are none. */
+  source: string;
+}
+export interface StandupBriefDto {
+  agent: string;
+  meeting: string;
+  sections: [string, string][];
+  source: string;
+}
+
+export function journalList(): Promise<JournalListDto> {
+  return invoke<JournalListDto>("journal_list");
+}
+export function journalBrief(agent: string, meeting: string): Promise<StandupBriefDto> {
+  return invoke<StandupBriefDto>("journal_brief", { agent, meeting });
+}
+
 // ---- vote allowances (the delegated voting franchise) --------------
 
 export interface AllowanceInput {
