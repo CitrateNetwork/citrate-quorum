@@ -21,8 +21,15 @@ export function Meetings() {
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [detail, setDetail] = useState<MeetingDetail | null>(null);
   const [selectedState, setSelectedState] = useState<string>("ratified");
-  const [ratified, setRatified] = useState(false);
+  const [ratifyError, setRatifyError] = useState("");
+  const [operator, setOperator] = useState("");
   const ceremony = useCeremony();
+
+  // Ratification must name the human who signed it; the backend refuses an
+  // anonymous ratifier outright.
+  useEffect(() => {
+    bridge.session.operator().then((o) => setOperator(o ?? "")).catch(() => {});
+  }, []);
 
 
   // Honest failure (S2D.4/§5.1): this surface's primary read is meetings.list().
@@ -42,26 +49,57 @@ export function Meetings() {
 
   const open = (m: Meeting) => {
     setSelectedState(m.state);
-    setRatified(m.state === "ratified");
     bridge.meetings.get(m.id).then(setDetail).catch(() => {});
   };
 
   const ratify = async () => {
     if (!detail) return;
+    setRatifyError("");
+    // The hash the signer is shown must be the hash the backend records
+    // against. Read it first, display it, and pass the SAME value back — if the
+    // minutes move in between, the backend refuses rather than recording a
+    // signature over something nobody saw.
+    let contentHash: string;
+    try {
+      contentHash = await bridge.meetings.contentHash(detail.id);
+    } catch (e) {
+      setRatifyError(e instanceof Error ? e.message : String(e));
+      return;
+    }
+
     const r = await ceremony.request({
       kind: "ratify",
       title: `Ratify minutes — ${detail.name}`,
       origin: "user",
-      action: { actionClass: "meeting.ratify", classification: "Proprietary", agent: "user", mandatoryHic1: true },
+      action: { actionClass: "meeting.ratify", classification: detail.classification, agent: "user", mandatoryHic1: true },
       rows: [
         { k: "Meeting", v: detail.name },
         { k: "When", v: detail.when },
         { k: "Agenda hash", v: detail.agendaHash },
-        { k: "Minutes", v: `${detail.minutes.length} items · 1 decision · 1 dissent recorded` },
-        { k: "Effect", v: "anchors the minutes on chain — they become evidence" },
+        // Counted, not asserted. This row read "1 decision · 1 dissent
+        // recorded" as a literal, which was true of the design mock and of
+        // nothing else.
+        { k: "Minutes", v: `${detail.minutes.length} items · ${detail.decisions.length} decisions · ${detail.dissent.length} dissent recorded` },
+        { k: "You are signing", v: contentHash },
+        // The old row promised "anchors the minutes on chain". Nothing anchors
+        // anything yet — AnchorRegistry is not resolvable in this build — and a
+        // ceremony that misstates its own effect is the worst place to be
+        // imprecise.
+        { k: "Effect", v: "records your signature over the hash above, in this tenant's evidence chain. It does NOT anchor on chain — see the anchor row." },
       ],
     });
-    if (r.outcome === "settled") setRatified(true);
+    if (r.outcome !== "settled") return;
+
+    try {
+      await bridge.meetings.ratify(detail.id, operator, contentHash);
+      // Re-read rather than setting a local flag: the backend is the record,
+      // and a surface that decides for itself that it is ratified is exactly
+      // the "stamped On record while the write failed" bug from S4.
+      setDetail(await bridge.meetings.get(detail.id));
+      primary.retry();
+    } catch (e) {
+      setRatifyError(e instanceof Error ? e.message : String(e));
+    }
   };
 
   if (!detail) {
@@ -70,7 +108,7 @@ export function Meetings() {
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <span className="eyebrow">The record — every meeting, planned and ratified</span>
           <div style={{ flex: 1 }} />
-          <button className="btn btn-primary btn-sm">Schedule from template</button>
+          <button className="btn btn-primary btn-sm" disabled title="The scheduling form lands later in QRM-S5; schedule/admit/open/close exist as backend commands today.">Schedule from template — not yet wired</button>
         </div>
         <div className="surface" style={{ display: "flex", flexDirection: "column" }}>
           <div className="mono" style={{ display: "grid", gridTemplateColumns: "1fr 150px 130px 110px 120px 150px", gap: 10, padding: "8px 16px", fontSize: 9, letterSpacing: ".12em", textTransform: "uppercase", color: "var(--tx-3)", borderBottom: "1px solid var(--line-1)" }}>
@@ -86,18 +124,41 @@ export function Meetings() {
               <span className="mono" style={{ fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase", color: STATE_COLOR[m.state] }}>{STATE_LABEL[m.state]}</span>
             </div>
           ))}
+          {meetings.length === 0 && (
+            <div className="mono" style={{ fontSize: 11, lineHeight: 1.6, color: "var(--tx-3)", padding: "14px 16px" }}>
+              No meetings in this tenant yet. This register is empty because nothing has been
+              scheduled — not because a read failed.
+            </div>
+          )}
         </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <span className="mono" style={{ fontSize: 9, letterSpacing: ".1em", textTransform: "uppercase", color: "var(--tx-3)" }}>
+            Templates — illustrative, not yet selectable
+          </span>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           {[["Standup", "2 humans · agents optional"], ["Change-control", "5 signers · CUI"], ["Incident review", "3 humans · postmortem"], ["Quarterly governance", "board seat required"]].map(([n, req]) => (
             <span key={n} className="mono" style={{ fontSize: 10, color: "var(--tx-2)", border: "1px solid var(--line-2)", padding: "4px 10px" }}>{n} <span style={{ color: "var(--tx-3)" }}>· {req}</span></span>
           ))}
         </div>
-        <div className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)" }}>Read from meetings.list() → MinutesRegistry + relay archive</div>
+        </div>
+        {/* Rule 11: this line names where the rows actually come from. It used
+            to claim "MinutesRegistry + relay archive" — neither of which
+            exists. MinutesRegistry is a QRM-S6 contract that is not written,
+            and there is no relay archive until Rooms (QRM-S3). */}
+        <div className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)", lineHeight: 1.6 }}>
+          Read from meetings.list() → this tenant's local meeting store. Minutes are hash-chained
+          locally and verifiable offline; they are not on a chain — MeetingRegistry and
+          AnchorRegistry land with the governance contracts (QRM-S6).
+        </div>
       </div>
     );
   }
 
-  const isRatified = ratified || selectedState === "ratified";
+  // Derived from the RECORD, not from a local flag. The flag was set at open
+  // and never updated by a successful ratification, so the document went on
+  // showing "Awaiting ratification" after it had been signed — the surface
+  // disagreeing with the evidence it is supposed to display.
+  const isRatified = detail.ratified || selectedState === "ratified";
   const isUnratified = !isRatified && (selectedState === "awaiting" || selectedState === "in-progress");
 
   return (
@@ -116,7 +177,7 @@ export function Meetings() {
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <span className="mono" style={{ fontSize: 10, color: "var(--tx-3)" }}>agenda {detail.agendaHash}</span>
-            {isRatified && detail.anchor && <span className="mono" style={{ fontSize: 10, color: "var(--tx-3)" }}>anchored {detail.anchor}</span>}
+            {isRatified && <span className="mono" style={{ fontSize: 10, color: "var(--tx-3)" }}>anchor: {detail.anchor ?? "unknown"}</span>}
           </div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 300px" }}>
@@ -149,8 +210,15 @@ export function Meetings() {
             )}
             {isUnratified && (
               <div style={{ display: "flex", alignItems: "center", gap: 12, border: "1px solid var(--warn)", background: "var(--warn-bg)", padding: "12px 14px" }}>
-                <span style={{ fontSize: 13, flex: 1 }}>These minutes are a draft. Ratifying anchors them on chain — they become evidence a board member can verify.</span>
+                <span style={{ fontSize: 13, flex: 1 }}>These minutes are a draft. Ratifying records your signature over their hash in this tenant's evidence chain, which a board member can verify offline. It does not anchor them on chain yet — that lands with the governance contracts.</span>
                 <button className="btn btn-primary" onClick={ratify}>Ratify — sign</button>
+              </div>
+            )}
+            {/* A refused ratification must say so. The S4 bug this guards
+                against stamped "On record" while the write had failed. */}
+            {ratifyError && (
+              <div className="mono" style={{ fontSize: 11, lineHeight: 1.5, color: "var(--danger)", border: "1px solid var(--danger)", padding: "10px 12px" }}>
+                ratification refused — {ratifyError}
               </div>
             )}
           </div>

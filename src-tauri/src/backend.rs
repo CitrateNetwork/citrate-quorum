@@ -50,10 +50,12 @@ use quorum_tenancy::TenantId;
 // The string codec (verdict/HIC/classification/hex) lives in `store`, which
 // owns the at-rest format — so a ledger row and the record persisted behind it
 // agree by construction rather than by two parallel match arms.
+use quorum_meetings::{agenda_source, Attendee, Meeting, MeetingState, Template};
+
 use crate::store::{
     classification_from_str, classification_str, grant_hic_from_str, grant_hic_str, hex32,
-    hex_encode, hic_str, verdict_str, Charge, EgressPolicy, EvidenceStore, PendingApproval,
-    StoreError,
+    hex_encode, hic_str, verdict_str, Charge, EgressPolicy, EvidenceStore, MeetingRecord,
+    PendingApproval, StoreError,
 };
 
 /// What one governed action costs its grant.
@@ -195,6 +197,125 @@ pub struct AgentSummary {
     pub ungoverned: usize,
 }
 
+// ---- meetings DTOs (WP-S5.5) ----------------------------------------
+
+/// What scheduling a meeting needs. A struct rather than eight positional
+/// arguments, matching `GrantInput` — the two `&str` pairs next to each other
+/// (name/when, template/classification) are exactly the shape that gets
+/// silently transposed at a call site.
+pub struct ScheduleMeeting<'a> {
+    pub id: &'a str,
+    pub name: &'a str,
+    pub when: &'a str,
+    pub template: &'a str,
+    pub min_humans: usize,
+    pub classification: &'a str,
+    pub workspace: Option<&'a str>,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct MeetingRow {
+    pub id: String,
+    pub name: String,
+    pub when: String,
+    pub tpl: String,
+    pub humans: usize,
+    pub agents: usize,
+    pub classification: String,
+    pub state: String,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct AgendaItemDto {
+    pub n: u32,
+    pub text: String,
+    pub src: String,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct AttendeeDto {
+    pub name: String,
+    pub attested: bool,
+    pub agent: Option<String>,
+    pub note: Option<String>,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct MinuteDecisionDto {
+    pub id: String,
+    pub text: String,
+    pub link: bool,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct DissentDto {
+    pub who: String,
+    pub text: String,
+}
+
+/// Whether the minutes hash reached a chain, and if not, exactly why.
+///
+/// This is a struct rather than an `Option<String>` because "not anchored" is a
+/// state the surface must render, not an absence it can skip. The fourth demo
+/// beat is "ratified, **anchored** minutes", and ratified-but-not-anchored looks
+/// identical on screen unless something says so (sprint risk R-A).
+#[derive(Serialize, Clone, Debug)]
+pub struct AnchorDto {
+    pub anchored: bool,
+    /// Present only when `anchored`. Never a placeholder.
+    pub reference: Option<String>,
+    pub reason: String,
+}
+
+/// The anchor's real status (WP-S5.6).
+///
+/// Resolved at call time rather than baked in, so this starts reporting
+/// differently the moment the dependency lands instead of asserting a stale
+/// fact about the chain. Today the honest answer is that **this build has no
+/// chain address book at all** — not "AnchorRegistry is undeployed", which is a
+/// claim about chain state the app currently has no way to observe. Rule 8
+/// forbids a hardcoded address; it equally forbids a hardcoded excuse.
+fn anchor_status() -> AnchorDto {
+    AnchorDto {
+        anchored: false,
+        reference: None,
+        reason: "not anchored — this build has no chain address book, so no AnchorRegistry \
+                 can be resolved. The minutes hash is computed and stored locally and can be \
+                 verified offline; anchoring lands with the governance contracts (QRM-S6)."
+            .to_string(),
+    }
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct MeetingDetailDto {
+    pub id: String,
+    pub name: String,
+    pub when: String,
+    pub tenant: String,
+    pub classification: String,
+    pub state: String,
+    pub agenda_hash: Option<String>,
+    /// Where the agenda came from, verbatim (Rule 11).
+    pub agenda_source: String,
+    /// Lines the generator saw and could not parse — surfaced, not swallowed.
+    pub agenda_skipped: usize,
+    pub ratified: bool,
+    pub ratified_by: Option<String>,
+    pub ratified_at: Option<u64>,
+    /// What a ratifier signs. Recomputed on every read, so an edited meeting
+    /// shows a different hash rather than the one that was signed.
+    pub content_hash: String,
+    pub anchor: AnchorDto,
+    pub quorate: bool,
+    pub min_humans: usize,
+    pub attested_humans: usize,
+    pub agenda: Vec<AgendaItemDto>,
+    pub attendance: Vec<AttendeeDto>,
+    pub minutes: Vec<String>,
+    pub decisions: Vec<MinuteDecisionDto>,
+    pub dissent: Vec<DissentDto>,
+}
+
 #[derive(Serialize)]
 pub struct EffectiveGrantDto {
     pub classification_ceiling: String,
@@ -251,6 +372,9 @@ pub struct QuorumBackend {
     /// refuse to keep producing it — unpersisted records must not silently pile
     /// up in RAM and be lost at exit.
     degraded: Option<String>,
+    /// Meetings by tenant (WP-S5). Keyed like everything else here: a meeting
+    /// in one tenant is invisible in another (Rule 6).
+    meetings: HashMap<String, Vec<MeetingRecord>>,
 }
 
 impl QuorumBackend {
@@ -294,6 +418,7 @@ impl QuorumBackend {
             let charges = store.load_charges(&key).map_err(|e| e.to_string())?;
             let pending = store.load_pending(&key).map_err(|e| e.to_string())?;
             let resolved = store.load_resolved(&key).map_err(|e| e.to_string())?;
+            let meetings = store.load_meetings(&key).map_err(|e| e.to_string())?;
 
             // Replace, never merge: re-establishing a scope must not duplicate
             // what is already in memory for it.
@@ -321,6 +446,7 @@ impl QuorumBackend {
             for (decision, outcome) in resolved {
                 self.resolved.insert((key.clone(), decision), outcome);
             }
+            self.meetings.insert(key.clone(), meetings);
             store.save_scope(Some(&key)).map_err(|e| e.to_string())?;
         }
         self.active_tenant = Some(id);
@@ -826,6 +952,334 @@ impl QuorumBackend {
             .map(|_| "pending")
     }
 
+    // ---- meetings (WP-S5.3 / S5.4) -----------------------------------
+
+    fn persist_meetings(&mut self, tenant: &str) -> Result<(), String> {
+        let Some(store) = self.store.clone() else {
+            return Ok(());
+        };
+        let empty = Vec::new();
+        let ms = self.meetings.get(tenant).unwrap_or(&empty);
+        store
+            .save_meetings(tenant, ms)
+            .map_err(|e| self.degrade(e))?;
+        Ok(())
+    }
+
+    fn meeting_mut<'a>(
+        list: &'a mut [MeetingRecord],
+        id: &str,
+    ) -> Result<&'a mut MeetingRecord, String> {
+        list.iter_mut()
+            .find(|r| r.meeting.id == id)
+            .ok_or_else(|| format!("no meeting {id} in this tenant"))
+    }
+
+    /// Schedule a meeting, generating its agenda from the workspace's active
+    /// sprint files when one is given.
+    ///
+    /// `workspace` is the directory the agenda is read from. `None` means no
+    /// source was configured, and the meeting opens with an empty agenda that
+    /// says so — never with invented items.
+    pub fn schedule_meeting(
+        &mut self,
+        tenant: &TenantId,
+        input: ScheduleMeeting<'_>,
+    ) -> Result<(), String> {
+        let ScheduleMeeting {
+            id,
+            name,
+            when,
+            template,
+            min_humans,
+            classification,
+            workspace,
+        } = input;
+        self.check_not_degraded()?;
+        let class = classification_from_str(classification)
+            .ok_or_else(|| format!("unknown classification: {classification}"))?;
+        let key = tenant.as_str().to_string();
+
+        if self
+            .meetings
+            .get(&key)
+            .is_some_and(|ms| ms.iter().any(|r| r.meeting.id == id))
+        {
+            return Err(format!(
+                "meeting id {id} already exists in this tenant — ids must identify one meeting"
+            ));
+        }
+
+        let mut meeting = Meeting::schedule(
+            id,
+            name,
+            when,
+            tenant.as_str(),
+            Template::new(template, min_humans),
+            class,
+        );
+
+        let source = match workspace {
+            Some(root) => {
+                let (agenda, src) = agenda_source::from_workspace(std::path::Path::new(root));
+                for item in agenda.items() {
+                    meeting
+                        .add_agenda_item(item.text.clone(), item.src.clone())
+                        .map_err(|e| e.to_string())?;
+                }
+                meeting.agenda.skipped = agenda.skipped;
+                src.describe()
+            }
+            None => "no workspace configured — agenda is empty, not generated".to_string(),
+        };
+
+        self.meetings
+            .entry(key.clone())
+            .or_default()
+            .push(MeetingRecord {
+                meeting,
+                agenda_source: source,
+                opened_at_index: None,
+            });
+        self.persist_meetings(&key)
+    }
+
+    /// Admit an attendee. MR-4 lives in the domain crate and is enforced there.
+    pub fn admit_to_meeting(
+        &mut self,
+        tenant: &TenantId,
+        id: &str,
+        name: &str,
+        vendor: Option<&str>,
+        attested: bool,
+        clearance: Option<&str>,
+    ) -> Result<(), String> {
+        self.check_not_degraded()?;
+        let key = tenant.as_str().to_string();
+        let cleared = match clearance {
+            Some(c) => Some(
+                classification_from_str(c).ok_or_else(|| format!("unknown classification: {c}"))?,
+            ),
+            None => None,
+        };
+        let list = self
+            .meetings
+            .get_mut(&key)
+            .ok_or_else(|| format!("no meeting {id} in this tenant"))?;
+        let rec = Self::meeting_mut(list, id)?;
+
+        let mut who = match vendor {
+            Some(v) => Attendee::agent(name, v),
+            None => Attendee::human(name),
+        };
+        who.attested = attested;
+        who.clearance = cleared;
+        rec.meeting.admit(who).map_err(|e| e.to_string())?;
+        self.persist_meetings(&key)
+    }
+
+    /// Open the meeting: freeze the agenda and remember the chain index, which
+    /// is the lower bound of the window its minutes are composed from.
+    pub fn open_meeting(&mut self, tenant: &TenantId, id: &str) -> Result<String, String> {
+        self.check_not_degraded()?;
+        let key = tenant.as_str().to_string();
+        let at_index = self.chains.get(&key).map_or(0, HashChain::len) as u64;
+        let list = self
+            .meetings
+            .get_mut(&key)
+            .ok_or_else(|| format!("no meeting {id} in this tenant"))?;
+        let rec = Self::meeting_mut(list, id)?;
+        let hash = rec.meeting.open().map_err(|e| e.to_string())?;
+        rec.opened_at_index = Some(at_index);
+        self.persist_meetings(&key)?;
+        Ok(hex_encode(&hash))
+    }
+
+    /// Close the meeting, composing its minutes from the governed record.
+    ///
+    /// The minutes are the decisions this tenant's evidence chain recorded
+    /// between the meeting opening and now. That is a **narrower** claim than
+    /// §3.1's Notetaker-from-transcript, which needs Rooms (QRM-S3), and the
+    /// surface says which one it is rather than letting them be confused.
+    pub fn close_meeting(&mut self, tenant: &TenantId, id: &str) -> Result<String, String> {
+        self.check_not_degraded()?;
+        let key = tenant.as_str().to_string();
+        let rows = self.ledger_rows(&key);
+
+        let list = self
+            .meetings
+            .get_mut(&key)
+            .ok_or_else(|| format!("no meeting {id} in this tenant"))?;
+        let rec = Self::meeting_mut(list, id)?;
+        let from = rec.opened_at_index.unwrap_or(0) as usize;
+
+        let in_window: Vec<&LedgerRow> = rows.iter().skip(from).collect();
+        let minutes: Vec<String> = if in_window.is_empty() {
+            vec!["No governed action was recorded while this meeting was open.".to_string()]
+        } else {
+            in_window
+                .iter()
+                .map(|r| format!("{} — {} by {} ({})", r.verdict, r.cls, r.agent, r.hic))
+                .collect()
+        };
+        let decisions = in_window
+            .iter()
+            .map(|r| quorum_meetings::MinuteDecision {
+                id: format!("D-{}", r.id),
+                text: format!("{} — {}", r.cls, r.verdict),
+                // Resolvable: it came out of this tenant's own chain.
+                link: true,
+            })
+            .collect();
+
+        rec.meeting.decisions = decisions;
+        let state = rec.meeting.close(minutes).map_err(|e| e.to_string())?;
+        self.persist_meetings(&key)?;
+        Ok(state.as_str().to_string())
+    }
+
+    /// The hash a human is about to sign. The ceremony shows this; `ratify`
+    /// re-checks it so nothing can change in between.
+    pub fn meeting_content_hash(&self, tenant: &str, id: &str) -> Result<String, String> {
+        let rec = self
+            .meetings
+            .get(tenant)
+            .and_then(|ms| ms.iter().find(|r| r.meeting.id == id))
+            .ok_or_else(|| format!("no meeting {id} in this tenant"))?;
+        Ok(hex_encode(&rec.meeting.content_hash()))
+    }
+
+    /// Ratify: record the human signature and lock the meeting.
+    ///
+    /// The ceremony has already run on the frontend; this is where it becomes
+    /// evidence. Like `issue_grant`, the ratification and its decision record
+    /// land together — a ratified meeting with no record of who ratified it is
+    /// authority from nowhere.
+    pub fn ratify_meeting(
+        &mut self,
+        tenant: &TenantId,
+        id: &str,
+        by: &str,
+        expect_hash: &str,
+        now_ms: i64,
+    ) -> Result<DecisionDto, String> {
+        self.check_not_degraded()?;
+        let key = tenant.as_str().to_string();
+        let expect = hex32(expect_hash);
+
+        {
+            let list = self
+                .meetings
+                .get_mut(&key)
+                .ok_or_else(|| format!("no meeting {id} in this tenant"))?;
+            let rec = Self::meeting_mut(list, id)?;
+            rec.meeting
+                .ratify(by, now_ms.max(0) as u64, expect)
+                .map_err(|e| e.to_string())?;
+        }
+        self.persist_meetings(&key)?;
+
+        self.record_principal_action(
+            tenant,
+            by,
+            "meeting.ratify",
+            &format!("{id} @ {expect_hash}"),
+            now_ms,
+        )
+    }
+
+    /// Every meeting in a tenant, newest first by scheduled time.
+    pub fn meeting_rows(&self, tenant: &str) -> Vec<MeetingRow> {
+        let Some(ms) = self.meetings.get(tenant) else {
+            return Vec::new();
+        };
+        let mut rows: Vec<MeetingRow> = ms
+            .iter()
+            .map(|r| {
+                let m = &r.meeting;
+                MeetingRow {
+                    id: m.id.clone(),
+                    name: m.name.clone(),
+                    when: m.when.clone(),
+                    tpl: m.template.name.clone(),
+                    humans: m.attendance.iter().filter(|a| a.is_human()).count(),
+                    agents: m.attendance.iter().filter(|a| !a.is_human()).count(),
+                    classification: classification_str(m.classification).to_string(),
+                    state: m.state().as_str().to_string(),
+                }
+            })
+            .collect();
+        rows.sort_by(|a, b| b.when.cmp(&a.when));
+        rows
+    }
+
+    /// One meeting in full.
+    pub fn meeting_detail(&self, tenant: &str, id: &str) -> Result<MeetingDetailDto, String> {
+        let rec = self
+            .meetings
+            .get(tenant)
+            .and_then(|ms| ms.iter().find(|r| r.meeting.id == id))
+            .ok_or_else(|| format!("no meeting {id} in this tenant"))?;
+        let m = &rec.meeting;
+        Ok(MeetingDetailDto {
+            id: m.id.clone(),
+            name: m.name.clone(),
+            when: m.when.clone(),
+            tenant: m.tenant.clone(),
+            classification: classification_str(m.classification).to_string(),
+            state: m.state().as_str().to_string(),
+            agenda_hash: m.agenda_hash().map(|h| hex_encode(&h)),
+            agenda_source: rec.agenda_source.clone(),
+            agenda_skipped: m.agenda.skipped,
+            ratified: m.state() == MeetingState::Ratified,
+            ratified_by: m.ratified_by.clone(),
+            ratified_at: m.ratified_at,
+            content_hash: hex_encode(&m.content_hash()),
+            anchor: anchor_status(),
+            quorate: m.is_quorate(),
+            min_humans: m.template.min_humans,
+            attested_humans: m.attested_humans(),
+            agenda: m
+                .agenda
+                .items()
+                .iter()
+                .map(|i| AgendaItemDto {
+                    n: i.n,
+                    text: i.text.clone(),
+                    src: i.src.clone(),
+                })
+                .collect(),
+            attendance: m
+                .attendance
+                .iter()
+                .map(|a| AttendeeDto {
+                    name: a.name.clone(),
+                    attested: a.attested,
+                    agent: a.agent.clone(),
+                    note: a.note.clone(),
+                })
+                .collect(),
+            minutes: m.minutes.clone(),
+            decisions: m
+                .decisions
+                .iter()
+                .map(|d| MinuteDecisionDto {
+                    id: d.id.clone(),
+                    text: d.text.clone(),
+                    link: d.link,
+                })
+                .collect(),
+            dissent: m
+                .dissent
+                .iter()
+                .map(|d| DissentDto {
+                    who: d.who.clone(),
+                    text: d.text.clone(),
+                })
+                .collect(),
+        })
+    }
+
     pub fn ledger_rows(&self, tenant: &str) -> Vec<LedgerRow> {
         let Some(chain) = self.chains.get(tenant) else {
             return Vec::new(); // empty chain → honest empty ledger
@@ -1260,6 +1714,112 @@ pub fn ledger_records(backend: Backend<'_>) -> Result<Vec<LedgerRow>, String> {
     let b = lock(&backend)?;
     let tenant = b.require_tenant()?;
     Ok(b.ledger_rows(tenant.as_str()))
+}
+
+// ---- meetings commands (WP-S5.5) ------------------------------------
+
+#[tauri::command]
+pub fn meetings_list(backend: Backend<'_>) -> Result<Vec<MeetingRow>, String> {
+    let b = lock(&backend)?;
+    let tenant = b.require_tenant()?;
+    Ok(b.meeting_rows(tenant.as_str()))
+}
+
+#[tauri::command]
+pub fn meeting_get(backend: Backend<'_>, id: String) -> Result<MeetingDetailDto, String> {
+    let b = lock(&backend)?;
+    let tenant = b.require_tenant()?;
+    b.meeting_detail(tenant.as_str(), &id)
+}
+
+/// Scheduling input as it arrives over the wire. A single struct, like
+/// `GrantInput` — a command with eight positional arguments is one transposed
+/// pair away from a meeting scheduled under the wrong classification.
+#[derive(Deserialize)]
+pub struct ScheduleMeetingInput {
+    pub id: String,
+    pub name: String,
+    pub when: String,
+    pub template: String,
+    pub min_humans: usize,
+    pub classification: String,
+    pub workspace: Option<String>,
+}
+
+#[tauri::command]
+pub fn meeting_schedule(backend: Backend<'_>, input: ScheduleMeetingInput) -> Result<(), String> {
+    let mut b = lock(&backend)?;
+    let tenant = b.require_tenant()?;
+    b.schedule_meeting(
+        &tenant,
+        ScheduleMeeting {
+            id: &input.id,
+            name: &input.name,
+            when: &input.when,
+            template: &input.template,
+            min_humans: input.min_humans,
+            classification: &input.classification,
+            workspace: input.workspace.as_deref(),
+        },
+    )
+}
+
+#[tauri::command]
+pub fn meeting_admit(
+    backend: Backend<'_>,
+    id: String,
+    name: String,
+    vendor: Option<String>,
+    attested: bool,
+    clearance: Option<String>,
+) -> Result<(), String> {
+    let mut b = lock(&backend)?;
+    let tenant = b.require_tenant()?;
+    b.admit_to_meeting(
+        &tenant,
+        &id,
+        &name,
+        vendor.as_deref(),
+        attested,
+        clearance.as_deref(),
+    )
+}
+
+#[tauri::command]
+pub fn meeting_open(backend: Backend<'_>, id: String) -> Result<String, String> {
+    let mut b = lock(&backend)?;
+    let tenant = b.require_tenant()?;
+    b.open_meeting(&tenant, &id)
+}
+
+#[tauri::command]
+pub fn meeting_close(backend: Backend<'_>, id: String) -> Result<String, String> {
+    let mut b = lock(&backend)?;
+    let tenant = b.require_tenant()?;
+    b.close_meeting(&tenant, &id)
+}
+
+/// The hash the ceremony must display. Read-only: it signs nothing.
+#[tauri::command]
+pub fn meeting_content_hash(backend: Backend<'_>, id: String) -> Result<String, String> {
+    let b = lock(&backend)?;
+    let tenant = b.require_tenant()?;
+    b.meeting_content_hash(tenant.as_str(), &id)
+}
+
+/// Record a ratification. The human ceremony has already happened; this turns
+/// it into evidence. `expect_hash` is what the signer was shown.
+#[tauri::command]
+pub fn meeting_ratify(
+    backend: Backend<'_>,
+    id: String,
+    by: String,
+    expect_hash: String,
+) -> Result<DecisionDto, String> {
+    let mut b = lock(&backend)?;
+    let tenant = b.require_tenant()?;
+    let now = now_ms();
+    b.ratify_meeting(&tenant, &id, &by, &expect_hash, now)
 }
 
 #[tauri::command]
@@ -2522,5 +3082,205 @@ mod tests {
     fn hex_roundtrip() {
         assert_eq!(hex_encode(&[0xab, 0x01]), "0xab01");
         assert_eq!(hex32("0xdeadbeef")[0..4], [0xde, 0xad, 0xbe, 0xef]);
+    }
+
+    // ---- meetings (WP-S5.4 / S5.5) -----------------------------------
+
+    /// A quorate, closed meeting in tenant `acme`, ready to ratify.
+    fn backend_with_closed_meeting() -> (QuorumBackend, TenantId) {
+        let mut b = QuorumBackend::default();
+        let tenant = t("acme");
+        b.set_active_tenant("acme").expect("scope");
+        b.schedule_meeting(
+            &tenant,
+            ScheduleMeeting {
+                id: "m-1",
+                name: "Weekly Standup",
+                when: "2026-07-23T09:00:00Z",
+                template: "Standup",
+                min_humans: 2,
+                classification: "Proprietary",
+                workspace: None,
+            },
+        )
+        .expect("schedule");
+        for who in ["R. Ortiz", "M. Okonkwo"] {
+            b.admit_to_meeting(&tenant, "m-1", who, None, true, Some("CUI"))
+                .expect("admit");
+        }
+        b.open_meeting(&tenant, "m-1").expect("open");
+        b.close_meeting(&tenant, "m-1").expect("close");
+        (b, tenant)
+    }
+
+    #[test]
+    fn ratifying_records_a_hic1_decision_naming_the_human() {
+        let (mut b, tenant) = backend_with_closed_meeting();
+        let hash = b.meeting_content_hash("acme", "m-1").expect("hash");
+        let before = b.ledger_rows("acme").len();
+
+        let dto = b
+            .ratify_meeting(&tenant, "m-1", "R. Ortiz", &hash, 1_753_460_000)
+            .expect("ratify");
+
+        // A ratified meeting with no record of who ratified it is authority
+        // from nowhere — the record and the ratification land together.
+        assert_eq!(b.ledger_rows("acme").len(), before + 1);
+        assert_eq!(dto.hic, hic_str(HicLevel::ApproveEach));
+        let detail = b.meeting_detail("acme", "m-1").expect("detail");
+        assert!(detail.ratified);
+        assert_eq!(detail.ratified_by.as_deref(), Some("R. Ortiz"));
+    }
+
+    #[test]
+    fn ratifying_with_a_stale_hash_is_refused_and_records_nothing() {
+        let (mut b, tenant) = backend_with_closed_meeting();
+        let stale = hex_encode(&[0u8; 32]);
+        let before = b.ledger_rows("acme").len();
+
+        let err = b
+            .ratify_meeting(&tenant, "m-1", "R. Ortiz", &stale, 1)
+            .expect_err("a hash the signer never saw must be refused");
+
+        assert!(err.contains("did not see"), "got: {err}");
+        assert_eq!(
+            b.ledger_rows("acme").len(),
+            before,
+            "a refused ratification must not leave a decision record behind"
+        );
+        assert!(!b.meeting_detail("acme", "m-1").expect("detail").ratified);
+    }
+
+    #[test]
+    fn an_inquorate_meeting_cannot_be_ratified() {
+        let mut b = QuorumBackend::default();
+        let tenant = t("acme");
+        b.set_active_tenant("acme").expect("scope");
+        b.schedule_meeting(
+            &tenant,
+            ScheduleMeeting {
+                id: "m-2",
+                name: "Standup",
+                when: "2026-07-23T09:00:00Z",
+                template: "Standup",
+                min_humans: 2,
+                classification: "Proprietary",
+                workspace: None,
+            },
+        )
+        .expect("schedule");
+        b.admit_to_meeting(&tenant, "m-2", "R. Ortiz", None, true, Some("CUI"))
+            .expect("admit");
+        b.open_meeting(&tenant, "m-2").expect("open");
+        assert_eq!(b.close_meeting(&tenant, "m-2").expect("close"), "inquorate");
+
+        let hash = b.meeting_content_hash("acme", "m-2").expect("hash");
+        let err = b
+            .ratify_meeting(&tenant, "m-2", "R. Ortiz", &hash, 1)
+            .expect_err("inquorate is terminal");
+        assert!(err.contains("inquorate"), "got: {err}");
+    }
+
+    #[test]
+    fn minutes_are_composed_from_the_governed_record_in_the_open_window() {
+        let mut b = QuorumBackend::default();
+        let tenant = t("acme");
+        b.set_active_tenant("acme").expect("scope");
+        // A decision recorded BEFORE the meeting opens must not appear in it.
+        b.evaluate_and_record(&action("sbt-41", "repo.write", "Public", 1), &tenant, 1)
+            .expect("pre-meeting decision");
+
+        b.schedule_meeting(
+            &tenant,
+            ScheduleMeeting {
+                id: "m-3",
+                name: "Standup",
+                when: "2026-07-23T09:00:00Z",
+                template: "Standup",
+                min_humans: 1,
+                classification: "Public",
+                workspace: None,
+            },
+        )
+        .expect("schedule");
+        b.admit_to_meeting(&tenant, "m-3", "R. Ortiz", None, true, Some("CUI"))
+            .expect("admit");
+        b.open_meeting(&tenant, "m-3").expect("open");
+        b.evaluate_and_record(&action("sbt-41", "ci.rerun", "Public", 1), &tenant, 2)
+            .expect("in-meeting decision");
+        b.close_meeting(&tenant, "m-3").expect("close");
+
+        let d = b.meeting_detail("acme", "m-3").expect("detail");
+        assert_eq!(d.minutes.len(), 1, "only the in-window decision");
+        assert!(d.minutes[0].contains("ci.rerun"), "got: {:?}", d.minutes);
+        assert_eq!(d.decisions.len(), 1);
+    }
+
+    #[test]
+    fn a_meeting_with_no_governed_action_says_so_rather_than_showing_blank_minutes() {
+        let (b, _) = backend_with_closed_meeting();
+        let d = b.meeting_detail("acme", "m-1").expect("detail");
+        assert_eq!(d.minutes.len(), 1);
+        assert!(
+            d.minutes[0].contains("No governed action was recorded"),
+            "got: {:?}",
+            d.minutes
+        );
+    }
+
+    #[test]
+    fn the_anchor_is_reported_unavailable_with_a_reason_never_a_placeholder() {
+        let (b, _) = backend_with_closed_meeting();
+        let d = b.meeting_detail("acme", "m-1").expect("detail");
+        assert!(!d.anchor.anchored);
+        assert!(
+            d.anchor.reference.is_none(),
+            "an unanchored meeting must carry no reference at all — a placeholder \
+             reference is exactly the fabricated-evidence failure"
+        );
+        assert!(d.anchor.reason.contains("no chain address book"));
+    }
+
+    #[test]
+    fn meetings_are_tenant_isolated() {
+        let (mut b, _) = backend_with_closed_meeting();
+        b.set_active_tenant("other").expect("scope");
+        assert!(
+            b.meeting_rows("other").is_empty(),
+            "a meeting in one tenant must be invisible in another (Rule 6)"
+        );
+        assert!(b.meeting_detail("other", "m-1").is_err());
+    }
+
+    #[test]
+    fn a_duplicate_meeting_id_within_a_tenant_is_refused() {
+        let (mut b, tenant) = backend_with_closed_meeting();
+        let err = b
+            .schedule_meeting(
+                &tenant,
+                ScheduleMeeting {
+                    id: "m-1",
+                    name: "Another",
+                    when: "2026-07-30T09:00:00Z",
+                    template: "Standup",
+                    min_humans: 2,
+                    classification: "Public",
+                    workspace: None,
+                },
+            )
+            .expect_err("ids must identify one meeting");
+        assert!(err.contains("already exists"), "got: {err}");
+    }
+
+    #[test]
+    fn no_workspace_yields_an_empty_agenda_that_states_it_was_not_generated() {
+        let (b, _) = backend_with_closed_meeting();
+        let d = b.meeting_detail("acme", "m-1").expect("detail");
+        assert!(d.agenda.is_empty());
+        assert!(
+            d.agenda_source.contains("not generated"),
+            "got: {}",
+            d.agenda_source
+        );
     }
 }

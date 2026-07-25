@@ -7,7 +7,11 @@
 //  · policy  — the gate. Evaluates against the tenant's live grants and
 //              appends the decision to the tenant's BLAKE3 evidence chain.
 //  · ledger  — reads that same chain back.
-//  · session — the active tenant scope (`current()` still needs the IdP).
+//  · session  — the active tenant scope (`current()` still needs the IdP).
+//  · meetings — the governed meeting record: agenda frozen under a BLAKE3
+//              hash, minutes composed from the evidence chain, ratification
+//              recorded as a HIC-1 act. NOT anchored on chain — see the
+//              anchor row, which says so rather than hiding it.
 //
 // Every other domain throws Unavailable until its sprint wires it (rooms need
 // the comms relay, governance needs the chain, calendar needs OAuth, …). The
@@ -27,6 +31,10 @@ import {
   type GovernedAction,
   type Grant,
   type GrantTerms,
+  type Meeting,
+  type MeetingDetail,
+  type MeetingState,
+  type Classification,
   type HicLevel,
   type PendingApproval,
   type Unsubscribe,
@@ -43,6 +51,10 @@ import {
   actionReject,
   approvalsPending,
   ledgerRecords,
+  meetingContentHash,
+  meetingGet,
+  meetingRatify,
+  meetingsList,
   tenantActive,
   tenantSet,
   type DecisionResult,
@@ -221,7 +233,60 @@ export function createTauriBridge(): BridgeContract {
       decision: na("ledger.decision"),
       correlation: na("ledger.correlation"),
     },
-    meetings: { list: na("meetings.list"), get: na("meetings.get") },
+    // LIVE (QRM-S5): the governed meeting record. `list`/`get` read the
+    // tenant's durable meeting store; an empty tenant returns an empty list,
+    // which the surface renders as an honest empty register rather than a
+    // fabricated one.
+    meetings: {
+      list: async (): Promise<Meeting[]> =>
+        (await meetingsList()).map((m) => ({
+          id: m.id,
+          name: m.name,
+          when: m.when,
+          tpl: m.tpl,
+          humans: m.humans,
+          agents: m.agents,
+          classification: m.classification as Classification,
+          state: m.state as MeetingState,
+        })),
+      get: async (id: string): Promise<MeetingDetail> => {
+        const d = await meetingGet(id);
+        return {
+          id: d.id,
+          name: d.name,
+          when: d.when,
+          tenant: d.tenant,
+          classification: d.classification as Classification,
+          // A scheduled meeting has no frozen hash. Saying so beats rendering
+          // an empty string that reads like a value.
+          agendaHash: d.agenda_hash ?? "not frozen — the agenda is still open",
+          ratified: d.ratified,
+          ratifiedBy: d.ratified_by ?? undefined,
+          ratifiedAt: d.ratified_at ? new Date(d.ratified_at).toISOString() : undefined,
+          // The contract types `anchor` as a string, so the honest unavailable
+          // REASON goes here rather than `undefined`. Left undefined it would
+          // simply not render, and ratified-but-unanchored would look exactly
+          // like anchored — the sprint's R-A risk.
+          anchor: d.anchor.anchored
+            ? (d.anchor.reference ?? d.anchor.reason)
+            : d.anchor.reason,
+          agenda: d.agenda,
+          attendance: d.attendance.map((a) => ({
+            name: a.name,
+            attested: a.attested,
+            agent: a.agent ?? undefined,
+            note: a.note ?? undefined,
+          })),
+          minutes: d.minutes,
+          decisions: d.decisions,
+          dissent: d.dissent,
+        };
+      },
+      contentHash: (id: string) => meetingContentHash(id),
+      ratify: async (id: string, by: string, expectHash: string) => {
+        await meetingRatify(id, by, expectHash);
+      },
+    },
     governance: {
       protocols: na("governance.protocols"),
       clauses: na("governance.clauses"),

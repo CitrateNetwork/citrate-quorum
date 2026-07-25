@@ -213,6 +213,11 @@ export function createSimBridge(): BridgeContract {
     meetings: {
       list: () => delay(150, D.MEETINGS),
       get: () => delay(180, D.MEETING_DETAIL),
+      // The sim has no evidence chain to hash, so it echoes the fixture's own
+      // agenda hash rather than inventing a content hash that looks real. The
+      // honest tauri path computes a true BLAKE3 over the minutes.
+      contentHash: () => delay(60, `sim — no content hash (fixture ${D.MEETING_DETAIL.agendaHash})`),
+      ratify: () => delay(120, undefined as void),
     },
     governance: {
       protocols: () => delay(150, D.PROTOCOLS),

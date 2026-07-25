@@ -180,6 +180,101 @@ export function grantRevoke(
   return invoke<boolean>("grant_revoke", { agent, grantId, revokedBy });
 }
 
+// ---- meetings (QRM-S5) ---------------------------------------------
+
+export interface MeetingRowDto {
+  id: string;
+  name: string;
+  when: string;
+  tpl: string;
+  humans: number;
+  agents: number;
+  classification: string;
+  state: string;
+}
+
+export interface AnchorDto {
+  anchored: boolean;
+  reference: string | null;
+  reason: string;
+}
+
+export interface MeetingDetailDto {
+  id: string;
+  name: string;
+  when: string;
+  tenant: string;
+  classification: string;
+  state: string;
+  agenda_hash: string | null;
+  agenda_source: string;
+  agenda_skipped: number;
+  ratified: boolean;
+  ratified_by: string | null;
+  ratified_at: number | null;
+  content_hash: string;
+  anchor: AnchorDto;
+  quorate: boolean;
+  min_humans: number;
+  attested_humans: number;
+  agenda: { n: number; text: string; src: string }[];
+  attendance: {
+    name: string;
+    attested: boolean;
+    agent: string | null;
+    note: string | null;
+  }[];
+  minutes: string[];
+  decisions: { id: string; text: string; link: boolean }[];
+  dissent: { who: string; text: string }[];
+}
+
+export function meetingsList(): Promise<MeetingRowDto[]> {
+  return invoke<MeetingRowDto[]>("meetings_list");
+}
+export function meetingGet(id: string): Promise<MeetingDetailDto> {
+  return invoke<MeetingDetailDto>("meeting_get", { id });
+}
+export interface ScheduleMeetingInput {
+  id: string;
+  name: string;
+  when: string;
+  template: string;
+  min_humans: number;
+  classification: string;
+  workspace?: string;
+}
+export function meetingSchedule(input: ScheduleMeetingInput): Promise<void> {
+  return invoke<void>("meeting_schedule", { input });
+}
+export function meetingAdmit(input: {
+  id: string;
+  name: string;
+  vendor?: string;
+  attested: boolean;
+  clearance?: string;
+}): Promise<void> {
+  return invoke<void>("meeting_admit", input);
+}
+export function meetingOpen(id: string): Promise<string> {
+  return invoke<string>("meeting_open", { id });
+}
+export function meetingClose(id: string): Promise<string> {
+  return invoke<string>("meeting_close", { id });
+}
+/** The hash the ceremony must display. Reads only — it signs nothing. */
+export function meetingContentHash(id: string): Promise<string> {
+  return invoke<string>("meeting_content_hash", { id });
+}
+/** Record a ratification the ceremony already took. */
+export function meetingRatify(
+  id: string,
+  by: string,
+  expectHash: string,
+): Promise<DecisionResult> {
+  return invoke<DecisionResult>("meeting_ratify", { id, by, expectHash });
+}
+
 // ---- vote allowances (the delegated voting franchise) --------------
 
 export interface AllowanceInput {

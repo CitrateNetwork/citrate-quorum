@@ -131,7 +131,16 @@ export interface LedgerDomain {
 export interface MeetingsDomain {
   list(): Promise<Meeting[]>;
   get(id: string): Promise<MeetingDetail>;
-  // TODO(wire): ratify(id) routes through the ceremony; scheduling form.
+  /**
+   * The content hash a ratifier signs. Read this BEFORE opening the ceremony,
+   * display it, and hand the same value to `ratify` — the backend re-checks it
+   * so a signature is never recorded over minutes that moved in between.
+   */
+  contentHash(id: string): Promise<string>;
+  /** Record a ratification the ceremony has already taken. Signs nothing. */
+  ratify(id: string, by: string, expectHash: string): Promise<void>;
+  // TODO(wire): the scheduling form (S5 covers schedule/admit/open/close as
+  // commands; no surface drives them yet).
 }
 
 export interface GovernanceDomain {

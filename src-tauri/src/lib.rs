@@ -175,6 +175,16 @@ pub fn run() {
             backend::action_reject,
             backend::action_approve,
             backend::approvals_pending,
+            // meetings — the governed meeting record (QRM-S5). None of these
+            // sign; ratification records a signature the ceremony already took.
+            backend::meetings_list,
+            backend::meeting_get,
+            backend::meeting_schedule,
+            backend::meeting_admit,
+            backend::meeting_open,
+            backend::meeting_close,
+            backend::meeting_content_hash,
+            backend::meeting_ratify,
             backend::ledger_records,
             backend::ledger_head,
             backend::ledger_merkle_root,
