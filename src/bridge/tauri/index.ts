@@ -47,9 +47,28 @@ const toGate = (d: DecisionResult): GateDecision => ({
   ungoverned: d.ungoverned,
 });
 
-const na = (op: string) => (): never => {
+/**
+ * An unwired async domain method.
+ *
+ * It REJECTS rather than throwing synchronously. The domain contract types
+ * these as `Promise`-returning, and a synchronous throw from one is a trap: a
+ * caller doing `bridge.x.y().then(...)` inside a `useEffect` never gets to
+ * `.catch()`, the effect throws, and React unmounts the whole tree — the
+ * packaged app white-screens instead of reporting that a domain is unavailable.
+ * Rejecting keeps the failure inside the promise chain where callers handle it.
+ */
+const na =
+  (op: string) =>
+  (): Promise<never> =>
+    Promise.reject(new Unavailable(op));
+
+/** Synchronous domain methods (streams return an Unsubscribe; `node.blocks`
+ *  returns an array) have no promise for the failure to live in, so these do
+ *  throw. Callers of a synchronous method are expected to guard it. */
+const naSync = (op: string) => (): never => {
   throw new Unavailable(op);
 };
+
 const naStream =
   (op: string) =>
   (): Unsubscribe => {
@@ -93,7 +112,7 @@ export function createTauriBridge(): BridgeContract {
         toGate(await actionReject(decisionId)),
     },
     wallet: { summary: na("wallet.summary") },
-    node: { peers: na("node.peers"), logs: naStream("node.logs"), blocks: na("node.blocks") },
+    node: { peers: na("node.peers"), logs: naStream("node.logs"), blocks: naSync("node.blocks") },
     agents: { list: na("agents.list"), grants: na("agents.grants") },
     rooms: { list: na("rooms.list"), roster: na("rooms.roster"), events: naStream("rooms.events") },
     ledger: {

@@ -138,6 +138,36 @@ describe("tauri adapter — tenant scope + ledger", () => {
   });
 
   it("reports an unwired domain as unavailable rather than empty", async () => {
-    expect(() => createTauriBridge().rooms.list()).toThrow(/rooms\.list/);
+    await expect(createTauriBridge().rooms.list()).rejects.toThrow(/rooms\.list/);
+  });
+
+  it("REJECTS unwired async domains instead of throwing synchronously", async () => {
+    // A synchronous throw from a Promise-typed method escapes `.then(...)` in a
+    // useEffect and unmounts the React tree — the packaged app white-screens.
+    // Every unwired async method must fail inside the promise.
+    const b = createTauriBridge();
+    const calls: Array<() => unknown> = [
+      () => b.session.current(),
+      () => b.wallet.summary(),
+      () => b.agents.list(),
+      () => b.rooms.list(),
+      () => b.meetings.list(),
+      () => b.governance.protocols(),
+      () => b.journal.list(),
+      () => b.calendar.accounts(),
+      () => b.repos.list(),
+      () => b.settings.tenancy(),
+    ];
+    for (const call of calls) {
+      let threw = false;
+      let result: unknown;
+      try {
+        result = call();
+      } catch {
+        threw = true;
+      }
+      expect(threw).toBe(false);
+      await expect(result as Promise<unknown>).rejects.toBeInstanceOf(Error);
+    }
   });
 });
