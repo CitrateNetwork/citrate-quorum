@@ -232,6 +232,56 @@ pub fn refusal_response(msg: &Value, reason: &str) -> Value {
     })
 }
 
+// ---- Streamable HTTP ------------------------------------------------
+
+/// The header 2026-07-28 requires on every Streamable HTTP POST, so a gateway
+/// can route without parsing the body.
+pub const MCP_METHOD_HEADER: &str = "mcp-method";
+/// Required for `tools/call`, `resources/read` and `prompts/get` — the methods
+/// a gateway most wants to see. We read it for evidence, not for routing.
+pub const MCP_NAME_HEADER: &str = "mcp-name";
+
+/// Does this request need gating?
+///
+/// The revision lets a gateway decide from `Mcp-Method` alone, and that is the
+/// fast path. But routing on the header ALONE would mean a client could skip
+/// the gate by omitting a header it is merely required to send. So the body is
+/// checked too, and either signal is enough. Cheap to be safe: the body is
+/// already in hand, and only well-formed JSON containing `tools/call` triggers
+/// the slow path.
+pub fn should_gate(headers: &[(String, String)], body: &Value) -> bool {
+    let header_says = headers
+        .iter()
+        .any(|(k, v)| k == MCP_METHOD_HEADER && v.trim() == "tools/call");
+    header_says || is_tool_call(body) || body.as_array().is_some_and(|a| a.iter().any(is_tool_call))
+}
+
+/// Parse a raw HTTP header block into lowercased name/value pairs.
+pub fn parse_headers(head: &str) -> Vec<(String, String)> {
+    head.lines()
+        .skip(1)
+        .filter_map(|l| l.split_once(':'))
+        .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string()))
+        .collect()
+}
+
+/// Headers a proxy must not copy upstream: they describe THIS hop.
+pub fn is_hop_by_hop(name: &str) -> bool {
+    matches!(
+        name,
+        "connection"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
+            | "host"
+            | "content-length"
+    )
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
@@ -501,6 +551,57 @@ mod tests {
             (-32019..=-32000).contains(&REFUSED_CODE),
             "REFUSED_CODE {REFUSED_CODE} must stay in the implementation-defined band"
         );
+    }
+
+    #[test]
+    fn the_http_gate_reads_the_routing_header() {
+        let headers = vec![
+            ("content-type".to_string(), "application/json".to_string()),
+            ("mcp-method".to_string(), "tools/call".to_string()),
+            ("mcp-name".to_string(), "Bash".to_string()),
+        ];
+        // The fast path the revision designs for: decide from the header.
+        assert!(should_gate(&headers, &json!({})));
+        let listing = vec![("mcp-method".to_string(), "tools/list".to_string())];
+        assert!(!should_gate(
+            &listing,
+            &json!({"jsonrpc":"2.0","id":1,"method":"tools/list"})
+        ));
+    }
+
+    #[test]
+    fn omitting_the_routing_header_does_not_skip_the_gate() {
+        // `Mcp-Method` is required, but a client that omits it must not thereby
+        // escape governance — the body is checked too.
+        assert!(
+            should_gate(&[], &call("Bash")),
+            "a tools/call with no Mcp-Method header must still be gated"
+        );
+        // And a lying header cannot hide a tool call in the body either.
+        let lying = vec![("mcp-method".to_string(), "tools/list".to_string())];
+        assert!(should_gate(&lying, &call("Bash")));
+        // A batch hiding one is caught as well.
+        assert!(should_gate(&[], &json!([call("Bash")])));
+    }
+
+    #[test]
+    fn headers_are_parsed_case_insensitively_and_hop_by_hop_ones_are_dropped() {
+        let head = "POST /mcp HTTP/1.1\r\nHost: x\r\nMCP-Method: tools/call\r\n\
+                    Authorization: Bearer t\r\nTransfer-Encoding: chunked\r\n";
+        let h = parse_headers(head);
+        assert!(h
+            .iter()
+            .any(|(k, v)| k == "mcp-method" && v == "tools/call"));
+        assert!(should_gate(&h, &json!({})));
+        // These describe this hop and must not be replayed upstream.
+        for hop in ["host", "transfer-encoding", "connection", "content-length"] {
+            assert!(is_hop_by_hop(hop), "{hop} must not be forwarded");
+        }
+        assert!(
+            !is_hop_by_hop("authorization"),
+            "auth must reach the server"
+        );
+        assert!(!is_hop_by_hop("mcp-protocol-version"));
     }
 
     #[test]

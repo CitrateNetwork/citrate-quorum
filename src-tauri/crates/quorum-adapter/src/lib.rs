@@ -325,8 +325,10 @@ pub struct PreToolUse {
 /// inheriting some other class's grant.
 pub fn action_class(tool_name: &str) -> String {
     match tool_name {
-        "Bash" | "BashOutput" | "KillShell" => "shell.exec".to_string(),
-        "Edit" | "Write" | "NotebookEdit" => "repo.write".to_string(),
+        // `shell` is Codex's name for the same tool Claude Code calls `Bash`.
+        "Bash" | "BashOutput" | "KillShell" | "shell" => "shell.exec".to_string(),
+        // `apply_patch` is Codex's file-edit tool.
+        "Edit" | "Write" | "NotebookEdit" | "apply_patch" => "repo.write".to_string(),
         "Read" | "Glob" | "Grep" => "repo.read".to_string(),
         "WebFetch" | "WebSearch" => "net.fetch".to_string(),
         "Task" | "Agent" => "agent.spawn".to_string(),
@@ -365,6 +367,42 @@ fn canonical_json(v: &serde_json::Value) -> String {
             format!("[{}]", inner.join(","))
         }
         other => other.to_string(),
+    }
+}
+
+/// Which agent's hook contract to answer in.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum HookVendor {
+    ClaudeCode,
+    Codex,
+}
+
+/// The JSON a PreToolUse hook returns.
+///
+/// Claude Code and Codex share the payload field names (`tool_name`,
+/// `tool_input`, `session_id`, `cwd`) and the nested
+/// `hookSpecificOutput.permissionDecision` response, so one function serves
+/// both. The difference is in how confident we can be that a `deny` lands —
+/// see [`hook_exit_code`].
+pub fn hook_response(outcome: &Outcome) -> Option<String> {
+    claude_hook_response(outcome)
+}
+
+/// Whether the hook should ALSO exit non-zero to signal a block.
+///
+/// Codex's documentation offers two denial channels — the JSON above, or
+/// "exit code 2 and write the blocking reason to stderr" — and published
+/// descriptions of its parser disagree about the JSON shape it accepts. For a
+/// *denial* both signals are safe together: if one is ignored the other still
+/// blocks, and honouring both merely denies twice. We never exit non-zero on an
+/// allow, where a spurious failure would break every tool call.
+///
+/// Claude Code's JSON path is verified working against a real installed hook,
+/// so it does not need the second channel.
+pub fn hook_exit_code(vendor: HookVendor, outcome: &Outcome) -> i32 {
+    match (vendor, outcome) {
+        (HookVendor::Codex, Outcome::Refuse { .. }) => 2,
+        _ => 0,
     }
 }
 
@@ -605,6 +643,31 @@ mod tests {
         let c = serde_json::json!({ "command": "rm -rf /", "timeout": 5 });
         assert_ne!(params_hash(&a), params_hash(&c));
         assert!(params_hash(&a).starts_with("0x"));
+    }
+
+    #[test]
+    fn only_a_codex_denial_uses_the_second_channel() {
+        let refuse = Outcome::Refuse {
+            reason: "no".into(),
+        };
+        let allow = Outcome::Proceed {
+            reason: "ok".into(),
+        };
+        // Codex: deny on both channels, because published accounts of its
+        // parser disagree and a denial that silently fails to land is the
+        // failure that matters.
+        assert_eq!(hook_exit_code(HookVendor::Codex, &refuse), 2);
+        // Never on an allow — a spurious non-zero exit would break every call.
+        assert_eq!(hook_exit_code(HookVendor::Codex, &allow), 0);
+        assert_eq!(hook_exit_code(HookVendor::Codex, &Outcome::NotGoverned), 0);
+        // Claude Code's JSON path is verified against a real hook.
+        assert_eq!(hook_exit_code(HookVendor::ClaudeCode, &refuse), 0);
+    }
+
+    #[test]
+    fn codex_tool_names_map_to_the_same_action_classes() {
+        assert_eq!(action_class("shell"), "shell.exec");
+        assert_eq!(action_class("apply_patch"), "repo.write");
     }
 
     #[test]

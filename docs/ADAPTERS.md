@@ -166,7 +166,57 @@ config toggle. This file is its stand-in until the `EgressPolicy` template
 lands with the governance contracts (QRM-S6/S7); it is named that way rather
 than pretending to be the final mechanism.
 
-## Codex, Hermes, scripts, CI
+### Streamable HTTP
+
+```
+quorum-adapter mcp-proxy-http --listen 127.0.0.1:8970 --upstream mcp-host:8971 [--agent id]
+```
+
+Same gate, HTTP transport. The 2026-07-28 revision requires `Mcp-Method` on
+every POST (and `Mcp-Name` for `tools/call`, `resources/read`, `prompts/get`) so
+a gateway can route without parsing the body — this reads it as the fast path.
+
+**It also checks the body.** `Mcp-Method` is required, but routing on it *alone*
+would let a client skip the gate by omitting a header it is merely obliged to
+send. Either signal is enough to gate; a lying header cannot hide a tool call.
+
+The response is copied through as **opaque bytes**, headers and body, whether
+that body is one JSON document or an SSE stream. The proxy never parses a
+response, so `resultType`, MRTR `input_required` results, extensions and
+whatever the protocol grows later pass through untouched.
+
+It **caches nothing**, which satisfies `cacheScope: "private"` by construction:
+a shared intermediary that never stores a response cannot leak one.
+
+## Codex
+
+```
+quorum-adapter install-codex-hook
+```
+
+Codex shares Claude Code's payload field names (`tool_name`, `tool_input`,
+`session_id`, `cwd`), so the gating is identical. Two differences:
+
+1. **Hooks are off by default.** Enable with `[features] codex_hooks = true` in
+   `~/.codex/config.toml`; without it the hook is a silent no-op.
+2. **A refusal uses both denial channels** — the `hookSpecificOutput` JSON *and*
+   `exit 2` with the reason on stderr. Published accounts of Codex's parser
+   disagree about which shape it accepts, and its own documentation offers exit
+   2 as an alternative. For a denial both together are safe: if one is ignored
+   the other still blocks. An allow never exits non-zero, where a spurious
+   failure would break every call.
+
+### Coverage — do not assume
+
+Published accounts disagree about which tools fire `PreToolUse` on which Codex
+version: some say the shell tool only, others include `apply_patch` and MCP tool
+calls. **The Quorum ledger answers it for your version.** If you only ever see
+`shell.exec` decisions, the rest is not reaching the hook.
+
+Govern Codex's MCP tool calls with `mcp-proxy` regardless — that path does not
+depend on the hook at all.
+
+## Hermes, scripts, CI
 
 The generic path, for anything that can shell out before it acts:
 
@@ -176,15 +226,28 @@ quorum-adapter gate --agent codex --tool repo.write --classification Proprietary
 # exit 0 = proceed · exit 1 = refused (reason on stderr) · exit 2 = usage
 ```
 
+## Coverage, stated plainly
+
+Risk **R5** in the planset warns against mistaking binding enforcement for total
+coverage. What is actually covered:
+
+| Path | Gated by | Status |
+|---|---|---|
+| Claude Code tool calls | `claude-hook` | verified end to end |
+| Codex shell / apply_patch | `codex-hook` | verified; per-version coverage is yours to confirm from the ledger |
+| MCP over stdio | `mcp-proxy` | verified end to end |
+| MCP over Streamable HTTP | `mcp-proxy-http` | verified end to end |
+| Hermes, scripts, CI | `gate` | verified |
+| **An agent run outside an adapter** | **nothing** | **ungoverned by construction** |
+
+That last row is the honest limit: Quorum governs what passes through it.
+Detecting the rest is what the `ungoverned` verdict is for.
+
 ## Not built yet
 
-- **Streamable HTTP transport.** The proxy speaks stdio, which is what local
-  MCP servers use. An HTTP gateway would route on the `Mcp-Method` / `Mcp-Name`
-  headers the 2026-07-28 revision requires — the spec explicitly designs for a
-  gateway reading those without parsing the body — and must honour
-  `cacheScope: "private"` as a shared intermediary.
-- **Codex and Hermes vendor hooks.** Both are governed today: through
-  `mcp-proxy` when they speak MCP, and through `gate` otherwise. Neither has a
-  native in-process hook like Claude Code's.
-- **The `EgressPolicy` protocol.** Enforcement exists; the deployed, amendable
-  protocol that supplies the allowlist lands with QRM-S6/S7.
+- **The `EgressPolicy` protocol.** Enforcement exists and is fail-closed; the
+  deployed, amendable protocol that supplies the allowlist lands with the
+  governance contracts (QRM-S6/S7), which are chain-gated.
+- **A Hermes in-process hook.** Hermes lives in `citrate-agent-runtime`; it is
+  governed today through `gate` and `mcp-proxy`, and a native integration
+  belongs in that repo.
