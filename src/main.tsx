@@ -7,6 +7,7 @@ import { createRoot } from "react-dom/client";
 import "./styles/index.css";
 import { Shell } from "./shell/Shell";
 import { CeremonyProvider } from "./ceremony/Ceremony";
+import { EscalationProvider } from "./shell/escalations";
 import { Onboarding } from "./onboarding/Onboarding";
 
 function App() {
@@ -20,7 +21,11 @@ function App() {
   if (!entered) return <Onboarding onDone={enter} />;
   return (
     <CeremonyProvider>
-      <Shell />
+      {/* Inside the ceremony provider: answering an escalation opens the one
+          ceremony, and the feed is what tells the shell there is one. */}
+      <EscalationProvider>
+        <Shell />
+      </EscalationProvider>
     </CeremonyProvider>
   );
 }

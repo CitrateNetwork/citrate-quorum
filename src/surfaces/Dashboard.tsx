@@ -13,6 +13,7 @@ import { bridge } from "../bridge";
 import type { Decision, PendingApproval, Session } from "../bridge";
 import { DomainErrorPlate, useDomain } from "../components/DomainState";
 import { useCeremony } from "../ceremony/Ceremony";
+import { useEscalations } from "../shell/escalations";
 
 const VERDICT_COLOR: Record<string, string> = {
   allow: "var(--ok)",
@@ -59,7 +60,9 @@ export function Dashboard({ onGo }: { onGo: (id: string) => void }) {
    * Counting `require-approval` rows in the ledger was wrong — those include
    * escalations that have already been answered, so the number only ever grew.
    */
-  const [queue, setQueue] = useState<PendingApproval[]>([]);
+  // One poller for the whole app (`shell/escalations`): the toast, the shell
+  // badge and this queue must never disagree about who is blocked.
+  const { queue, refresh: refreshQueue } = useEscalations();
   const [tick, setTick] = useState(0);
   /**
    * The counts are a LIVE view, not a snapshot at mount. They were read once
@@ -102,12 +105,8 @@ export function Dashboard({ onGo }: { onGo: (id: string) => void }) {
 
   useEffect(() => {
     let live = true;
-    Promise.resolve()
-      .then(() => bridge.policy.pending())
-      .then((q) => live && setQueue(q))
-      .catch(() => live && setQueue([]));
-    // Refreshed on the same beat, so a decision recorded by an agent shows up
-    // in the counts without the operator reloading anything.
+    // Refreshed on the same beat as the escalation feed, so a decision recorded
+    // by an agent shows up in the counts without the operator reloading.
     Promise.resolve()
       .then(() => bridge.ledger.query())
       .then((r) => live && setRows(r))
@@ -122,6 +121,7 @@ export function Dashboard({ onGo }: { onGo: (id: string) => void }) {
   /** Answer an escalation in the one ceremony, then refresh immediately. */
   const answer = async (pa: PendingApproval) => {
     await ceremony.review(pa);
+    refreshQueue();
     setTick((t) => t + 1);
   };
 

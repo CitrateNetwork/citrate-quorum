@@ -11,6 +11,7 @@ import { SURFACES } from "../surfaces/registry";
 import { Placeholder } from "../surfaces/Placeholder";
 import { CommandPalette } from "./CommandPalette";
 import { EscalationToast } from "./EscalationToast";
+import { useEscalations } from "./escalations";
 import markWhite from "../assets/brand/citrate_mark_white.svg";
 import marqueeWhite from "../assets/brand/citrate_marquee_white.svg";
 
@@ -52,6 +53,9 @@ export function Shell() {
   const active: NavItem =
     NAV_ITEMS.find((i) => i.id === route) ?? NAV_ITEMS[0];
   const hicColor = session ? HIC_PILL_COLOR[session.hic.level] : "var(--info)";
+  // Visible from every surface, not just the Dashboard: an agent is blocked
+  // and it is on you. Clicking goes to the queue, never approves.
+  const { queue: escalations } = useEscalations();
 
   return (
     <div style={{ height: "100vh", display: "grid", gridTemplateColumns: "224px 1fr", minWidth: 0 }}>
@@ -111,6 +115,17 @@ export function Shell() {
           <div style={{ fontFamily: "var(--font-display)", fontWeight: 460, fontSize: 17, letterSpacing: "-0.008em" }}>{active.label}</div>
           <div style={{ flex: 1 }} />
           <button className="mono" onClick={() => setPalOpen(true)} style={{ fontSize: 10, color: "var(--tx-3)", background: "transparent", border: "1px solid var(--line-1)", borderRadius: "var(--r-1)", padding: "4px 9px", cursor: "pointer" }}>⌘K</button>
+          {escalations.length > 0 && (
+            <button
+              className="mono"
+              onClick={() => go("dashboard")}
+              title="Agents waiting for your approval"
+              style={{ fontSize: 10.5, fontWeight: 500, letterSpacing: ".1em", color: "var(--warn)", background: "var(--warn-bg)", border: "1px solid var(--warn)", borderRadius: 999, padding: "4px 11px", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 7 }}
+            >
+              <span style={{ width: 7, height: 7, borderRadius: 999, background: "var(--warn)", animation: "ccPulse 1.4s infinite" }} />
+              <span className="tabular">{escalations.length}</span> NEEDS YOU
+            </button>
+          )}
           <button className="mono" onClick={() => setHicOpen((v) => !v)} style={{ fontSize: 10.5, fontWeight: 500, letterSpacing: ".1em", color: hicColor, background: "transparent", border: `1px solid ${hicColor}`, borderRadius: 999, padding: "4px 11px", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 7 }}>
             <span style={{ width: 7, height: 7, borderRadius: 999, background: hicColor }} />{session?.hic.label ?? "HIC"}
           </button>

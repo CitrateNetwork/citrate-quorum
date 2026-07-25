@@ -39,6 +39,10 @@ quorum-policy = { path = "crates/quorum-policy" }
 
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+# The escalation notification path: an agent blocked at 2am must reach the
+# operator, not wait for someone to open the Dashboard. The notification is
+# deliberately contentless — see `notifyOs` in src/shell/escalations.tsx.
+tauri-plugin-notification = "2"
 tauri-plugin-store = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
