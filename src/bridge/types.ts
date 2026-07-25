@@ -222,6 +222,46 @@ export interface Meeting {
   classification: Classification;
   state: MeetingState;
 }
+/**
+ * A meeting template. `minHumans` is the quorum rule the backend enforces at
+ * close — it is data, not a caption, so the chips a user picks from and the
+ * rule that decides quorate/inquorate cannot drift apart.
+ */
+export interface MeetingTemplate {
+  name: string;
+  minHumans: number;
+  /** The classification this template defaults to. */
+  classification: Classification;
+  /** What the template means, for the operator choosing it. */
+  note: string;
+}
+
+export interface MeetingSchedule {
+  id: string;
+  name: string;
+  /** RFC3339. The backend stores it verbatim and never parses it. */
+  when: string;
+  template: string;
+  minHumans: number;
+  classification: Classification;
+  /**
+   * Directory whose `.agentile/sprints/active/{'*'}/SCOPE.md` files become the
+   * agenda. Omitted means an empty agenda that says it was not generated —
+   * never invented items.
+   */
+  workspace?: string;
+}
+
+export interface MeetingAdmit {
+  id: string;
+  name: string;
+  /** Set for an agent; omitted for a human. Only humans count toward quorum. */
+  vendor?: string;
+  attested: boolean;
+  /** Unknown clearance fails closed to Public (MR-4). */
+  clearance?: Classification;
+}
+
 export interface MeetingDetail {
   id: string;
   name: string;

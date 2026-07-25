@@ -7,6 +7,7 @@
 // (bridge/tauri) mirrors this signature with real Rust commands.
 // =====================================================================
 import type { BridgeContract } from "../domains";
+import { Unavailable } from "../types";
 import type {
   RoomEvent,
   Decision,
@@ -218,6 +219,14 @@ export function createSimBridge(): BridgeContract {
       // honest tauri path computes a true BLAKE3 over the minutes.
       contentHash: () => delay(60, `sim — no content hash (fixture ${D.MEETING_DETAIL.agendaHash})`),
       ratify: () => delay(120, undefined as void),
+      // The sim's register is a frozen fixture. Rather than pretend to
+      // schedule into it, these say plainly that only the real backend keeps
+      // a meeting record — a scheduled meeting that vanishes on reload would
+      // teach an operator the wrong thing about what this product stores.
+      schedule: () => Promise.reject(new Unavailable("meetings.schedule (sim has no meeting store)")),
+      admit: () => Promise.reject(new Unavailable("meetings.admit (sim has no meeting store)")),
+      open: () => Promise.reject(new Unavailable("meetings.open (sim has no meeting store)")),
+      close: () => Promise.reject(new Unavailable("meetings.close (sim has no meeting store)")),
     },
     governance: {
       protocols: () => delay(150, D.PROTOCOLS),

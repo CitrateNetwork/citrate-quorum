@@ -197,19 +197,52 @@ class Smoke:
         )
         time.sleep(settle)
 
+    # X11 keysym names for the punctuation a real form actually contains. The
+    # first version mapped only `- . _ space`, so `XK.string_to_keysym(':')`
+    # returned NoSymbol and the character was silently dropped — an RFC3339
+    # timestamp typed as "2026-07-30T09" and a filesystem path as "". The
+    # driver reported a green click over a field that never received the text.
+    KEYSYM_NAMES = {
+        " ": "space", "-": "minus", ".": "period", "_": "underscore",
+        ":": "colon", "/": "slash", "@": "at", "+": "plus", "=": "equal",
+        ",": "comma", ";": "semicolon", "#": "numbersign", "%": "percent",
+        "!": "exclam", "?": "question", "*": "asterisk", "&": "ampersand",
+        "$": "dollar", "^": "asciicircum", "~": "asciitilde", "`": "grave",
+        "'": "apostrophe", '"': "quotedbl", "|": "bar", "\\": "backslash",
+        "(": "parenleft", ")": "parenright", "[": "bracketleft",
+        "]": "bracketright", "{": "braceleft", "}": "braceright",
+        "<": "less", ">": "greater",
+    }
+
     def type_text(self, text: str) -> None:
+        """Type `text` via XTEST, including punctuation.
+
+        Shift is decided by asking the SERVER whether the keycode produces this
+        keysym unshifted, not by `ch.isupper()`. `:` and `?` need shift and are
+        not uppercase letters, so the old rule typed `;` and `/` instead — a
+        wrong character is worse than a dropped one, because the form still
+        looks filled.
+        """
         self._xdo(
             "from Xlib import display,X,XK\nfrom Xlib.ext import xtest\nimport time\n"
             f"d=display.Display('{self.display}')\n"
+            f"names={self.KEYSYM_NAMES!r}\n"
+            f"missing=[]\n"
             f"for ch in {text!r}:\n"
-            "    name={'-':'minus','.':'period','_':'underscore',' ':'space'}.get(ch,ch)\n"
-            "    ks=XK.string_to_keysym(name)\n    code=d.keysym_to_keycode(ks)\n"
-            "    sh=ch.isupper()\n"
+            "    ks=XK.string_to_keysym(names.get(ch,ch))\n"
+            "    code=d.keysym_to_keycode(ks)\n"
+            "    if not code:\n        missing.append(ch)\n        continue\n"
+            # index 0 is the unshifted keysym for this keycode; if it differs,
+            # the character we want lives on the shifted level.
+            "    sh = d.keycode_to_keysym(code,0)!=ks\n"
             "    if sh: xtest.fake_input(d,X.KeyPress,d.keysym_to_keycode(XK.string_to_keysym('Shift_L')))\n"
             "    xtest.fake_input(d,X.KeyPress,code)\n    d.sync()\n"
             "    xtest.fake_input(d,X.KeyRelease,code)\n    d.sync()\n"
             "    if sh: xtest.fake_input(d,X.KeyRelease,d.keysym_to_keycode(XK.string_to_keysym('Shift_L')))\n"
             "    d.sync()\n    time.sleep(.04)\n"
+            # A character the server cannot type must be loud. A silent drop is
+            # how a green run gets recorded over a field that stayed empty.
+            "if missing: raise SystemExit('untypable characters: '+repr(missing))\n"
         )
         time.sleep(0.5)
 

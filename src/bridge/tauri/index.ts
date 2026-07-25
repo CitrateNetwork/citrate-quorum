@@ -51,8 +51,12 @@ import {
   actionReject,
   approvalsPending,
   ledgerRecords,
+  meetingAdmit,
+  meetingClose,
   meetingContentHash,
   meetingGet,
+  meetingOpen,
+  meetingSchedule,
   meetingRatify,
   meetingsList,
   tenantActive,
@@ -283,6 +287,26 @@ export function createTauriBridge(): BridgeContract {
         };
       },
       contentHash: (id: string) => meetingContentHash(id),
+      schedule: (input) =>
+        meetingSchedule({
+          id: input.id,
+          name: input.name,
+          when: input.when,
+          template: input.template,
+          min_humans: input.minHumans,
+          classification: input.classification,
+          workspace: input.workspace,
+        }),
+      admit: (input) =>
+        meetingAdmit({
+          id: input.id,
+          name: input.name,
+          vendor: input.vendor,
+          attested: input.attested,
+          clearance: input.clearance,
+        }),
+      open: (id: string) => meetingOpen(id),
+      close: (id: string) => meetingClose(id),
       ratify: async (id: string, by: string, expectHash: string) => {
         await meetingRatify(id, by, expectHash);
       },

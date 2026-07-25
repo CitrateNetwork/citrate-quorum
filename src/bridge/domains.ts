@@ -28,7 +28,9 @@ import type {
   JournalEntry,
   LogLine,
   Meeting,
+  MeetingAdmit,
   MeetingDetail,
+  MeetingSchedule,
   NodePeer,
   Protocol,
   Repo,
@@ -139,8 +141,18 @@ export interface MeetingsDomain {
   contentHash(id: string): Promise<string>;
   /** Record a ratification the ceremony has already taken. Signs nothing. */
   ratify(id: string, by: string, expectHash: string): Promise<void>;
-  // TODO(wire): the scheduling form (S5 covers schedule/admit/open/close as
-  // commands; no surface drives them yet).
+  /** Create a meeting, generating its agenda from `workspace`'s sprint files. */
+  schedule(input: MeetingSchedule): Promise<void>;
+  /**
+   * Admit an attendee. Rejects when their clearance is below the meeting's
+   * classification — admitting them would reclassify what has been discussed
+   * (MR-4). The caller must surface that refusal, not swallow it.
+   */
+  admit(input: MeetingAdmit): Promise<void>;
+  /** Open the meeting: freezes the agenda and returns its hash. */
+  open(id: string): Promise<string>;
+  /** Close it, composing the minutes. Returns the resulting state. */
+  close(id: string): Promise<string>;
 }
 
 export interface GovernanceDomain {
