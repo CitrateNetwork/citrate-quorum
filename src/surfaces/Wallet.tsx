@@ -3,17 +3,15 @@
 // >150 SALT forces the HIC-1 warning per PRT-004 C2), Receive (address + QR),
 // Staking (bond/unbond ceremonies), tokens, attributed activity linking to
 // decision ids, agent spend. Reads bridge.wallet.summary(); signs via ceremony.
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { bridge } from "../bridge";
 import { DomainErrorPlate, useDomain } from "../components/DomainState";
-import type { Wallet as WalletData } from "../bridge";
 import { useCeremony } from "../ceremony/Ceremony";
 
 const DIR_COLOR: Record<string, string> = { in: "var(--ok)", out: "var(--tx-2)", stake: "var(--info)", gas: "var(--tx-3)" };
 const ST_COLOR: Record<string, string> = { settled: "var(--tx-3)", rejected: "var(--danger)", pending: "var(--warn)" };
 
 export function Wallet() {
-  const [w, setW] = useState<WalletData | null>(null);
   const [panel, setPanel] = useState<"" | "send" | "recv" | "stake">("");
   const [to, setTo] = useState(""); const [amt, setAmt] = useState("");
   const ceremony = useCeremony();
@@ -24,9 +22,8 @@ export function Wallet() {
   // A read that cannot succeed must say so and offer a retry, not sit in a
   // loading state forever.
   const primary = useDomain(() => bridge.wallet.summary(), "wallet.summary()");
-  useEffect(() => {
-    if (primary.state.status === "ready") setW(primary.state.data);
-  }, [primary.state]);
+  // Derived, not mirrored (see Agents.tsx).
+  const w = primary.state.status === "ready" ? primary.state.data : null;
   if (primary.state.status === "error") {
     return (
       <div style={{ padding: 18 }}>

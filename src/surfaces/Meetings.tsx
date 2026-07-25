@@ -3,7 +3,7 @@
 // ratified, templates) and the detail document (agenda frozen at open, minutes,
 // dissent first-class, attendance attested, decisions) with the Ratify ceremony.
 // Reads bridge.meetings.list()/get(); ratify routes through useCeremony().
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { bridge } from "../bridge";
 import { DomainErrorPlate, useDomain } from "../components/DomainState";
 import type { Meeting, MeetingDetail } from "../bridge";
@@ -18,7 +18,6 @@ const STATE_LABEL: Record<string, string> = {
 };
 
 export function Meetings() {
-  const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [detail, setDetail] = useState<MeetingDetail | null>(null);
   const [selectedState, setSelectedState] = useState<string>("ratified");
   const [ratified, setRatified] = useState(false);
@@ -29,9 +28,8 @@ export function Meetings() {
   // A read that cannot succeed must say so and offer a retry, not sit in a
   // loading state forever.
   const primary = useDomain(() => bridge.meetings.list(), "meetings.list()");
-  useEffect(() => {
-    if (primary.state.status === "ready") setMeetings(primary.state.data);
-  }, [primary.state]);
+  // Derived, not mirrored (see Agents.tsx).
+  const meetings = primary.state.status === "ready" ? primary.state.data : [];
   if (primary.state.status === "error") {
     return (
       <div style={{ padding: 18 }}>

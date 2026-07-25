@@ -6,12 +6,11 @@
 import { useEffect, useState } from "react";
 import { bridge } from "../bridge";
 import { DomainErrorPlate, useDomain } from "../components/DomainState";
-import type { Peek, Pr, Repo } from "../bridge";
+import type { Peek, Pr } from "../bridge";
 
 const CHECK_COLOR: Record<string, string> = { green: "var(--ok)", running: "var(--warn)", amber: "var(--warn)", red: "var(--danger)" };
 
 export function Repos() {
-  const [repos, setRepos] = useState<Repo[]>([]);
   const [prs, setPrs] = useState<Pr[]>([]);
   const [peek, setPeek] = useState<Peek | null>(null);
   useEffect(() => { bridge.repos.prs().then(setPrs).catch(() => {}); bridge.repos.peek("").then(setPeek).catch(() => {}); }, []);
@@ -20,9 +19,8 @@ export function Repos() {
   // A read that cannot succeed must say so and offer a retry, not sit in a
   // loading state forever.
   const primary = useDomain(() => bridge.repos.list(), "repos.list()");
-  useEffect(() => {
-    if (primary.state.status === "ready") setRepos(primary.state.data);
-  }, [primary.state]);
+  // Derived, not mirrored (see Agents.tsx).
+  const repos = primary.state.status === "ready" ? primary.state.data : [];
   if (primary.state.status === "error") {
     return (
       <div style={{ padding: 18 }}>

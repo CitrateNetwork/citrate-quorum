@@ -8,7 +8,7 @@ import { useEffect, useMemo, useState } from "react";
 import { bridge } from "../bridge";
 import { DomainErrorPlate, useDomain } from "../components/DomainState";
 import type {
-  IngestFile, InterviewTurn, Protocol, Simulation, SpecClause,
+  IngestFile, InterviewTurn, Simulation, SpecClause,
 } from "../bridge";
 import { useCeremony } from "../ceremony/Ceremony";
 import { LoaderMark } from "../components/LoaderMark";
@@ -23,7 +23,6 @@ export function Governance() {
   const [ingest, setIngest] = useState<IngestFile[]>([]);
   const [interview, setInterview] = useState<InterviewTurn[]>([]);
   const [clauses, setClauses] = useState<SpecClause[]>([]);
-  const [protocols, setProtocols] = useState<Protocol[]>([]);
   const [sim, setSim] = useState<Simulation | null>(null);
   const [simState, setSimState] = useState<"idle" | "running" | "done">("idle");
   const [deployed, setDeployed] = useState(false);
@@ -40,9 +39,8 @@ export function Governance() {
   // A read that cannot succeed must say so and offer a retry, not sit in a
   // loading state forever.
   const primary = useDomain(() => bridge.governance.protocols(), "governance.protocols()");
-  useEffect(() => {
-    if (primary.state.status === "ready") setProtocols(primary.state.data);
-  }, [primary.state]);
+  // Derived, not mirrored (see Agents.tsx).
+  const protocols = primary.state.status === "ready" ? primary.state.data : [];
 
   const runSim = () => {
     setSimState("running");
