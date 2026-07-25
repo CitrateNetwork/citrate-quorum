@@ -13,6 +13,29 @@ import { useCeremony } from "../ceremony/Ceremony";
 const HIC_COLOR: Record<number, string> = { 0: "var(--tx-3)", 1: "var(--ok)", 2: "var(--info)", 3: "var(--warn)" };
 const STATUS_COLOR: Record<string, string> = { active: "var(--ok)", probation: "var(--warn)", quarantined: "var(--danger)" };
 
+/**
+ * The action classes the shipped adapters emit (`action_class` in
+ * quorum-adapter). Offered as suggestions, NOT as a closed set: an unknown tool
+ * is governed under `tool.<name>`, so the field stays free text. The point is
+ * that a grant covering `shel.exec` governs nothing, silently, and the operator
+ * should be able to see that before they sign.
+ */
+const KNOWN_CLASSES = [
+  "shell.exec",
+  "repo.write",
+  "repo.read",
+  "net.fetch",
+  "agent.spawn",
+  "spend",
+] as const;
+
+/** A readable, sortable, collision-resistant default. `G-1784947152936` was
+ *  none of those. */
+function defaultGrantId(now: Date): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `G-${now.getUTCFullYear()}${p(now.getUTCMonth() + 1)}${p(now.getUTCDate())}-${p(now.getUTCHours())}${p(now.getUTCMinutes())}${p(now.getUTCSeconds())}`;
+}
+
 /** Registry-only fields are absent until the AgentSBT read lands. An em dash is
  *  the honest render; a plausible value is not (Rule 1). */
 const orDash = (v: string | number | undefined | null) =>
@@ -27,6 +50,8 @@ export function Agents() {
   const [grants, setGrants] = useState<Grant[]>([]);
   const [revoked, setRevoked] = useState<Set<string>>(new Set());
   const [refresh, setRefresh] = useState(0);
+  /** The human at the keyboard. A revocation is recorded against them. */
+  const [operator, setOperator] = useState("");
   const [formOpen, setFormOpen] = useState(false);
   const [formError, setFormError] = useState("");
   const [form, setForm] = useState({
@@ -46,6 +71,18 @@ export function Agents() {
   // Honest failure (S2D.4/§5.1): this surface's primary read is agents.list().
   // A read that cannot succeed must say so and offer a retry, not sit in a
   // loading state forever.
+  useEffect(() => {
+    Promise.resolve()
+      .then(() => bridge.session.operator())
+      .then((op) => {
+        setOperator(op ?? "");
+        // Prefill the issuer: it is the same human, and retyping your own name
+        // on every grant invites a typo into the evidence.
+        if (op) setForm((f) => (f.principal ? f : { ...f, principal: op }));
+      })
+      .catch(() => setOperator(""));
+  }, []);
+
   // Re-read after any issue/revoke: the backend is the record, not this state.
   useEffect(() => {
     if (refresh === 0) return;
@@ -79,11 +116,14 @@ export function Agents() {
       kind: "revoke", title: `Revoke grant ${g.id} — ${sel.name}`, origin: "user",
       // Revoking a capability always requires a human at HIC-1 (Rule 5).
       action: { actionClass: "grant.revoke", classification: "Proprietary", agent: "user", mandatoryHic1: true },
-      rows: [{ k: "Grant", v: `${g.id} · ${g.classes}` }, { k: "Agent", v: `${sel.name} · ${sel.sbt}` }, { k: "Scope", v: g.scope }, { k: "Effect", v: "immediate — the capability is gone at the next checkpoint" }],
+      rows: [{ k: "Grant", v: `${g.id} · ${g.classes}` }, { k: "Agent", v: `${sel.name} · ${orDash(sel.sbt)}` }, { k: "Scope", v: g.scope }, { k: "Effect", v: "immediate — the capability is gone at the next checkpoint" }],
     });
     if (r.outcome === "settled") {
       setRevoked((s) => new Set(s).add(g.id));
-      await bridge.agents.revoke(sel.id, g.id, form.principal.trim() || "operator").catch(() => {});
+      // The named operator, not a form field that happens to be filled in:
+      // "operator" as a principal is a placeholder, and a revocation attributed
+      // to a placeholder is not evidence of who did it.
+      await bridge.agents.revoke(sel.id, g.id, operator).catch(() => {});
       setRefresh((n) => n + 1);
     }
   };
@@ -93,14 +133,12 @@ export function Agents() {
     const r = await ceremony.request({
       kind: "revoke", title: `Revoke ALL grants — ${sel.name}`, origin: "user",
       action: { actionClass: "grant.revoke-all", classification: "Proprietary", agent: "user", mandatoryHic1: true },
-      rows: [{ k: "Agent", v: `${sel.name} · ${sel.sbt}` }, { k: "Grants revoked", v: `${grants.length} live grants` }, { k: "Keeps", v: "identity + history" }, { k: "Loses", v: "every capability" }, { k: "Running actions", v: "abort at the next checkpoint (<25s)" }],
+      rows: [{ k: "Agent", v: `${sel.name} · ${orDash(sel.sbt)}` }, { k: "Grants revoked", v: `${liveGrants.length} live grants` }, { k: "Keeps", v: "identity + history" }, { k: "Loses", v: "every capability" }, { k: "Running actions", v: "abort at the next checkpoint (<25s)" }],
     });
     if (r.outcome === "settled") {
-      setRevoked(new Set(grants.map((g) => g.id)));
-      for (const g of grants) {
-        await bridge.agents
-          .revoke(sel.id, g.id, form.principal.trim() || "operator")
-          .catch(() => {});
+      setRevoked(new Set(liveGrants.map((g) => g.id)));
+      for (const g of liveGrants) {
+        await bridge.agents.revoke(sel.id, g.id, operator).catch(() => {});
       }
       setRefresh((n) => n + 1);
     }
@@ -121,12 +159,14 @@ export function Agents() {
     }
     setFormError("");
     const expiresAtMs = Date.now() + form.days * 86_400_000;
+    const grantId = form.id.trim() || defaultGrantId(new Date());
     const r = await ceremony.request({
       kind: "grant",
       title: `Issue grant — ${agent}`,
       origin: "user",
       action: { actionClass: "grant.issue", classification: form.ceiling, agent: "user", mandatoryHic1: true },
       rows: [
+        { k: "Grant", v: grantId },
         { k: "Agent", v: agent },
         { k: "Action classes", v: classes.join(" · ") },
         { k: "Ceiling", v: form.ceiling },
@@ -139,7 +179,7 @@ export function Agents() {
     if (r.outcome !== "settled") return;
     try {
       await bridge.agents.issue({
-        id: form.id.trim() || `G-${Date.now()}`,
+        id: grantId,
         agent,
         principal: form.principal.trim(),
         tenantScope: form.scope.trim(),
@@ -156,7 +196,15 @@ export function Agents() {
     }
   };
 
-  const liveGrants = grants.filter((g) => !revoked.has(g.id));
+  // A grant revoked in an earlier session comes back from the backend with
+  // `revoked: true`. Filtering only on this session's optimistic set showed it
+  // as live — an operator reading a capability that no longer exists.
+  /** What the classes field will actually become. Shown live under the field. */
+  const parsedClasses = form.classes.split(/[,\s]+/).filter(Boolean);
+
+  const isRevoked = (g: Grant) => g.revoked === true || revoked.has(g.id);
+  const liveGrants = grants.filter((g) => !isRevoked(g));
+  const revokedGrants = grants.filter(isRevoked);
 
   return (
     <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 14 }}>
@@ -261,7 +309,21 @@ export function Agents() {
                     <div><div className="lbl">Issued by</div>
                       <input className="input" style={{ width: "100%" }} value={form.principal} onChange={(e) => setForm({ ...form, principal: e.target.value })} placeholder="your name — recorded" /></div>
                     <div style={{ gridColumn: "1 / -1" }}><div className="lbl">Action classes</div>
-                      <input className="input" style={{ width: "100%" }} value={form.classes} onChange={(e) => setForm({ ...form, classes: e.target.value })} placeholder="repo.write pr.open spend" /></div>
+                      <input className="input" style={{ width: "100%" }} list="quorum-action-classes" value={form.classes} onChange={(e) => setForm({ ...form, classes: e.target.value })} placeholder="repo.write shell.exec" />
+                      <datalist id="quorum-action-classes">
+                        {KNOWN_CLASSES.map((k) => <option key={k} value={k} />)}
+                      </datalist>
+                      {/* Show what will actually be granted. A typo here is
+                          silent: a grant covering `shel.exec` governs nothing,
+                          and the agent just keeps coming back ungoverned. */}
+                      <div className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)", marginTop: 4 }}>
+                        {parsedClasses.length === 0
+                          ? "governs nothing yet — name at least one action class"
+                          : <>governs {parsedClasses.map((cl) => (
+                              <span key={cl} style={{ color: (KNOWN_CLASSES as readonly string[]).includes(cl) ? "var(--ok)" : "var(--warn)" }}>{cl}{" "}</span>
+                            ))}{parsedClasses.some((cl) => !(KNOWN_CLASSES as readonly string[]).includes(cl)) && "— amber classes are not ones the shipped adapters emit; check the spelling"}</>}
+                      </div>
+                    </div>
                     <div><div className="lbl">Classification ceiling</div>
                       <select className="input" style={{ width: "100%" }} value={form.ceiling} onChange={(e) => setForm({ ...form, ceiling: e.target.value as Classification })}>
                         <option>Public</option><option>Proprietary</option><option>CUI</option><option>ITAR</option>
@@ -304,7 +366,21 @@ export function Agents() {
                   </div>
                 ))
               )}
-              <div className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)", padding: "8px 14px" }}>agents.grants() → GrantRegistry · revocation is immediate and needs a signature</div>
+              {/* A revoked grant stays on screen. It is history — the record of
+                  a capability this agent once held and who took it away — and
+                  hiding it makes the envelope look like it was never wider. */}
+              {revokedGrants.map((g) => (
+                <div key={g.id} style={{ display: "flex", flexDirection: "column", gap: 4, padding: "10px 14px", borderBottom: "1px solid var(--line-1)", opacity: 0.66 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span className="mono" style={{ fontSize: 10, color: "var(--tx-3)", textDecoration: "line-through" }}>{g.id}</span>
+                    <span className="mono" style={{ fontSize: 11, color: "var(--tx-3)", textDecoration: "line-through" }}>{g.classes}</span>
+                    <div style={{ flex: 1 }} />
+                    <span className="mono" style={{ fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase", color: "var(--danger)", border: "1px solid var(--danger)", padding: "1px 7px" }}>Revoked</span>
+                  </div>
+                  <div className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)" }}>scope {g.scope} · budget {g.budget} · issued by {g.principal}</div>
+                </div>
+              ))}
+              <div className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)", padding: "8px 14px" }}>agents.grants() → GrantRegistry · revocation is immediate and needs a signature · revoked grants stay listed as history</div>
             </div>
             <div className="surface" style={{ padding: "14px 16px", display: "flex", alignItems: "center", gap: 14, border: "1px solid var(--danger)" }}>
               <div style={{ flex: 1 }}>

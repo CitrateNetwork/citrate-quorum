@@ -164,8 +164,12 @@ export function createTauriBridge(): BridgeContract {
           classes: g.classes,
           scope: g.scope,
           budget: `${g.consumed}/${g.budget_units}`,
+          // Epoch milliseconds told an operator nothing and overflowed the
+          // column. A grant's expiry is a date a human has to reason about.
           expiry:
-            g.expires_at_ms >= Number.MAX_SAFE_INTEGER ? "no expiry" : String(g.expires_at_ms),
+            g.expires_at_ms >= Number.MAX_SAFE_INTEGER
+              ? "no expiry"
+              : new Date(g.expires_at_ms).toISOString().slice(0, 10),
           hic: Number(g.hic),
           principal: g.principal,
           revoked: g.revoked,

@@ -1010,6 +1010,19 @@ impl QuorumBackend {
     ) -> Result<(), String> {
         let ceiling = classification_from_str(&input.classification_ceiling)
             .ok_or_else(|| format!("unknown classification: {}", input.classification_ceiling))?;
+        // A duplicate id inside a tenant makes the record ambiguous: two grants
+        // answer to one name, `revoke` hits both, and the ledger's `grant_id`
+        // no longer identifies which envelope authorised an action.
+        if self
+            .grants
+            .iter()
+            .any(|((t, _), gs)| t == tenant.as_str() && gs.iter().any(|g| g.id == input.id))
+        {
+            return Err(format!(
+                "grant id {} already exists in this tenant — ids must identify one envelope",
+                input.id
+            ));
+        }
         let grant = CapabilityGrant {
             id: input.id.clone(),
             agent: input.agent.clone(),
@@ -1758,6 +1771,38 @@ mod tests {
             0,
             "an operator doing their job is NOT an alert state (HIC-X is never a configuration)"
         );
+    }
+
+    #[test]
+    fn a_grant_id_identifies_exactly_one_envelope() {
+        let mut b = QuorumBackend::default();
+        b.issue_grant(
+            &grant("sbt-41", &["repo.write"], "CUI", 100, "2"),
+            &t("bca"),
+            1000,
+        )
+        .unwrap();
+        // Same id again — even for a different agent — is ambiguous: `revoke`
+        // would hit both and the ledger's grant_id would stop identifying which
+        // envelope authorised an action.
+        let err = b
+            .issue_grant(
+                &grant("sbt-99", &["spend"], "CUI", 100, "2"),
+                &t("bca"),
+                2000,
+            )
+            .expect_err("a duplicate grant id must be refused");
+        assert!(err.contains("already exists"), "honest error: {err}");
+        // Nothing half-created on the way out.
+        assert!(b.grants_for("bca", "sbt-99").is_empty());
+        // The same id in ANOTHER tenant is fine — ids are tenant-scoped.
+        assert!(b
+            .issue_grant(
+                &grant("sbt-41", &["repo.write"], "CUI", 100, "2"),
+                &t("sea"),
+                3000
+            )
+            .is_ok());
     }
 
     #[test]
