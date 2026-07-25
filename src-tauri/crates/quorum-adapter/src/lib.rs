@@ -33,6 +33,8 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+pub mod mcp;
+
 /// Where the running app publishes its bridge address and bearer token.
 pub const ENDPOINT_FILE: &str = "endpoint.json";
 pub const TOKEN_FILE: &str = "token";

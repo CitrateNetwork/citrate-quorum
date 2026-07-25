@@ -52,7 +52,8 @@ use quorum_tenancy::TenantId;
 // agree by construction rather than by two parallel match arms.
 use crate::store::{
     classification_from_str, classification_str, grant_hic_from_str, grant_hic_str, hex32,
-    hex_encode, hic_str, verdict_str, Charge, EvidenceStore, PendingApproval, StoreError,
+    hex_encode, hic_str, verdict_str, Charge, EgressPolicy, EvidenceStore, PendingApproval,
+    StoreError,
 };
 
 /// What one governed action costs its grant.
@@ -242,6 +243,10 @@ pub struct QuorumBackend {
     /// Where evidence actually lives. `None` only in unit tests of the pure
     /// state logic; the running app always has one.
     store: Option<EvidenceStore>,
+    /// Which model endpoints may serve which classification (Q10). Loaded from
+    /// the store; the fail-closed default permits no external egress at a
+    /// controlled classification.
+    egress: EgressPolicy,
     /// Set when a durable write failed. Once evidence cannot be persisted, we
     /// refuse to keep producing it — unpersisted records must not silently pile
     /// up in RAM and be lost at exit.
@@ -264,6 +269,15 @@ impl QuorumBackend {
             .store
             .as_ref()
             .and_then(EvidenceStore::load_operator);
+        if let Some(store) = backend.store.as_ref() {
+            backend.egress = store.load_egress();
+            // Write the fail-closed default on first run so an installation's
+            // egress posture is inspectable on disk rather than implicit. Q10
+            // makes this a deployed policy, not a toggle — the file is its
+            // stand-in until the EgressPolicy protocol lands (QRM-S6/S7), and
+            // an operator can see exactly what is permitted today: nothing.
+            let _ = store.save_egress(&backend.egress);
+        }
         backend
     }
 
@@ -505,7 +519,30 @@ impl QuorumBackend {
         let grants = self.grants.get(&key).unwrap_or(&empty);
         let decision = evaluate(&action, grants, now_ms);
 
+        let mut decision = decision;
         let ungoverned = decision.verdict == Verdict::Ungoverned;
+
+        // Q10 egress control, enforced HERE — in the path every adapter goes
+        // through, never in a prompt. An action at a controlled classification
+        // backed by a model the deployed policy does not permit is DENIED.
+        //
+        // Only applied to actions a grant covers: an ungoverned action is
+        // already the louder alarm, and relabelling it "denied" would lose the
+        // fact that nothing authorised it at all.
+        if !ungoverned && !self.egress.permits(&input.classification, &input.model_id) {
+            let named = if input.model_id.trim().is_empty() {
+                "an unnamed model endpoint"
+            } else {
+                "a model endpoint the egress policy does not permit"
+            };
+            decision.verdict = Verdict::Deny;
+            decision.hic = quorum_audit::HicLevel::ApproveEach;
+            decision.reason = if named.starts_with("an unnamed") {
+                "RC-400 egress: work at this classification must name its model endpoint"
+            } else {
+                "RC-401 egress: this model endpoint is not permitted at this classification"
+            };
+        }
 
         // I-4: a governed record must name the accountable human — and that
         // name comes from the GRANT, not from the agent's own claim about
@@ -1814,6 +1851,93 @@ mod tests {
             "a revoked grant stays in the record — it is history, not an absence"
         );
         assert!(b.grants_for("bca", "never-seen").is_empty());
+    }
+
+    // ---- Q10 egress control ------------------------------------------
+
+    #[test]
+    fn work_at_a_controlled_classification_is_denied_without_a_permitting_policy() {
+        let mut b = QuorumBackend::default();
+        b.issue_grant(
+            &grant("sbt-41", &["repo.write"], "ITAR", 100, "2"),
+            &t("bca"),
+            0,
+        )
+        .unwrap();
+
+        // Fresh install: no external egress until a protocol permits it (Q10).
+        let mut a = action("sbt-41", "repo.write", "CUI", 1);
+        a.model_id = "gpt-northstar".into();
+        let d = b.evaluate_and_record(&a, &t("bca"), 1000).unwrap();
+        assert_eq!(d.verdict, "deny");
+        assert!(d.reason.contains("RC-401"), "{}", d.reason);
+
+        // Naming no model is not a permission either — "we did not check" is
+        // not evidence that the work stayed inside the boundary.
+        let mut silent = action("sbt-41", "repo.write", "ITAR", 1);
+        silent.model_id = String::new();
+        let d2 = b.evaluate_and_record(&silent, &t("bca"), 1100).unwrap();
+        assert_eq!(d2.verdict, "deny");
+        assert!(d2.reason.contains("RC-400"), "{}", d2.reason);
+
+        // Uncontrolled classifications are unaffected.
+        let mut public = action("sbt-41", "repo.write", "Public", 1);
+        public.model_id = "gpt-northstar".into();
+        assert_eq!(
+            b.evaluate_and_record(&public, &t("bca"), 1200)
+                .unwrap()
+                .verdict,
+            "allow"
+        );
+    }
+
+    #[test]
+    fn a_permitted_endpoint_may_serve_the_classification_it_was_permitted_for() {
+        let mut b = QuorumBackend::default();
+        let mut policy = EgressPolicy::default();
+        policy
+            .allow
+            .insert("CUI".into(), vec!["local/gemma-3-4b".into()]);
+        b.egress = policy;
+        b.issue_grant(
+            &grant("sbt-41", &["repo.write"], "ITAR", 100, "2"),
+            &t("bca"),
+            0,
+        )
+        .unwrap();
+
+        let mut ok = action("sbt-41", "repo.write", "CUI", 1);
+        ok.model_id = "local/gemma-3-4b".into();
+        assert_eq!(
+            b.evaluate_and_record(&ok, &t("bca"), 1000).unwrap().verdict,
+            "allow"
+        );
+
+        // Permitted at CUI is not permitted at ITAR — the allowlist is per
+        // classification, which is the entire point of it.
+        let mut itar = action("sbt-41", "repo.write", "ITAR", 1);
+        itar.model_id = "local/gemma-3-4b".into();
+        assert_eq!(
+            b.evaluate_and_record(&itar, &t("bca"), 1100)
+                .unwrap()
+                .verdict,
+            "deny"
+        );
+    }
+
+    #[test]
+    fn an_ungoverned_action_stays_ungoverned_rather_than_being_relabelled_denied() {
+        let mut b = QuorumBackend::default();
+        // No grant at all, at a controlled classification with a bad model.
+        let mut a = action("rogue", "repo.write", "ITAR", 1);
+        a.model_id = "gpt-northstar".into();
+        let d = b.evaluate_and_record(&a, &t("bca"), 1000).unwrap();
+        assert_eq!(
+            d.verdict, "ungoverned",
+            "nothing authorised this at all — that is the louder alarm, and \
+             relabelling it `deny` would lose it"
+        );
+        assert_eq!(b.ledger_ungoverned_count("bca"), 1);
     }
 
     // ---- the escalation reaches a human ------------------------------

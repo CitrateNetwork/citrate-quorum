@@ -267,6 +267,51 @@ pub struct PendingApproval {
     pub requested_at_ms: i64,
 }
 
+/// Which model endpoints may serve which classification (Q10 / `EgressPolicy`).
+///
+/// Q10 makes egress a governance protocol the customer deploys and amends, not
+/// a config toggle, and fixes the fresh-install posture: **no external egress
+/// until a protocol permits it**. The protocol-backed source lands with the
+/// governance contracts (QRM-S6/S7); until then this file is its stand-in, and
+/// it is named that way rather than pretending to be the final mechanism.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct EgressPolicy {
+    /// Classifications egress is controlled at. Defaults to the
+    /// export-controlled pair — the ones Q13 put in scope.
+    pub controlled: Vec<String>,
+    /// Permitted model endpoints, by classification. Absent or empty means
+    /// nothing is permitted at that classification.
+    pub allow: std::collections::BTreeMap<String, Vec<String>>,
+}
+
+impl Default for EgressPolicy {
+    fn default() -> Self {
+        Self {
+            controlled: vec!["CUI".to_string(), "ITAR".to_string()],
+            allow: std::collections::BTreeMap::new(),
+        }
+    }
+}
+
+impl EgressPolicy {
+    /// Is `model` permitted to serve work at `classification`?
+    ///
+    /// An unnamed model is NOT permitted at a controlled classification: if we
+    /// cannot say which endpoint backs the agent, we cannot assert the work
+    /// stayed inside the boundary, and "we did not check" is not a permission.
+    pub fn permits(&self, classification: &str, model: &str) -> bool {
+        if !self.controlled.iter().any(|c| c == classification) {
+            return true;
+        }
+        if model.trim().is_empty() {
+            return false;
+        }
+        self.allow
+            .get(classification)
+            .is_some_and(|models| models.iter().any(|m| m == model))
+    }
+}
+
 /// A durable, crash-atomic home for one installation's evidence.
 #[derive(Debug, Clone)]
 pub struct EvidenceStore {
@@ -580,6 +625,21 @@ impl EvidenceStore {
             line: 0,
             detail: format!("resolved.json does not parse ({e})"),
         })
+    }
+
+    // ---- egress policy (Q10) ------------------------------------------
+
+    /// The deployed egress policy, or the fail-closed default when none is.
+    pub fn load_egress(&self) -> EgressPolicy {
+        fs::read_to_string(self.root.join("egress.json"))
+            .ok()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save_egress(&self, policy: &EgressPolicy) -> Result<(), StoreError> {
+        let body = serde_json::to_vec(policy).map_err(|e| StoreError::Io(e.to_string()))?;
+        write_atomic(&self.root.join("egress.json"), &body)
     }
 
     pub fn load_allowances(&self, tenant: &str) -> Result<Vec<VoteAllowance>, StoreError> {
@@ -903,6 +963,44 @@ mod tests {
             root.store().load_pending("bca").unwrap(),
             pending,
             "an agent that stopped and asked must still be waiting after a restart"
+        );
+    }
+
+    #[test]
+    fn a_fresh_install_permits_no_external_egress_at_a_controlled_classification() {
+        let root = TempRoot::new();
+        let p = root.store().load_egress();
+        assert_eq!(p, EgressPolicy::default());
+
+        // Q10: nothing external until a protocol permits it.
+        assert!(!p.permits("CUI", "gpt-northstar"));
+        assert!(!p.permits("ITAR", "gpt-northstar"));
+        // An unnamed model is not a permitted one — "we did not check" is not
+        // a permission.
+        assert!(!p.permits("CUI", ""));
+        assert!(!p.permits("ITAR", "   "));
+        // Uncontrolled classifications are unaffected.
+        assert!(p.permits("Public", "gpt-northstar"));
+        assert!(p.permits("Proprietary", ""));
+    }
+
+    #[test]
+    fn a_deployed_policy_permits_exactly_what_it_names() {
+        let root = TempRoot::new();
+        let store = root.store();
+        let mut policy = EgressPolicy::default();
+        policy
+            .allow
+            .insert("CUI".into(), vec!["local/gemma-3-4b".into()]);
+        store.save_egress(&policy).unwrap();
+
+        let back = root.store().load_egress();
+        assert_eq!(back, policy, "the policy survives a restart");
+        assert!(back.permits("CUI", "local/gemma-3-4b"));
+        assert!(!back.permits("CUI", "gpt-northstar"), "only what it names");
+        assert!(
+            !back.permits("ITAR", "local/gemma-3-4b"),
+            "permitting a model at CUI must not permit it at ITAR"
         );
     }
 

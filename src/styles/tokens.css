@@ -129,6 +129,24 @@ button { font: inherit; }
 .input:focus { border-color: var(--tx-1); box-shadow: var(--focus-ring); }
 .input::placeholder { color: var(--tx-3); }
 
+/* A native <select> is drawn by the platform, which ignores the author colour
+   above: on WebKitGTK the packaged app rendered the classification-ceiling and
+   HIC-level pickers as dark text on a dark surface — unreadable. An operator
+   who cannot see the ceiling cannot confirm what they are about to sign, which
+   in this app is a capability grant. `appearance: none` hands the drawing back
+   to us; the chevron is ours because the platform no longer supplies one. */
+select.input {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 30px;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238a8f87' stroke-width='2.2' stroke-linecap='round'><path d='M6 9l6 6 6-6'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  background-size: 14px 14px;
+}
+/* The dropdown list is also platform-drawn on some builds. */
+select.input option { color: var(--tx-1); background: var(--srf-2); }
+
 .lbl {
   font-family: var(--font-mono); font-size: 10px; font-weight: 500;
   letter-spacing: .14em; text-transform: uppercase; color: var(--tx-2);

@@ -80,6 +80,92 @@ existing class whose grant would then cover it by accident.
 Environment: `QUORUM_AGENT_ID` (default `claude-code`), `QUORUM_CLASSIFICATION`
 (default `Public`), `QUORUM_MODEL_ID`.
 
+## MCP servers — the gating proxy
+
+```
+quorum-adapter mcp-proxy [--agent id] [--classification C] [--model M] -- <server cmd...>
+```
+
+Quorum sits between an MCP client and an MCP server. Every `tools/call` passes
+the gate **before** it reaches the server; a refusal never reaches it at all.
+Everything else is relayed byte-for-byte.
+
+Point your MCP client at the proxy instead of the server:
+
+```jsonc
+// before
+{ "command": "my-mcp-server", "args": ["--flag"] }
+// after
+{ "command": "quorum-adapter",
+  "args": ["mcp-proxy", "--agent", "codex", "--", "my-mcp-server", "--flag"] }
+```
+
+### It is deliberately near-blind
+
+MCP **2026-07-28** is the largest revision since launch: no `initialize`
+handshake, no protocol-level sessions, no `Mcp-Session-Id`, `ping` and
+`logging/setLevel` removed, server-initiated requests replaced by Multi
+Round-Trip Requests, a required `resultType` on every result, renumbered error
+codes. A proxy that modelled the protocol would break on release day.
+
+This one inspects exactly one method — `tools/call`, whose shape
+(`params.name`, `params.arguments`) is stable from `2024-11-05` through the
+draft. `server/discover`, `subscriptions/listen`, `tasks/*`, extensions and
+methods that do not exist yet are opaque and forwarded intact.
+
+### What the revision gives us
+
+- **Statelessness**: no session to track, so each call is independently
+  gateable and the proxy holds no per-connection state to get wrong.
+- **Identity on the request**: `_meta`'s `io.modelcontextprotocol/clientInfo`
+  names the calling agent, so evidence records who called rather than what we
+  were configured to assume. Pre-2026-07-28 clients fall back to the
+  `initialize` handshake.
+- **W3C trace context**: `_meta`'s `traceparent` becomes the decision's
+  correlation id, lining a governed action up with the trace an OpenTelemetry
+  backend sees.
+
+### Error code
+
+A refusal is JSON-RPC error **-32010** with
+`data.governedBy = "citrate-quorum"`. The revision reserves `-32020..-32099`
+for the specification and leaves `-32000..-32019` implementation-defined; a
+refusal is ours, so it lives in the lower band.
+
+A JSON-RPC batch containing a `tools/call` is refused outright rather than
+partly gated — batching was removed from MCP, and letting one through ungated
+to avoid synthesizing a partial batch response would be a silent bypass.
+
+## Egress policy by classification (Q10)
+
+Which model endpoints may serve which classification. Enforced at the gate, in
+the path every adapter goes through — never in a prompt.
+
+**Fresh install permits no external egress.** `<app_data>/evidence/egress.json`
+is written on first run so the posture is inspectable rather than implied:
+
+```json
+{ "controlled": ["CUI", "ITAR"], "allow": {} }
+```
+
+- `controlled` — classifications egress is policed at. Uncontrolled ones are
+  unaffected.
+- `allow` — permitted endpoints per classification. Permitting a model at CUI
+  does **not** permit it at ITAR.
+- An action at a controlled classification that names **no** model is denied:
+  if we cannot say which endpoint backed the work, we cannot assert it stayed
+  inside the boundary, and "we did not check" is not a permission.
+- An **ungoverned** action stays ungoverned rather than being relabelled
+  `deny` — nothing authorised it at all, which is the louder alarm.
+
+Name the endpoint with `--model` (proxy / `gate`) or `QUORUM_MODEL_ID` (Claude
+Code hook).
+
+Q10 makes egress a governance protocol the customer deploys and amends, not a
+config toggle. This file is its stand-in until the `EgressPolicy` template
+lands with the governance contracts (QRM-S6/S7); it is named that way rather
+than pretending to be the final mechanism.
+
 ## Codex, Hermes, scripts, CI
 
 The generic path, for anything that can shell out before it acts:
@@ -92,11 +178,13 @@ quorum-adapter gate --agent codex --tool repo.write --classification Proprietary
 
 ## Not built yet
 
-- **MCP-native proxying.** The gate is reachable from an MCP server today via
-  `gate`, but Quorum does not yet sit *between* an MCP client and server
-  transparently gating `tools/call`. That is the remaining S4a transport.
-- **Codex and Hermes native integrations.** Both work through `gate` above;
-  neither has a vendor-specific hook like Claude Code's.
-- **Egress policy by classification** (`02_ARCHITECTURE.md` §4.5) — an agent in
-  a CUI room must not be backed by a non-allowlisted model endpoint. The
-  adapter records `model_id` but does not yet enforce an allowlist.
+- **Streamable HTTP transport.** The proxy speaks stdio, which is what local
+  MCP servers use. An HTTP gateway would route on the `Mcp-Method` / `Mcp-Name`
+  headers the 2026-07-28 revision requires — the spec explicitly designs for a
+  gateway reading those without parsing the body — and must honour
+  `cacheScope: "private"` as a shared intermediary.
+- **Codex and Hermes vendor hooks.** Both are governed today: through
+  `mcp-proxy` when they speak MCP, and through `gate` otherwise. Neither has a
+  native in-process hook like Claude Code's.
+- **The `EgressPolicy` protocol.** Enforcement exists; the deployed, amendable
+  protocol that supplies the allowlist lands with QRM-S6/S7.

@@ -36,6 +36,7 @@ fn main() {
         "claude-hook" => cmd_claude_hook(&args[1..]),
         "install-claude-hook" => cmd_install_claude_hook(),
         "gate" => cmd_gate(&args[1..]),
+        "mcp-proxy" => cmd_mcp_proxy(&args[1..]),
         "help" | "-h" | "--help" => {
             print_help();
             0
@@ -56,7 +57,9 @@ fn print_help() {
          \x20 claude-hook            Claude Code PreToolUse hook (reads stdin)\n\
          \x20 install-claude-hook    print the hooks.json to install it\n\
          \x20 gate --agent <id> --tool <class> [--classification C] [--cost N]\n\
-         \x20      [--threshold N] [--must-approve] [--correlation X] [--wait S]\n\n\
+         \x20      [--threshold N] [--must-approve] [--correlation X] [--wait S]\n\
+         \x20 mcp-proxy [--agent id] [--classification C] [--model M] [--wait S] -- <server cmd...>\n\
+         \x20      gate an MCP server's tools/call; everything else relays untouched\n\n\
          Exit codes: 0 proceed · 1 refused · 2 usage error."
     );
 }
@@ -248,4 +251,151 @@ fn cmd_gate(args: &[String]) -> i32 {
 fn flag_value(args: &[String], flag: &str) -> Option<String> {
     let i = args.iter().position(|a| a == flag)?;
     args.get(i + 1).cloned()
+}
+
+/// `quorum-adapter mcp-proxy [flags] -- <server command...>`
+///
+/// Spawns the upstream MCP server and relays stdio between it and the client,
+/// gating every `tools/call` on the way past. Everything else is forwarded
+/// unread, which is what keeps this working across protocol revisions — MCP
+/// 2026-07-28 removes the initialize handshake, sessions, ping and
+/// logging/setLevel, and a proxy that modelled the protocol would break.
+///
+/// The server's stderr is inherited, not captured: the same revision tells
+/// stdio servers to log there instead of using the (now deprecated) Logging
+/// feature, so it must reach the operator's terminal.
+fn cmd_mcp_proxy(args: &[String]) -> i32 {
+    use quorum_adapter::mcp::{refusal_response, relay_decision, ClientIdentity, Relay};
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::{Command, Stdio};
+    use std::sync::{Arc, Mutex};
+
+    let Some(sep) = args.iter().position(|a| a == "--") else {
+        eprintln!("quorum-adapter mcp-proxy: expected `-- <server command...>`");
+        return 2;
+    };
+    let (flags, server) = (&args[..sep], &args[sep + 1..]);
+    let Some((program, rest)) = server.split_first() else {
+        eprintln!("quorum-adapter mcp-proxy: no server command after `--`");
+        return 2;
+    };
+    let agent = flag_value(flags, "--agent");
+    let classification =
+        flag_value(flags, "--classification").unwrap_or_else(|| "Public".to_string());
+    // Q10: at a controlled classification an unnamed model endpoint is denied,
+    // so this is a governance input, not a label.
+    let model = flag_value(flags, "--model").unwrap_or_default();
+    let wait = flag_value(flags, "--wait")
+        .and_then(|s| s.parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(Duration::ZERO);
+
+    let gate = match open_gate() {
+        Ok(Some(g)) => Some(g),
+        Ok(None) => {
+            eprintln!("quorum-adapter: Quorum is not set up here — proxying UNGOVERNED");
+            None
+        }
+        Err(why) => {
+            eprintln!("quorum-adapter: REFUSED to start — Quorum is installed but unusable: {why}");
+            return 1;
+        }
+    };
+
+    let mut child = match Command::new(program)
+        .args(rest)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("quorum-adapter mcp-proxy: cannot start `{program}`: {e}");
+            return 2;
+        }
+    };
+    let Some(mut to_server) = child.stdin.take() else {
+        return 2;
+    };
+    let Some(from_server) = child.stdout.take() else {
+        return 2;
+    };
+
+    // Server → client: pure relay. One writer owns stdout so a refusal we
+    // synthesize can never interleave with a server frame mid-line.
+    let out = Arc::new(Mutex::new(std::io::stdout()));
+    let out_relay = Arc::clone(&out);
+    let pump = std::thread::spawn(move || {
+        let mut reader = BufReader::new(from_server);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            if let Ok(mut o) = out_relay.lock() {
+                if o.write_all(line.as_bytes()).is_err() || o.flush().is_err() {
+                    break;
+                }
+            }
+        }
+    });
+
+    // Client → server: gate `tools/call`, forward the rest.
+    let mut identity = ClientIdentity::default();
+    let stdin = std::io::stdin();
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match stdin.lock().read_line(&mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(msg) = serde_json::from_str::<serde_json::Value>(&line) else {
+            // Not JSON we can read. Forward it: mangling a frame we do not
+            // understand is worse than letting the server reject it.
+            let _ = to_server.write_all(line.as_bytes());
+            let _ = to_server.flush();
+            continue;
+        };
+        identity.observe(&msg);
+
+        let decision = match &gate {
+            Some(g) => relay_decision(
+                &msg,
+                &identity,
+                g,
+                agent.as_deref(),
+                &classification,
+                &model,
+                wait,
+            ),
+            None => Relay::Forward,
+        };
+        match decision {
+            Relay::Forward => {
+                if to_server.write_all(line.as_bytes()).is_err() || to_server.flush().is_err() {
+                    break;
+                }
+            }
+            Relay::Refuse(reason) => {
+                let body = refusal_response(&msg, &reason).to_string();
+                if let Ok(mut o) = out.lock() {
+                    let _ = o.write_all(body.as_bytes());
+                    let _ = o.write_all(b"\n");
+                    let _ = o.flush();
+                }
+            }
+        }
+    }
+
+    drop(to_server);
+    let _ = child.wait();
+    let _ = pump.join();
+    0
 }
