@@ -180,6 +180,33 @@ export function grantRevoke(
   return invoke<boolean>("grant_revoke", { agent, grantId, revokedBy });
 }
 
+// ---- custody vault (shared kit surface) ----------------------------
+//
+// The vault is a SHARED kit surface (config / custody / auth / ceremony), not
+// a quorum domain, so it is not part of the BridgeContract — there is no sim
+// analogue of an OS keyring and faking one would be worse than none.
+
+export interface CustodyStatusDto {
+  initialized: boolean;
+  unlocked: boolean;
+  autolockMins: number;
+  keyringStatus: string;
+}
+
+export function custodyStatus(): Promise<CustodyStatusDto> {
+  return invoke<CustodyStatusDto>("custody_status");
+}
+/** Create the vault. The passphrase is zeroized in Rust after use. */
+export function custodyInit(passphrase: string): Promise<void> {
+  return invoke<void>("custody_init", { passphrase });
+}
+export function custodyUnlock(passphrase: string): Promise<void> {
+  return invoke<void>("custody_unlock", { passphrase });
+}
+export function custodyLock(): Promise<void> {
+  return invoke<void>("custody_lock");
+}
+
 // ---- wallet setup (QRM-S6) -----------------------------------------
 
 export interface WalletStatusDto {

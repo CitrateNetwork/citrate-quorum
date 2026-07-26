@@ -311,7 +311,16 @@ class Smoke:
                 self.fatal(f"`{tool}` is required and not on PATH")
 
         print(f"citrate-quorum packaged smoke — {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}")
-        print(f"{DIM}binary {self.binary}  ·  clean install at {self.app_data}{OFF}\n")
+        print(f"{DIM}binary {self.binary}  ·  clean install at {self.app_data}{OFF}")
+        # HONEST LIMIT: "clean install" means the app-data dir only. The custody
+        # vault also keeps `custody-master-key` and `custody-generation` in the
+        # OS keyring, and those SURVIVE deleting app-data — a second run then
+        # meets a fresh envelope sealed against a stale master key and reports
+        # "custody envelope corrupt or tampered". Nothing below touches custody,
+        # so it does not affect these checks, but a custody test must clear the
+        # keyring too. This script does NOT do that: silently deleting a
+        # developer's keyring entries is not a smoke test's business.
+        print(f"{DIM}  (app-data only — the OS keyring is not reset){OFF}\n")
 
         self.setup()
         self.start_app()
