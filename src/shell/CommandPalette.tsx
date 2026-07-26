@@ -10,6 +10,8 @@ interface Entry { kind: string; label: string; color: string; go: string; danger
 export function CommandPalette({ open, onClose, onGo }: { open: boolean; onClose: () => void; onGo: (id: string) => void }) {
   const [q, setQ] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  // Deliberate: the palette must open empty, not showing the previous query.
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- see above
   useEffect(() => { if (open) { setQ(""); setTimeout(() => inputRef.current?.focus(), 0); } }, [open]);
 
   const entries = useMemo<Entry[]>(() => [

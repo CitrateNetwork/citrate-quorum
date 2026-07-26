@@ -5,13 +5,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { bridge } from "../bridge";
 import { DomainErrorPlate, useDomain } from "../components/DomainState";
-import type { CalAccount, CalEvent } from "../bridge";
+import type { CalEvent } from "../bridge";
 
 const CLS_COLOR: Record<string, string> = { Public: "var(--z-silver)", Proprietary: "var(--info)", CUI: "var(--warn)", ITAR: "var(--danger)" };
 const DOWS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 export function Calendar() {
-  const [accounts, setAccounts] = useState<CalAccount[]>([]);
   const [events, setEvents] = useState<CalEvent[]>([]);
   useEffect(() => { bridge.calendar.events().then(setEvents).catch(() => {}); }, []);
 
@@ -30,9 +29,8 @@ export function Calendar() {
   // A read that cannot succeed must say so and offer a retry, not sit in a
   // loading state forever.
   const primary = useDomain(() => bridge.calendar.accounts(), "calendar.accounts()");
-  useEffect(() => {
-    if (primary.state.status === "ready") setAccounts(primary.state.data);
-  }, [primary.state]);
+  // Derived, not mirrored (see Agents.tsx).
+  const accounts = primary.state.status === "ready" ? primary.state.data : [];
   if (primary.state.status === "error") {
     return (
       <div style={{ padding: 18 }}>

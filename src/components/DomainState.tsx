@@ -48,6 +48,10 @@ export function useDomain<T>(load: () => Promise<T>, source: string): DomainRead
 
   useEffect(() => {
     let live = true;
+    // Deliberate: `attempt` changing means the operator pressed Retry, and the
+    // plate must return to "loading" before the new read resolves. There is no
+    // derived form of this — the reset IS the effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- see above
     setState({ status: "loading" });
     // Wrapping in Promise.resolve().then keeps a synchronous throw inside the
     // chain instead of blowing up the effect.
