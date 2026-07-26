@@ -35,7 +35,47 @@ spec.loader.exec_module(smoke)
 
 CX, CY = 226, 56
 A = lambda x, y: (CX + x, CY + y)
-REPO = str(Path.cwd())
+
+# The agenda is generated from `.agentile/sprints/active/*/SCOPE.md`, so
+# pointing this at the repo made the run depend on whether a sprint happened to
+# be active. Closing QRM-S5 emptied `active/` and every assertion below failed —
+# correctly, but for a reason that had nothing to do with the product.
+#
+# A fixture workspace makes it deterministic. This is a real directory with a
+# real SCOPE.md parsed by the real generator; only the INPUT is fixed, so it
+# stays a genuine end-to-end read. Seven work packages, because the detail-view
+# coordinates below are measured against an agenda of that height.
+FIXTURE = Path("/tmp/quorum-verify-workspace")
+SCOPE = """---
+created: 2026-07-26
+branch: verify
+author: verification fixture
+status: active
+sprint: VERIFY
+---
+
+# Sprint VERIFY
+
+| WP | What | Acceptance |
+|----|------|-----------|
+| **S9.1** | first work package | holds |
+| **S9.2** | second work package | holds |
+| **S9.3** | third work package | holds |
+| **S9.4** | fourth work package | holds |
+| **S9.5** | fifth work package | holds |
+| **S9.6** | sixth work package | holds |
+| **S9.7** | seventh work package | holds |
+"""
+
+
+def build_fixture() -> str:
+    d = FIXTURE / ".agentile/sprints/active/sprint-verify"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "SCOPE.md").write_text(SCOPE)
+    return str(FIXTURE)
+
+
+REPO = build_fixture()
 APP = Path.home() / ".local/share/ai.citrate.quorum"
 
 def rec():
@@ -83,16 +123,16 @@ try:
     s.click(*A(78, 348), settle=3)
     r = rec()
     check("a meeting exists on disk", r is not None)
-    check("agenda came from real sprint files", r and len(r["agenda"]) == 7,
-          f"{len(r['agenda']) if r else 0} items")
+    check("agenda generated from the fixture workspace's sprint file",
+          r and len(r["agenda"]) == 7, f"{len(r['agenda']) if r else 0} items")
     check("agenda is not frozen yet", r and r["agenda_hash"] is None)
 
     s.click(*A(200, 110), settle=3)   # open the row
 
     print("\nattest two humans (quorum is 2)")
     for who in ["R. Ortiz", "M. Okonkwo"]:
-        s.click(*A(797, 281)); s.type_text(who)
-        s.click(*A(797, 397), settle=2)          # Attest present
+        s.click(*A(797, 294)); s.type_text(who)
+        s.click(*A(797, 410), settle=2)          # Attest present
     r = rec()
     check("both attested attendees persisted", r and len(r["attendance"]) == 2,
           f"{len(r['attendance']) if r else 0}")
@@ -100,7 +140,7 @@ try:
           r and all(a["agent"] is None and a["attested"] for a in r["attendance"]))
 
     print("\nopen — the agenda freezes")
-    s.click(*A(518, 595), settle=3)
+    s.click(*A(518, 520), settle=3)
     r = rec()
     check("state advanced to in-progress", r and r["state"] == "in-progress", r["state"] if r else "")
     check("agenda hash was committed", r and isinstance(r["agenda_hash"], str) and len(r["agenda_hash"]) > 10,
@@ -108,7 +148,7 @@ try:
     frozen = r["agenda_hash"] if r else None
 
     print("\nclose — minutes composed from the governed record")
-    s.click(*A(518, 595), settle=3)          # same banner slot: Close
+    s.click(*A(518, 520), settle=3)          # same banner slot: Close
     r = rec()
     check("state advanced to awaiting ratification", r and r["state"] == "awaiting", r["state"] if r else "")
     check("minutes were composed", r and len(r["minutes"]) >= 1,
@@ -117,7 +157,7 @@ try:
     s.shot("lc_closed", smoke.CONTENT_CROP)
 
     print("\nratify — the ceremony")
-    s.click(*A(540, 641), settle=3)          # Ratify — sign
+    s.click(*A(550, 565), settle=3)          # Ratify — sign
     s.shot("lc_ceremony", None)              # FULL window: the modal is chrome-level
     before_chain = chain_len()
     s.click(870, 650, settle=6)              # Sign  (measured on the full window)

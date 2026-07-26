@@ -26,7 +26,9 @@
 use citrate_core_kit::{ceremony, config, custody, oidc};
 use tauri::Manager;
 
+mod addresses;
 mod agent_bridge;
+mod anchor;
 mod backend;
 mod store;
 
@@ -185,6 +187,7 @@ pub fn run() {
             backend::meeting_close,
             backend::meeting_content_hash,
             backend::meeting_ratify,
+            backend::meeting_anchor,
             backend::journal_list,
             backend::journal_brief,
             backend::ledger_records,

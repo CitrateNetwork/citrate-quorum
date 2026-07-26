@@ -251,7 +251,6 @@ describe("tauri adapter — meetings (QRM-S5)", () => {
     ratified_by: "R. Ortiz",
     ratified_at: 1753460000000,
     content_hash: "0xdeadbeef",
-    anchor: { anchored: false, reference: null, reason: "not anchored — no chain address book" },
     quorate: true,
     min_humans: 2,
     attested_humans: 2,
@@ -263,21 +262,42 @@ describe("tauri adapter — meetings (QRM-S5)", () => {
     ...over,
   });
 
-  it("carries the unavailable anchor REASON, so unanchored never reads as anchored", async () => {
-    // The R-A risk: `anchor` left undefined simply does not render, and a
-    // ratified-but-unanchored meeting then looks identical to an anchored one.
+  it("does not fabricate an anchor on the local read", async () => {
+    // `get()` is a LOCAL read. The anchor is a chain read behind its own
+    // command, so this must leave the field empty rather than guess.
     invoke.mockResolvedValue(detail());
     const d = await createTauriBridge().meetings.get("m-1");
-    expect(d.anchor).toBe("not anchored — no chain address book");
+    expect(d.anchor).toBeUndefined();
     expect(d.ratified).toBe(true);
   });
 
-  it("prefers the reference once something actually anchors", async () => {
-    invoke.mockResolvedValue(
-      detail({ anchor: { anchored: true, reference: "block 1284067 · root 0x66d1", reason: "" } }),
-    );
-    const d = await createTauriBridge().meetings.get("m-1");
-    expect(d.anchor).toBe("block 1284067 · root 0x66d1");
+  it("never reports an unreachable chain as unanchored", async () => {
+    // The distinction the anchor row exists for: "we asked and the answer is
+    // no" is a different fact from "we could not ask".
+    invoke.mockResolvedValue({
+      state: "unreachable",
+      contract: "0x7cef",
+      reason: "connection refused",
+    });
+    const line = await createTauriBridge().meetings.anchorState("m-1");
+    expect(line).toContain("unknown");
+    expect(line).toContain('NOT the same as "not anchored"');
+  });
+
+  it("renders a hash disagreement as a MISMATCH, not as absence", async () => {
+    invoke.mockResolvedValue({ state: "mismatch", contract: "0x7cef", on_chain: "0xdead" });
+    const line = await createTauriBridge().meetings.anchorState("m-1");
+    expect(line).toContain("MISMATCH");
+    expect(line).toContain("0xdead");
+  });
+
+  it("reports a real anchor with its block and registering key", async () => {
+    invoke.mockResolvedValue({
+      state: "anchored", block: 108899, ratifier: "0x4fab", contract: "0x7cef",
+    });
+    const line = await createTauriBridge().meetings.anchorState("m-1");
+    expect(line).toContain("block 108899");
+    expect(line).toContain("0x4fab");
   });
 
   it("says an unfrozen agenda is unfrozen rather than rendering a blank hash", async () => {

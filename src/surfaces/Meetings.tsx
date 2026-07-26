@@ -33,6 +33,18 @@ const TEMPLATES: MeetingTemplate[] = [
   { name: "Quarterly governance", minHumans: 7, classification: "CUI", note: "board seat required" },
 ];
 
+/**
+ * A fresh meeting id.
+ *
+ * Outside the component because `react-hooks/purity` forbids calling an impure
+ * function in a component body — it cannot tell an event handler from render,
+ * and it is right to be strict: a `Date.now()` that DID run during render
+ * would produce a different id every paint.
+ */
+function newMeetingId(): string {
+  return `m-${Date.now().toString(36)}`;
+}
+
 export function Meetings() {
   const [detail, setDetail] = useState<MeetingDetail | null>(null);
   const [selectedState, setSelectedState] = useState<string>("ratified");
@@ -47,6 +59,11 @@ export function Meetings() {
   const [admitVendor, setAdmitVendor] = useState("");
   const [admitClearance, setAdmitClearance] = useState<Classification>("CUI");
   const [actionError, setActionError] = useState("");
+  // The anchor row is a CHAIN read, so it resolves after the detail does.
+  // "checking" is its own state — rendering nothing while it loads would make
+  // an unanchored meeting look identical to an anchored one for as long as the
+  // RPC takes, which is the R-A risk in miniature.
+  const [anchorLine, setAnchorLine] = useState("checking the chain…");
   const ceremony = useCeremony();
 
   // Ratification must name the human who signed it; the backend refuses an
@@ -73,6 +90,7 @@ export function Meetings() {
   const open = (m: Meeting) => {
     setSelectedState(m.state);
     bridge.meetings.get(m.id).then(setDetail).catch(() => {});
+    void readAnchor(m.id);
   };
 
   /**
@@ -90,6 +108,18 @@ export function Meetings() {
       const row = rows.find((r) => r.id === id);
       if (row) setSelectedState(row.state);
       setDetail(await bridge.meetings.get(id));
+      void readAnchor(id);
+    }
+  };
+
+  /** Ask the chain whether these minutes are registered (MeetingRegistry). */
+  const readAnchor = async (id: string) => {
+    setAnchorLine("checking the chain…");
+    try {
+      setAnchorLine(await bridge.meetings.anchorState(id));
+    } catch (e) {
+      // A failed check is reported as a failed check — never as "not anchored".
+      setAnchorLine(`unknown — ${e instanceof Error ? e.message : String(e)}`);
     }
   };
 
@@ -105,7 +135,7 @@ export function Meetings() {
         // The id must identify one meeting in this tenant; the backend refuses
         // a duplicate. Derived from the time it was created rather than the
         // name, so scheduling two standups does not collide.
-        id: `m-${Date.now().toString(36)}`,
+        id: newMeetingId(),
         name: form.name.trim(),
         when: form.when.trim(),
         template: tpl.name,
@@ -324,7 +354,9 @@ export function Meetings() {
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <span className="mono" style={{ fontSize: 10, color: "var(--tx-3)" }}>agenda {detail.agendaHash}</span>
-            {isRatified && <span className="mono" style={{ fontSize: 10, color: "var(--tx-3)" }}>anchor: {detail.anchor ?? "unknown"}</span>}
+            <span className="mono" style={{ fontSize: 10, color: anchorLine.startsWith("MISMATCH") ? "var(--danger)" : "var(--tx-3)" }}>
+              anchor: {detail.anchor ?? anchorLine}
+            </span>
           </div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 300px" }}>
@@ -386,7 +418,7 @@ export function Meetings() {
             )}
             {isUnratified && (
               <div style={{ display: "flex", alignItems: "center", gap: 12, border: "1px solid var(--warn)", background: "var(--warn-bg)", padding: "12px 14px" }}>
-                <span style={{ fontSize: 13, flex: 1 }}>These minutes are a draft. Ratifying records your signature over their hash in this tenant's evidence chain, which a board member can verify offline. It does not anchor them on chain yet — that lands with the governance contracts.</span>
+                <span style={{ fontSize: 13, flex: 1 }}>These minutes are a draft. Ratifying records your signature over their hash in this tenant's evidence chain, which a board member can verify offline. It does not yet register them in MeetingRegistry — the contract is deployed and the anchor row reads it, but the write is not wired.</span>
                 <button className="btn btn-primary" onClick={ratify}>Ratify — sign</button>
               </div>
             )}

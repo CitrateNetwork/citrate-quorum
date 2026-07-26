@@ -149,6 +149,11 @@ export interface MeetingsDomain {
    * (MR-4). The caller must surface that refusal, not swallow it.
    */
   admit(input: MeetingAdmit): Promise<void>;
+  /**
+   * Whether the chain holds this meeting's minutes hash. A read — it neither
+   * signs nor sends. Returns a human-readable line for the anchor row.
+   */
+  anchorState(id: string): Promise<string>;
   /** Open the meeting: freezes the agenda and returns its hash. */
   open(id: string): Promise<string>;
   /** Close it, composing the minutes. Returns the resulting state. */

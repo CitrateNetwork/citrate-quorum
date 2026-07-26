@@ -193,12 +193,6 @@ export interface MeetingRowDto {
   state: string;
 }
 
-export interface AnchorDto {
-  anchored: boolean;
-  reference: string | null;
-  reason: string;
-}
-
 export interface MeetingDetailDto {
   id: string;
   name: string;
@@ -213,7 +207,6 @@ export interface MeetingDetailDto {
   ratified_by: string | null;
   ratified_at: number | null;
   content_hash: string;
-  anchor: AnchorDto;
   quorate: boolean;
   min_humans: number;
   attested_humans: number;
@@ -227,6 +220,25 @@ export interface MeetingDetailDto {
   minutes: string[];
   decisions: { id: string; text: string; link: boolean }[];
   dissent: { who: string; text: string }[];
+}
+
+/**
+ * The on-chain anchor state of a meeting's minutes.
+ *
+ * Four distinct answers, deliberately not collapsed: a chain that could not be
+ * reached is NOT the same as a meeting that is not anchored, and a record whose
+ * hash disagrees with ours is an integrity alarm, not an absence.
+ */
+export type AnchorState =
+  | { state: "anchored"; block: number; ratifier: string; contract: string }
+  | { state: "not-anchored"; contract: string; reason: string }
+  | { state: "mismatch"; contract: string; on_chain: string }
+  | { state: "unavailable"; reason: string }
+  | { state: "unreachable"; contract: string; reason: string };
+
+/** MeetingRegistry.verifyMinutes/getMinutes via eth_call. */
+export function meetingAnchor(id: string): Promise<AnchorState> {
+  return invoke<AnchorState>("meeting_anchor", { id });
 }
 
 export function meetingsList(): Promise<MeetingRowDto[]> {

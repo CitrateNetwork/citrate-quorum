@@ -218,6 +218,7 @@ export function createSimBridge(): BridgeContract {
       // agenda hash rather than inventing a content hash that looks real. The
       // honest tauri path computes a true BLAKE3 over the minutes.
       contentHash: () => delay(60, `sim — no content hash (fixture ${D.MEETING_DETAIL.agendaHash})`),
+      anchorState: () => delay(80, "sim — no chain is consulted in this mode"),
       ratify: () => delay(120, undefined as void),
       // The sim's register is a frozen fixture. Rather than pretend to
       // schedule into it, these say plainly that only the real backend keeps

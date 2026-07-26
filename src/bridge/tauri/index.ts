@@ -56,6 +56,7 @@ import {
   journalList,
   ledgerRecords,
   meetingAdmit,
+  meetingAnchor,
   meetingClose,
   meetingContentHash,
   meetingGet,
@@ -271,13 +272,10 @@ export function createTauriBridge(): BridgeContract {
           ratified: d.ratified,
           ratifiedBy: d.ratified_by ?? undefined,
           ratifiedAt: d.ratified_at ? new Date(d.ratified_at).toISOString() : undefined,
-          // The contract types `anchor` as a string, so the honest unavailable
-          // REASON goes here rather than `undefined`. Left undefined it would
-          // simply not render, and ratified-but-unanchored would look exactly
-          // like anchored — the sprint's R-A risk.
-          anchor: d.anchor.anchored
-            ? (d.anchor.reference ?? d.anchor.reason)
-            : d.anchor.reason,
+          // The anchor is read separately (`anchorState`) because it makes an
+          // eth_call. `get()` stays a local read, and the surface fills this
+          // row in once the chain answers.
+          anchor: undefined,
           agenda: d.agenda,
           attendance: d.attendance.map((a) => ({
             name: a.name,
@@ -291,6 +289,26 @@ export function createTauriBridge(): BridgeContract {
         };
       },
       contentHash: (id: string) => meetingContentHash(id),
+      // LIVE (QRM-S6): MeetingRegistry.verifyMinutes via eth_call, the contract
+      // resolved by name from the canonical address book at runtime (rule 8).
+      anchorState: async (id: string): Promise<string> => {
+        const a = await meetingAnchor(id);
+        switch (a.state) {
+          case "anchored":
+            return `anchored — block ${a.block}, registered by ${a.ratifier} in MeetingRegistry ${a.contract}`;
+          case "not-anchored":
+            // The chain WAS asked. That is a different fact from not asking.
+            return `not anchored — ${a.reason} (checked MeetingRegistry ${a.contract})`;
+          case "mismatch":
+            // The loudest state: the local minutes and the registered
+            // commitment disagree. Never soften this into "not anchored".
+            return `MISMATCH — the chain holds a different minutes hash for this meeting (${a.on_chain}). The local record and the on-chain commitment disagree.`;
+          case "unavailable":
+            return `not anchored — ${a.reason}`;
+          case "unreachable":
+            return `unknown — ${a.reason}. This is NOT the same as "not anchored": the chain could not be asked.`;
+        }
+      },
       schedule: (input) =>
         meetingSchedule({
           id: input.id,
