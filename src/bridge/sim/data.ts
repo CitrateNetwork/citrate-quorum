@@ -28,6 +28,7 @@ import type {
   Repo,
   Room,
   RoomEvent,
+  RoomsStatus,
   RosterMember,
   Session,
   Simulation,
@@ -71,35 +72,30 @@ export const GRANTS: Record<string, Grant[]> = {
 };
 
 export const ROOMS: Room[] = [
-  { id: "r-std4", name: "Weekly Standup — Line-4", classification: "Proprietary", live: true, members: 6, started: "09:00" },
-  { id: "r-ccb", name: "Change-Control Board", classification: "CUI", live: false, members: 9, started: null },
-  { id: "r-inc", name: "Incident 2211 review", classification: "Proprietary", live: false, members: 4, started: null },
+  { id: "r-std4", name: "Weekly Standup — Line-4", classification: "Proprietary", live: true, members: 7, started: "09:00" },
+  { id: "r-ccb", name: "Change Control Board", classification: "CUI", live: false, members: 5, started: null },
 ];
-
-export const ROOM_TIMELINE: RoomEvent[] = [
-  { t: 400, kind: "system", text: "Room opened · agenda frozen", meta: "agenda b3:aa17…90c2 · classification PROPRIETARY" },
-  { t: 1600, kind: "speech", who: "Rachel Ortiz", human: true, text: "Morning. Four items on the agenda — reports, the hermes calendar ask, the coverage question, and the PRT-004 amendment vote. Claude, go." },
-  { t: 3400, kind: "text", who: "claude-code", text: "Since Tuesday: closed WP-118 (fixture refactor), opened PR #412 against line4-controls. Two blockers cleared after codex re-ran the flake suite.", cites: ["line4-controls@fix/fixtures:src/rig.ts#L88-L141", "journal 2026-07-21 · claude-code"] },
-  { t: 5200, kind: "tool", who: "codex", tool: "repo.diff", verdict: "allow", dur: "340ms", params: "b3:41ce…0a77", result: "+214 −96 across 7 files" },
-  { t: 6800, kind: "text", who: "devin", text: "Migration runner is staged for the PLC schema change. I need nothing this week; still under probation review until Friday.", cites: ["WP-121 · sprint QRM-S2D"] },
-  { t: 8600, kind: "tool", who: "hermes", tool: "calendar.write", verdict: "require-approval", dur: "—", params: "b3:90df…22e1", result: "blocked — schedule.write not in any live grant", escalate: true },
-  { t: 10800, kind: "contradiction", a: "claude-code", b: "codex", fact: "Line-4 controls test coverage", va: "84.2% (ci run #2211, attested)", vb: "78.9% (ci run #2208, attested)", note: "Runs differ; #2211 includes the fixture refactor. Both sources on record." },
-  { t: 13200, kind: "system", text: "Vote opened — Adopt PRT-004 amendment A2 (raise repo.write budget threshold to 150 SALT/wk)", meta: "threshold 60% by weight · closes in 5m" },
-  { t: 14600, kind: "vote-cast", who: "Rachel Ortiz", human: true, choice: "For", weight: 40 },
-  { t: 15800, kind: "vote-cast", who: "claude-code", choice: "For", weight: 15, proof: "Rachel Ortiz ▸ claude-code · allowance 4/5" },
-  { t: 17000, kind: "vote-cast", who: "hermes", choice: "Abstain", weight: 10, proof: "M. Okonkwo ▸ hermes · allowance 2/3" },
-  { t: 18400, kind: "vote-cast", who: "M. Okonkwo", human: true, choice: "For", weight: 25 },
-  { t: 20200, kind: "vote-close", text: "Vote passed — 80% for, 10% abstain", meta: "recorded → decision D-88412 · minutes updated" },
-  { t: 22600, kind: "system", text: "Minutes draft updated · 4 items · 1 decision · 1 escalation open", meta: "draft b3:c202…7714" },
-];
-
+export const ROOMS_STATUS: RoomsStatus = {
+  connected: true,
+  relayUrl: "sim — no relay is contacted in this mode",
+  relayDomain: "sim",
+  address: "0x0000000000000000000000000000000000000000",
+  seats: 4,
+  rooms: 2,
+  note: "sim — the packaged app holds real MLS sessions against the citrate-comms relay.",
+};
 export const ROSTER: RosterMember[] = [
-  { id: "rachel", name: "Rachel Ortiz", human: true, role: "CAIO", clearance: "CUI", hic: null, speaking: false },
-  { id: "okonkwo", name: "M. Okonkwo", human: true, role: "Eng Manager", clearance: "CUI", hic: null, speaking: false },
-  { id: "claude-code", name: "claude-code", vendor: "anthropic", sbt: "#41", hic: 2 },
-  { id: "codex", name: "codex", vendor: "openai", sbt: "#38", hic: 2 },
-  { id: "devin", name: "devin", vendor: "cognition", sbt: "#52", hic: 1 },
-  { id: "hermes", name: "hermes", vendor: "nous", sbt: "#47", hic: 2 },
+  { id: "R. Ortiz", name: "R. Ortiz", human: true, address: "0xsim-human-1", mlsKey: "a11ce0…" },
+  { id: "M. Okonkwo", name: "M. Okonkwo", human: true, address: "0xsim-human-2", mlsKey: "b0b2f1…" },
+  { id: "claude-code", name: "claude-code", human: false, address: "0xsim-agent-1", mlsKey: "c1a4de…" },
+  { id: "codex", name: "codex", human: false, address: "0xsim-agent-2", mlsKey: "c0de00…" },
+];
+/** A scripted transcript in the shape the live one uses: text and system only. */
+export const ROOM_TIMELINE: RoomEvent[] = [
+  { n: 0, room: "r-std4", kind: "system", who: "R. Ortiz", human: true, text: "room opened · 4 member(s)", t: "09:00:00" },
+  { n: 1, room: "r-std4", kind: "text", who: "R. Ortiz", human: true, text: "Standup — agent reports first.", t: "09:00:12" },
+  { n: 2, room: "r-std4", kind: "text", who: "claude-code", human: false, text: "WP-118 closed; fixture flake traced to shared rig state.", t: "09:00:31" },
+  { n: 3, room: "r-std4", kind: "text", who: "codex", human: false, text: "CI green on line4-controls after the rerun.", t: "09:00:48" },
 ];
 
 export const MEETINGS: Meeting[] = [

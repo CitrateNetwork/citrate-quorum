@@ -31,6 +31,7 @@ mod agent_bridge;
 mod anchor;
 mod backend;
 mod chain;
+mod rooms;
 mod store;
 mod wallet_setup;
 
@@ -90,6 +91,10 @@ pub fn run() {
             // this one approval surface; the gated signer is reachable ONLY from
             // its `approve` path and is unreachable from any quorum code.
             app.manage(ceremony::build_ceremony_state());
+            // The rooms subsystem. Empty until the operator connects: this app
+            // dials the relay when asked to, never at startup, so an installation
+            // that never opens a room never touches the network.
+            app.manage(rooms::RoomsState::new());
             // The quorum governance backend: per-tenant audit HashChains, live
             // capability grants + vote allowances, and the policy→audit pipeline.
             // Serves the Ledger surface and the governed-action loop from real
@@ -225,6 +230,17 @@ pub fn run() {
             chain::node_activity,
             chain::tenancy_tree,
             chain::wallet_summary,
+            // rooms (QRM-S3) — a real MLS group on the citrate-comms relay. None
+            // of these signs with the vault's wallet; a room identity is a relay
+            // identity, sealed in custody under its own slot namespace.
+            rooms::rooms_status,
+            rooms::rooms_connect,
+            rooms::rooms_open,
+            rooms::rooms_list,
+            rooms::rooms_roster,
+            rooms::rooms_say,
+            rooms::rooms_events,
+            rooms::rooms_leave,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -236,7 +252,7 @@ mod tests {
     /// Every quorum-authored source file. The scan below claimed to cover "the
     /// backend source" while only reading `lib.rs`; it now actually does, which
     /// matters most for `agent_bridge.rs` — the surface agents talk to.
-    const QUORUM_SOURCES: [(&str, &str); 5] = [
+    const QUORUM_SOURCES: [(&str, &str); 6] = [
         ("lib.rs", include_str!("lib.rs")),
         ("backend.rs", include_str!("backend.rs")),
         ("store.rs", include_str!("store.rs")),
@@ -244,6 +260,9 @@ mod tests {
         // chain.rs talks to the RPC. It reads only — this scan is what keeps
         // "reads only" true as it grows.
         ("chain.rs", include_str!("chain.rs")),
+        // rooms.rs holds relay identities and drives MLS. It must never reach the
+        // gated signer either — see its own `rooms_never_reaches_the_gated_signer`.
+        ("rooms.rs", include_str!("rooms.rs")),
     ];
 
     /// The single-signing-path guard, quorum side (WP-S1.2 acceptance: the

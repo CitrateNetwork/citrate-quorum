@@ -36,6 +36,8 @@ import type {
   Repo,
   Room,
   RoomEvent,
+  RoomOpen,
+  RoomsStatus,
   RosterMember,
   Session,
   Simulation,
@@ -144,13 +146,30 @@ export interface AgentsDomain {
   revoke(agent: string, grantId: string, revokedBy: string): Promise<boolean>;
 }
 
+/**
+ * Rooms — a real MLS group on the citrate-comms relay (QRM-S3).
+ *
+ * **Contract change from the S2D.3 freeze.** The frozen shape was
+ * `list/roster/events` with `events` as a push stream. It is now a polled
+ * `events(since)` for the same reason the ledger ribbon polls — no event
+ * plumbing, and the relay is not a high-rate source — and it gained the
+ * operations a room actually needs: connect, open, say, leave.
+ */
 export interface RoomsDomain {
+  /** What this app's relay connection is doing. Never dials by itself. */
+  status(): Promise<RoomsStatus>;
+  /** Connect the operator's seat. Idempotent. */
+  connect(operator: string): Promise<RoomsStatus>;
   list(): Promise<Room[]>;
-  /** The members of a room (humans + agents, cryptographic peers). */
+  /** Open a room, admitting an app-held seat for each named agent. */
+  open(input: RoomOpen, operator: string): Promise<Room>;
+  /** The members of a room — humans and agents, cryptographic peers. */
   roster(roomId: string): Promise<RosterMember[]>;
-  /** The live transcript stream for a room. */
-  events: Subscribe<RoomEvent>;
-  // TODO(wire): open/join/post/invite; stt.start() consent + local transcription.
+  /** Send, as `principal`'s seat. */
+  say(roomId: string, principal: string, text: string): Promise<void>;
+  /** Drain the relay and return the transcript from cursor `since`. */
+  events(since: number): Promise<RoomEvent[]>;
+  leave(roomId: string): Promise<void>;
 }
 
 /** The evidence chain's own state — head, root, counts, integrity. */

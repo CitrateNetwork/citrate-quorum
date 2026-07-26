@@ -68,7 +68,22 @@ run "frontmatter" "no markdown files" \
 echo
 echo "rust"
 HAS_CARGO='[ -f Cargo.toml ] && command -v cargo'
-run "cargo fmt"    "no Cargo.toml yet (WP-S1.3)" "$HAS_CARGO" cargo fmt --all -- --check
+# `cargo fmt --all` walks PATH DEPENDENCIES too, not just this workspace's members.
+# Since QRM-S3 that includes citrate-comms, whose crates have their own rustfmt
+# settings — so `--all` demanded we reformat another repo to keep this gate green.
+# `cargo metadata --no-deps` lists exactly this workspace's own packages, which is
+# what "our formatting" means.
+# `cargo fmt --all` walks PATH DEPENDENCIES too, not just this workspace's members.
+# Since QRM-S3 that includes citrate-comms, whose crates have their own rustfmt
+# settings — so `--all` demanded reformatting another repo to keep this gate green.
+# `cargo metadata --no-deps` lists exactly this workspace's own packages, which is
+# what "our formatting" means.
+if command -v uv >/dev/null 2>&1; then FMTPY=(uv run python3); else FMTPY=(python3); fi
+run "cargo fmt"    "no Cargo.toml yet (WP-S1.3)" "$HAS_CARGO" \
+    bash -c 'cargo metadata --no-deps --format-version 1 \
+      | '"${FMTPY[*]}"' -c "import json,sys; print(chr(10).join(p[chr(34)+chr(109)+chr(97)+chr(110)+chr(105)+chr(102)+chr(101)+chr(115)+chr(116)+chr(95)+chr(112)+chr(97)+chr(116)+chr(104)+chr(34)] for p in json.load(sys.stdin)[chr(34)+chr(112)+chr(97)+chr(99)+chr(107)+chr(97)+chr(103)+chr(101)+chr(115)+chr(34)]))" \
+      | while IFS= read -r m; do cargo fmt --check --manifest-path "$m" || exit 1; done'
+
 run "cargo clippy" "no Cargo.toml yet (WP-S1.3)" "$HAS_CARGO" cargo clippy --workspace --all-targets --locked -- -D warnings
 run "cargo test"   "no Cargo.toml yet (WP-S1.3)" "$HAS_CARGO" cargo test --workspace --locked
 run "cargo audit"  "no Cargo.toml yet, or cargo-audit not installed" \

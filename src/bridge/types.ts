@@ -151,58 +151,66 @@ export interface GrantTerms {
 }
 
 // ---- rooms ----------------------------------------------------------
+/**
+ * A room is an MLS group on the citrate-comms relay. The relay carries
+ * ciphertext and routing metadata; it holds no group secret and can decrypt
+ * nothing — proved, not asserted, by `tests/server_blindness.rs`.
+ */
 export interface Room {
   id: string;
   name: string;
-  classification: Classification;
+  classification: Classification | string;
   live: boolean;
   members: number;
   started: string | null;
 }
-/** RoomEvent kinds drive distinct transcript renderings (design brief §4.2). */
-export type RoomEventKind =
-  | "speech"
-  | "text"
-  | "tool"
-  | "system"
-  | "contradiction"
-  | "vote"
-  | "vote-cast"
-  | "vote-close";
-export interface RoomEvent {
-  t: number;
-  kind: RoomEventKind;
-  who?: string;
-  human?: boolean;
-  text?: string;
-  meta?: string;
-  cites?: string[];
-  tool?: string;
-  verdict?: "allow" | "require-approval" | "deny";
-  dur?: string;
-  params?: string;
-  result?: string;
-  escalate?: boolean;
-  a?: string;
-  b?: string;
-  fact?: string;
-  va?: string;
-  vb?: string;
-  note?: string;
-  choice?: "For" | "Against" | "Abstain";
-  weight?: number;
-  proof?: string;
+/** What this app's relay connection is doing. */
+export interface RoomsStatus {
+  connected: boolean;
+  relayUrl: string;
+  relayDomain: string;
+  /** The operator seat's relay address, once connected. */
+  address: string | null;
+  seats: number;
+  rooms: number;
+  /** Rule 11 + Rule 1: what this subsystem is, and what it does not keep. */
+  note: string;
 }
+/**
+ * One decrypted transcript line.
+ *
+ * `kind` is `text` or `system` — there is deliberately no `speech`: this app has
+ * no audio path, so nothing here can have been spoken.
+ */
+export interface RoomEvent {
+  /** Monotonic cursor within this session's transcript. */
+  n: number;
+  room: string;
+  kind: "text" | "system";
+  who: string;
+  human: boolean;
+  text: string;
+  t: string;
+}
+/**
+ * A seat in a room. `address` is a RELAY identity — not the chain identity that
+ * ratifies minutes, and the surface must not imply otherwise. An agent's seat key
+ * is held by this app on its behalf; the agent process holds nothing.
+ */
 export interface RosterMember {
   id: string;
   name: string;
-  human?: boolean;
-  role?: string;
-  clearance?: Classification;
-  vendor?: string;
-  sbt?: string;
-  hic?: number | null;
-  speaking?: boolean;
+  human: boolean;
+  address: string;
+  /** MLS signature public key, truncated: what actually distinguishes two seats. */
+  mlsKey: string;
+}
+/** What opening a room needs. */
+export interface RoomOpen {
+  name: string;
+  classification: Classification;
+  /** Agent ids to admit — each gets its own app-held seat. */
+  agents: string[];
 }
 
 // ---- meetings -------------------------------------------------------

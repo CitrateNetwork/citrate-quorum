@@ -38,7 +38,20 @@ quorum-audit = { path = "crates/quorum-audit" }
 quorum-policy = { path = "crates/quorum-policy" }
 quorum-meetings = { path = "crates/quorum-meetings" }
 
+# Rooms (QRM-S3): a real MLS session against the citrate-comms server-blind relay.
+# `comms-session` is the UI-free member session extracted upstream (citrate-comms
+# PR #42) precisely so a Tauri app can hold one; it links neither the relay server
+# (RocksDB + axum + keyring) nor a second UI toolkit — asserted there by
+# `client_links_no_server.rs`. LOCAL DEV: a path dep to the sibling checkout, same
+# as citrate-core-kit; PRODUCTION: a pinned SSH git dep once the deploy key exists.
+comms-session = { path = "../../citrate-comms/crates/comms-session" }
+comms-core = { path = "../../citrate-comms/crates/comms-core", default-features = false, features = ["mls"] }
+comms-proto = { path = "../../citrate-comms/crates/comms-proto" }
+
 tauri = { version = "2", features = [] }
+# The rooms subsystem is async I/O against a relay; Tauri's own async runtime is
+# tokio, so a command can await on it directly. `time` for the non-blocking drain.
+tokio = { version = "1", features = ["sync", "time", "rt"] }
 tauri-plugin-opener = "2"
 # The escalation notification path: an agent blocked at 2am must reach the
 # operator, not wait for someone to open the Dashboard. The notification is
@@ -58,6 +71,15 @@ sha3 = "0.10"
 rand = "0.8"
 zeroize = { version = "1", features = ["derive"] }
 hex = "0.4"
+
+[dev-dependencies]
+# The QRM-S3 exit gate (`tests/server_blindness.rs`) runs a REAL relay with a real
+# on-disk store, so the proof can walk what the relay actually kept. Dev-only: the
+# app itself links `comms-session`, which cannot link the server (asserted upstream
+# by `client_links_no_server.rs`).
+comms-relay = { path = "../../citrate-comms/crates/comms-relay" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tempfile = "3"
 
 [lints]
 workspace = true

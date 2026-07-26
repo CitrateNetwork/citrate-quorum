@@ -9,7 +9,6 @@
 import type { BridgeContract } from "../domains";
 import { Unavailable } from "../types";
 import type {
-  RoomEvent,
   Decision,
   GateDecision,
   GovernedAction,
@@ -88,30 +87,6 @@ function simGate(a: GovernedAction): GateDecision {
     reason: "within grant scope, budget, and ceiling",
     chainHead: head,
     ungoverned: false,
-  };
-}
-
-/** Replay a timestamped script once; `loop` re-runs it after the last event. */
-function timeline<E extends { t: number }>(script: E[], loop: boolean) {
-  return (onEvent: (e: E) => void): Unsubscribe => {
-    let stopped = false;
-    const timers: ReturnType<typeof setTimeout>[] = [];
-    const run = () =>
-      script.forEach((ev) =>
-        timers.push(setTimeout(() => !stopped && onEvent(ev), ev.t)),
-      );
-    run();
-    let interval: ReturnType<typeof setInterval> | null = null;
-    if (loop)
-      interval = setInterval(
-        () => !stopped && run(),
-        script[script.length - 1].t + 6000,
-      );
-    return () => {
-      stopped = true;
-      timers.forEach(clearTimeout);
-      if (interval) clearInterval(interval);
-    };
   };
 }
 
@@ -200,9 +175,17 @@ export function createSimBridge(): BridgeContract {
       revoke: () => delay(150, true),
     },
     rooms: {
+      status: () => delay(80, D.ROOMS_STATUS),
+      connect: () => delay(150, D.ROOMS_STATUS),
       list: () => delay(150, D.ROOMS),
+      // The sim has no relay and no MLS group. Opening a room that exists only
+      // in a fixture would teach an operator the wrong thing about what this
+      // product does, so it says so instead.
+      open: () => Promise.reject(new Unavailable("rooms.open (the sim has no relay)")),
       roster: () => delay(120, D.ROSTER),
-      events: timeline<RoomEvent>(D.ROOM_TIMELINE, false),
+      say: () => Promise.reject(new Unavailable("rooms.say (the sim has no relay)")),
+      events: (since: number) => delay(120, D.ROOM_TIMELINE.filter((e) => e.n >= since)),
+      leave: () => delay(80, undefined),
     },
     ledger: {
       query: () =>

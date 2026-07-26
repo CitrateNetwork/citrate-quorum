@@ -198,7 +198,10 @@ describe("tauri adapter — tenant scope + ledger", () => {
   });
 
   it("reports an unwired domain as unavailable rather than empty", async () => {
-    await expect(createTauriBridge().rooms.list()).rejects.toThrow(/rooms\.list/);
+    // `rooms` used to be the example here; it is live as of QRM-S3. Governance is
+    // the honest stand-in now — and when it lands, this must move again rather
+    // than be deleted: the property under test is that an unwired domain SAYS so.
+    await expect(createTauriBridge().governance.protocols()).rejects.toThrow(/governance\.protocols/);
   });
 
   it("REJECTS unwired async domains instead of throwing synchronously", async () => {
@@ -544,5 +547,90 @@ describe("tauri adapter — live chain reads (Phase 0)", () => {
       tenant: "bca",
     });
     expect(invoke).toHaveBeenCalledWith("ledger_state");
+  });
+});
+
+describe("tauri adapter — rooms (QRM-S3)", () => {
+  beforeEach(() => {
+    invoke.mockReset();
+  });
+
+  it("maps the relay status and keeps its honesty note", async () => {
+    invoke.mockResolvedValue({
+      connected: true,
+      relay_url: "wss://comms.citrate.ai",
+      relay_domain: "comms.citrate.ai",
+      address: "0xabc",
+      seats: 3,
+      rooms: 1,
+      note: "The relay carries ciphertext and routing metadata only",
+    });
+    const s = await createTauriBridge().rooms.status();
+    expect(s).toEqual({
+      connected: true,
+      relayUrl: "wss://comms.citrate.ai",
+      relayDomain: "comms.citrate.ai",
+      address: "0xabc",
+      seats: 3,
+      rooms: 1,
+      note: "The relay carries ciphertext and routing metadata only",
+    });
+    expect(invoke).toHaveBeenCalledWith("rooms_status");
+  });
+
+  it("carries a seat's MLS key through — it is what distinguishes two seats", async () => {
+    invoke.mockResolvedValue([
+      { id: "R. Ortiz", name: "R. Ortiz", human: true, address: "0x11", mls_key: "a11ce0…" },
+      { id: "claude-code", name: "claude-code", human: false, address: "0x22", mls_key: "c1a4de…" },
+    ]);
+    const r = await createTauriBridge().rooms.roster("g1");
+    expect(r[0].mlsKey).toBe("a11ce0…");
+    expect(r[1].human).toBe(false);
+    expect(invoke).toHaveBeenCalledWith("rooms_roster", { room: "g1" });
+  });
+
+  it("never lets a transcript line claim to have been spoken", async () => {
+    // There is no audio path. A `speech` kind reaching a surface would be a claim
+    // this product cannot make, so the mapping collapses anything that is not
+    // `system` to `text` rather than passing an unknown kind through.
+    invoke.mockResolvedValue([
+      { n: 0, room: "g1", kind: "system", who: "R. Ortiz", human: true, text: "room opened", t: "09:00:00" },
+      { n: 1, room: "g1", kind: "speech", who: "R. Ortiz", human: true, text: "hello", t: "09:00:01" },
+    ]);
+    const evs = await createTauriBridge().rooms.events(0);
+    expect(evs.map((e) => e.kind)).toEqual(["system", "text"]);
+    expect(invoke).toHaveBeenCalledWith("rooms_events", { since: 0 });
+  });
+
+  it("sends the room, the speaking principal and the text", async () => {
+    invoke.mockResolvedValue(7);
+    await createTauriBridge().rooms.say("g1", "R. Ortiz", "standup starts now");
+    expect(invoke).toHaveBeenCalledWith("rooms_say", {
+      room: "g1",
+      principal: "R. Ortiz",
+      text: "standup starts now",
+    });
+  });
+
+  it("opens a room with the agents it was given", async () => {
+    invoke.mockResolvedValue({
+      id: "g1",
+      name: "Standup",
+      classification: "Proprietary",
+      live: true,
+      members: 3,
+      started: "09:00:00",
+    });
+    const room = await createTauriBridge().rooms.open(
+      { name: "Standup", classification: "Proprietary", agents: ["claude-code", "codex"] },
+      "R. Ortiz",
+    );
+    expect(room.members).toBe(3);
+    expect(invoke).toHaveBeenCalledWith("rooms_open", {
+      operator: "R. Ortiz",
+      name: "Standup",
+      classification: "Proprietary",
+      agents: ["claude-code", "codex"],
+    });
   });
 });

@@ -582,3 +582,73 @@ export function sessionResolve(args: {
     tenantCeiling: args.tenantCeiling ?? null,
   });
 }
+
+// ---- rooms (QRM-S3) -------------------------------------------------
+//
+// A real MLS group on the citrate-comms relay. None of these signs with the
+// vault's wallet: a room identity is a relay identity, sealed in custody under
+// its own slot namespace (`rooms.rs`).
+
+export interface RoomsStatusDto {
+  connected: boolean;
+  relay_url: string;
+  relay_domain: string;
+  address: string | null;
+  seats: number;
+  rooms: number;
+  note: string;
+}
+export interface RoomDto {
+  id: string;
+  name: string;
+  classification: string;
+  live: boolean;
+  members: number;
+  started: string | null;
+}
+export interface MemberDto {
+  id: string;
+  name: string;
+  human: boolean;
+  address: string;
+  mls_key: string;
+}
+export interface RoomEventDto {
+  n: number;
+  room: string;
+  kind: string;
+  who: string;
+  human: boolean;
+  text: string;
+  t: string;
+}
+
+export function roomsStatus(): Promise<RoomsStatusDto> {
+  return invoke<RoomsStatusDto>("rooms_status");
+}
+export function roomsConnect(operator: string): Promise<RoomsStatusDto> {
+  return invoke<RoomsStatusDto>("rooms_connect", { operator });
+}
+export function roomsOpen(
+  operator: string,
+  name: string,
+  classification: string,
+  agents: string[],
+): Promise<RoomDto> {
+  return invoke<RoomDto>("rooms_open", { operator, name, classification, agents });
+}
+export function roomsList(): Promise<RoomDto[]> {
+  return invoke<RoomDto[]>("rooms_list");
+}
+export function roomsRoster(room: string): Promise<MemberDto[]> {
+  return invoke<MemberDto[]>("rooms_roster", { room });
+}
+export function roomsSay(room: string, principal: string, text: string): Promise<number> {
+  return invoke<number>("rooms_say", { room, principal, text });
+}
+export function roomsEvents(since: number): Promise<RoomEventDto[]> {
+  return invoke<RoomEventDto[]>("rooms_events", { since });
+}
+export function roomsLeave(room: string): Promise<void> {
+  return invoke<void>("rooms_leave", { room });
+}
