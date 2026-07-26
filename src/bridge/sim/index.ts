@@ -176,7 +176,16 @@ export function createSimBridge(): BridgeContract {
         }),
       pending: () => delay(120, [...simPending.values()]),
     },
-    wallet: { summary: () => delay(150, D.WALLET) },
+    wallet: {
+      summary: () => delay(150, D.WALLET),
+      identity: () =>
+        delay(60, { exists: false, address: null, reason: "the sim has no custody vault" }),
+      // Deliberately refuses. A sim that handed back a plausible 24-word phrase
+      // would eventually be saved by someone as if it protected something.
+      createIdentity: () =>
+        Promise.reject(new Unavailable("wallet.createIdentity (the sim has no vault, and a fake recovery phrase is worse than none)")),
+      importIdentity: () => Promise.reject(new Unavailable("wallet.importIdentity (the sim has no vault)")),
+    },
     node: {
       peers: () => delay(120, D.NODE_PEERS),
       logs: (onEvent: (e: LogLine) => void): Unsubscribe => {

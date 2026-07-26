@@ -31,6 +31,7 @@ mod agent_bridge;
 mod anchor;
 mod backend;
 mod store;
+mod wallet_setup;
 
 /// A tiny, honest status command the placeholder shell can call to prove the
 /// backend is live and the quorum-specific seams (tenancy, license) are wired —
@@ -154,6 +155,13 @@ pub fn run() {
             custody::custody_put,
             custody::custody_list,
             custody::custody_keyring_status,
+            // wallet setup — the signing identity every ratification is
+            // attributed to. `wallet_create` is the ONE command in this app
+            // that returns secret material, once, under an explicit owner
+            // decision (see wallet_setup.rs).
+            wallet_setup::wallet_status,
+            wallet_setup::wallet_create,
+            wallet_setup::wallet_import,
             // auth — real OIDC loopback-PKCE (shared). No command returns a token.
             oidc::auth_status,
             oidc::auth_login,

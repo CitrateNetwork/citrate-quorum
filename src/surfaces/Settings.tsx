@@ -7,6 +7,7 @@
 import { useState } from "react";
 import { bridge } from "../bridge";
 import { DomainErrorPlate, useDomain } from "../components/DomainState";
+import { WalletSetup } from "../wallet/WalletSetup";
 
 type Tab = "tenancy" | "identity" | "models" | "license" | "compliance";
 const CLS_COLOR: Record<string, string> = { Public: "var(--z-silver)", Proprietary: "var(--info)", CUI: "var(--warn)", ITAR: "var(--danger)" };
@@ -22,8 +23,12 @@ export function Settings({ onGo }: { onGo: (id: string) => void }) {
   const tenancy = primary.state.status === "ready" ? primary.state.data : [];
   if (primary.state.status === "error") {
     return (
-      <div style={{ padding: 18 }}>
+      <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 16 }}>
         <DomainErrorPlate source="settings.tenancy()" error={primary.state.error} onRetry={primary.retry} lands="It reads TenantHierarchy on chain and needs a live chain." />
+        {/* The signing identity does NOT depend on the tenancy read. Hiding it
+            behind that failure would make the wallet unreachable in exactly the
+            state where an operator needs to create one. */}
+        <WalletSetup />
       </div>
     );
   }
@@ -59,6 +64,8 @@ export function Settings({ onGo }: { onGo: (id: string) => void }) {
       )}
 
       {tab === "identity" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <WalletSetup />
         <div className="surface" style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ display: "grid", gridTemplateColumns: "190px 1fr", gap: "8px 12px", fontSize: 13 }}>
             {row("Federation", "Meridian Okta · OIDC · healthy")}
@@ -67,6 +74,7 @@ export function Settings({ onGo }: { onGo: (id: string) => void }) {
             {row("Deprovision SLA", "15 minutes")}
           </div>
           <div style={{ border: "1px solid var(--warn)", background: "var(--warn-bg)", padding: "10px 12px", fontSize: 12.5, lineHeight: 1.5 }}>Honest note: this SLA <em>is</em> the agent kill-switch SLA. When a human leaves, every grant issued under their authority suspends within the same window.</div>
+        </div>
         </div>
       )}
 

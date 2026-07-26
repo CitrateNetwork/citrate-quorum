@@ -180,6 +180,33 @@ export function grantRevoke(
   return invoke<boolean>("grant_revoke", { agent, grantId, revokedBy });
 }
 
+// ---- wallet setup (QRM-S6) -----------------------------------------
+
+export interface WalletStatusDto {
+  exists: boolean;
+  address: string | null;
+  reason: string | null;
+}
+/**
+ * The response to creation — the ONLY place a recovery phrase crosses this
+ * boundary, once, at generation. It is never obtainable again: there is no
+ * command that reads it back. Callers must display-and-drop, never persist.
+ */
+export interface WalletCreatedDto {
+  address: string;
+  mnemonic: string;
+}
+
+export function walletStatus(): Promise<WalletStatusDto> {
+  return invoke<WalletStatusDto>("wallet_status");
+}
+export function walletCreate(): Promise<WalletCreatedDto> {
+  return invoke<WalletCreatedDto>("wallet_create");
+}
+export function walletImport(mnemonic: string): Promise<WalletStatusDto> {
+  return invoke<WalletStatusDto>("wallet_import", { mnemonic });
+}
+
 // ---- meetings (QRM-S5) ---------------------------------------------
 
 export interface MeetingRowDto {

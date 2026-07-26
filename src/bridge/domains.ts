@@ -89,6 +89,19 @@ export interface PolicyDomain {
 
 export interface WalletDomain {
   summary(): Promise<Wallet>;
+  /** The signing identity's public status. Never carries secret material. */
+  identity(): Promise<{ exists: boolean; address: string | null; reason: string | null }>;
+  /**
+   * Create the signing identity and return its recovery phrase ONCE.
+   *
+   * The only method on this contract that returns secret material, under an
+   * explicit owner decision. There is no method that reads it back. Callers
+   * must display-and-drop: never persist it, never log it, never lift it out
+   * of component state.
+   */
+  createIdentity(): Promise<{ address: string; mnemonic: string }>;
+  /** Adopt an existing identity from a phrase. Returns the address only. */
+  importIdentity(mnemonic: string): Promise<{ exists: boolean; address: string | null; reason: string | null }>;
 }
 
 export interface NodeDomain {

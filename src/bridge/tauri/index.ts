@@ -66,6 +66,9 @@ import {
   meetingsList,
   tenantActive,
   tenantSet,
+  walletCreate,
+  walletImport,
+  walletStatus,
   type DecisionResult,
 } from "./commands";
 
@@ -161,7 +164,13 @@ export function createTauriBridge(): BridgeContract {
           requestedAtMs: p.requested_at_ms,
         })),
     },
-    wallet: { summary: na("wallet.summary") },
+    wallet: {
+      summary: na("wallet.summary"),
+      // LIVE (QRM-S6): the signing identity in the OS-keyring vault.
+      identity: () => walletStatus(),
+      createIdentity: () => walletCreate(),
+      importIdentity: (mnemonic: string) => walletImport(mnemonic),
+    },
     node: { peers: na("node.peers"), logs: naStream("node.logs"), blocks: naSync("node.blocks") },
     agents: {
       // LIVE: the fleet this tenant has evidence about (`agents_known`). The
