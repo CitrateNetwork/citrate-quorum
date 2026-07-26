@@ -77,14 +77,17 @@ pub mod classificationregistry {
     /// 4-byte function selectors, keyed to the canonical signature.
     /// `(name, canonical_sig, selector_be)`
     pub const FUNCTIONS: &[(&str, &str, [u8; 4])] = &[
+        ("acceptGovernance", "acceptGovernance()", [0x23, 0x8e, 0xfc, 0xbc]),
         ("addOracleSigner", "addOracleSigner(address)", [0xfe, 0x73, 0x51, 0xaf]),
         ("clearanceOrdinal", "clearanceOrdinal(bytes32)", [0x06, 0x1d, 0xf1, 0xdb]),
         ("getClearance", "getClearance(bytes32)", [0xa3, 0x30, 0xd5, 0x2e]),
         ("getRecord", "getRecord(bytes32)", [0x21, 0x36, 0x81, 0xcd]),
         ("governance", "governance()", [0x5a, 0xa6, 0xe6, 0x75]),
         ("hr_oracle_signers", "hr_oracle_signers(address)", [0x7d, 0xbc, 0x77, 0xd3]),
+        ("pendingGovernance", "pendingGovernance()", [0xf3, 0x9c, 0x38, 0xa0]),
         ("removeOracleSigner", "removeOracleSigner(address)", [0x1f, 0x7d, 0x4d, 0x1d]),
         ("setClearance", "setClearance(bytes32,uint8,bool,bytes)", [0x87, 0xac, 0xc6, 0x1e]),
+        ("transferGovernance", "transferGovernance(address)", [0xd3, 0x8b, 0xff, 0xf4]),
     ];
 
     /// Event canonical signatures (topic0 = keccak256 of these,
@@ -92,6 +95,8 @@ pub mod classificationregistry {
     pub const EVENTS: &[&str] = &[
         "ClearanceChanged(bytes32,uint8,uint8,bool,bool,address)",
         "ForeignNationalChanged(bytes32,bool)",
+        "GovernanceTransferStarted(address,address)",
+        "GovernanceTransferred(address,address)",
         "OracleSignerSet(address,bool)",
     ];
 }
@@ -136,6 +141,7 @@ pub mod agentdecisionregistryv2 {
     /// 4-byte function selectors, keyed to the canonical signature.
     /// `(name, canonical_sig, selector_be)`
     pub const FUNCTIONS: &[(&str, &str, [u8; 4])] = &[
+        ("acceptGovernance", "acceptGovernance()", [0x23, 0x8e, 0xfc, 0xbc]),
         ("byClass", "byClass(uint8)", [0xc4, 0xb8, 0xe4, 0x87]),
         ("byCorrId", "byCorrId(bytes32)", [0xdc, 0xf9, 0x62, 0x23]),
         ("byTenant", "byTenant(bytes32)", [0x54, 0x5d, 0xc8, 0xb0]),
@@ -146,9 +152,11 @@ pub mod agentdecisionregistryv2 {
         ("governance", "governance()", [0x5a, 0xa6, 0xe6, 0x75]),
         ("is_recorder", "is_recorder(address)", [0x1e, 0x40, 0x54, 0x8b]),
         ("latestByTenant", "latestByTenant(bytes32,uint256)", [0x5a, 0x0d, 0xb4, 0x39]),
+        ("pendingGovernance", "pendingGovernance()", [0xf3, 0x9c, 0x38, 0xa0]),
         ("record", "record(bytes32,bytes32,bytes32,bytes32,uint8,string,string,bytes32,string,bytes)", [0x7a, 0x8a, 0x9f, 0x76]),
         ("revoke", "revoke(bytes32,string,bytes32)", [0x85, 0x92, 0x83, 0x38]),
         ("setRecorder", "setRecorder(address,bool)", [0x6b, 0x39, 0x34, 0x9f]),
+        ("transferGovernance", "transferGovernance(address)", [0xd3, 0x8b, 0xff, 0xf4]),
     ];
 
     /// Event canonical signatures (topic0 = keccak256 of these,
@@ -158,6 +166,8 @@ pub mod agentdecisionregistryv2 {
         "DecisionDisputed(bytes32,bytes32,string)",
         "DecisionRecorded(bytes32,bytes32,bytes32,bytes32,uint8)",
         "DecisionRevoked(bytes32,bytes32,string)",
+        "GovernanceTransferStarted(address,address)",
+        "GovernanceTransferred(address,address)",
         "RecorderSet(address,bool)",
     ];
 }
@@ -170,6 +180,7 @@ pub mod contradictionledger {
     /// 4-byte function selectors, keyed to the canonical signature.
     /// `(name, canonical_sig, selector_be)`
     pub const FUNCTIONS: &[(&str, &str, [u8; 4])] = &[
+        ("acceptGovernance", "acceptGovernance()", [0x23, 0x8e, 0xfc, 0xbc]),
         ("bySubject", "bySubject(bytes32)", [0x69, 0x14, 0x5d, 0x47]),
         ("escalate", "escalate(bytes32,bytes32)", [0x86, 0xca, 0x5b, 0x14]),
         ("exists", "exists(bytes32)", [0x38, 0xa6, 0x99, 0xa4]),
@@ -177,9 +188,11 @@ pub mod contradictionledger {
         ("governance", "governance()", [0x5a, 0xa6, 0xe6, 0x75]),
         ("hasOpenContradiction", "hasOpenContradiction(bytes32)", [0xa8, 0x3c, 0xf1, 0x8d]),
         ("is_resolver", "is_resolver(address)", [0xac, 0xa6, 0xb3, 0xa7]),
+        ("pendingGovernance", "pendingGovernance()", [0xf3, 0x9c, 0x38, 0xa0]),
         ("report", "report(bytes32,bytes32,string,bytes32,bytes32,string,string,bytes32,bytes32)", [0x1f, 0x41, 0x40, 0xce]),
         ("resolve", "resolve(bytes32,string,bytes32,bytes32)", [0xef, 0x27, 0xfa, 0xc4]),
         ("setResolver", "setResolver(address,bool)", [0x1d, 0xa6, 0xed, 0x7c]),
+        ("transferGovernance", "transferGovernance(address)", [0xd3, 0x8b, 0xff, 0xf4]),
         ("withdraw", "withdraw(bytes32,bytes32)", [0x63, 0x61, 0x51, 0x49]),
     ];
 
@@ -190,6 +203,8 @@ pub mod contradictionledger {
         "ContradictionReported(bytes32,bytes32,string)",
         "ContradictionResolved(bytes32,string,bytes32)",
         "ContradictionWithdrawn(bytes32,bytes32)",
+        "GovernanceTransferStarted(address,address)",
+        "GovernanceTransferred(address,address)",
         "ResolverSet(address,bool)",
     ];
 }

@@ -52,6 +52,9 @@ use quorum_tenancy::TenantId;
 // agree by construction rather than by two parallel match arms.
 use quorum_meetings::{agenda_source, journal_source, Attendee, Meeting, MeetingState, Template};
 
+use crate::addresses::AddressBook;
+use crate::anchor::{self, AnchorState};
+
 use crate::store::{
     classification_from_str, classification_str, grant_hic_from_str, grant_hic_str, hex32,
     hex_encode, hic_str, verdict_str, Charge, EgressPolicy, EvidenceStore, MeetingRecord,
@@ -280,39 +283,6 @@ pub struct DissentDto {
     pub text: String,
 }
 
-/// Whether the minutes hash reached a chain, and if not, exactly why.
-///
-/// This is a struct rather than an `Option<String>` because "not anchored" is a
-/// state the surface must render, not an absence it can skip. The fourth demo
-/// beat is "ratified, **anchored** minutes", and ratified-but-not-anchored looks
-/// identical on screen unless something says so (sprint risk R-A).
-#[derive(Serialize, Clone, Debug)]
-pub struct AnchorDto {
-    pub anchored: bool,
-    /// Present only when `anchored`. Never a placeholder.
-    pub reference: Option<String>,
-    pub reason: String,
-}
-
-/// The anchor's real status (WP-S5.6).
-///
-/// Resolved at call time rather than baked in, so this starts reporting
-/// differently the moment the dependency lands instead of asserting a stale
-/// fact about the chain. Today the honest answer is that **this build has no
-/// chain address book at all** — not "AnchorRegistry is undeployed", which is a
-/// claim about chain state the app currently has no way to observe. Rule 8
-/// forbids a hardcoded address; it equally forbids a hardcoded excuse.
-fn anchor_status() -> AnchorDto {
-    AnchorDto {
-        anchored: false,
-        reference: None,
-        reason: "not anchored — this build has no chain address book, so no AnchorRegistry \
-                 can be resolved. The minutes hash is computed and stored locally and can be \
-                 verified offline; anchoring lands with the governance contracts (QRM-S6)."
-            .to_string(),
-    }
-}
-
 #[derive(Serialize, Clone, Debug)]
 pub struct MeetingDetailDto {
     pub id: String,
@@ -332,7 +302,6 @@ pub struct MeetingDetailDto {
     /// What a ratifier signs. Recomputed on every read, so an edited meeting
     /// shows a different hash rather than the one that was signed.
     pub content_hash: String,
-    pub anchor: AnchorDto,
     pub quorate: bool,
     pub min_humans: usize,
     pub attested_humans: usize,
@@ -1283,7 +1252,6 @@ impl QuorumBackend {
             ratified_by: m.ratified_by.clone(),
             ratified_at: m.ratified_at,
             content_hash: hex_encode(&m.content_hash()),
-            anchor: anchor_status(),
             quorate: m.is_quorate(),
             min_humans: m.template.min_humans,
             attested_humans: m.attested_humans(),
@@ -1988,6 +1956,28 @@ pub fn meeting_content_hash(backend: Backend<'_>, id: String) -> Result<String, 
     let b = lock(&backend)?;
     let tenant = b.require_tenant()?;
     b.meeting_content_hash(tenant.as_str(), &id)
+}
+
+/// Is this meeting's local minutes hash the one registered on chain?
+///
+/// Deliberately its OWN command rather than a field on `meeting_get`: this
+/// makes an `eth_call`, and doing that inside `meeting_detail` would hold the
+/// backend mutex across a network round trip, stalling every other command
+/// behind a chain that might be slow or down.
+///
+/// Data source: `MeetingRegistry.verifyMinutes` / `.getMinutes` via `eth_call`,
+/// the contract resolved by name from the canonical address book at runtime.
+#[tauri::command]
+pub fn meeting_anchor(backend: Backend<'_>, id: String) -> Result<AnchorState, String> {
+    // Take what the check needs, then RELEASE the lock before any I/O.
+    let (tenant, content_hash) = {
+        let b = lock(&backend)?;
+        let tenant = b.require_tenant()?;
+        let hash = b.meeting_content_hash(tenant.as_str(), &id)?;
+        (tenant.as_str().to_string(), hash)
+    };
+    let book = AddressBook::load().map_err(|e| e.to_string())?;
+    Ok(anchor::check(&book, &tenant, &id, hex32(&content_hash)))
 }
 
 /// Record a ratification. The human ceremony has already happened; this turns
@@ -3432,18 +3422,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_anchor_is_reported_unavailable_with_a_reason_never_a_placeholder() {
-        let (b, _) = backend_with_closed_meeting();
-        let d = b.meeting_detail("acme", "m-1").expect("detail");
-        assert!(!d.anchor.anchored);
-        assert!(
-            d.anchor.reference.is_none(),
-            "an unanchored meeting must carry no reference at all — a placeholder \
-             reference is exactly the fabricated-evidence failure"
-        );
-        assert!(d.anchor.reason.contains("no chain address book"));
-    }
+    // The anchor's state is no longer a field on the detail DTO — it is its
+    // own command (`meeting_anchor`) because it makes an `eth_call`, and its
+    // coverage lives in `anchor::tests`, including a LIVE check against
+    // chain 40204 that proves the ABI return offsets are right.
 
     #[test]
     fn meetings_are_tenant_isolated() {
