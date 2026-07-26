@@ -69,13 +69,33 @@ Start at `.agentile/AGENT_ENTRY.md`. Canonical truth is the federation planset
     (custody, updater keys, gated downloads, export-controlled surfaces) need
     security sign-off before deploy. Full audit before release.
 
-## Export control (G1 — pending legal opinion)
+## Export control (G1 — PARTIALLY SUPERSEDED 2026-07-26)
 
-Export-controlled data is **in scope** for this product (Q13). Until the written
-legal opinion lands (gate G1, blocks QRM-S3), do **not**: add features that
-process CUI/ITAR material, document handling procedures for controlled technical
-data, or make claims about export-control compliance. Build the classification
-ladder generically and treat the constraint as configuration.
+Export-controlled data is **in scope** for this product (Q13).
+
+**Owner supersession, 2026-07-26 (@SaulBuilds).** G1 no longer blocks **QRM-S3
+(Rooms)**. The owner signed off explicitly: rooms are a core feature and their
+construction is not contingent on the written legal opinion. Build them.
+
+What the supersession covers — and only this:
+- QRM-S3 may be built, merged and shipped without waiting on G1.
+- The classification ladder stays generic and configuration-driven, as before.
+  A room carries a classification; the ladder does not encode any particular
+  regime's rules.
+
+What it does **not** cover, and what still holds:
+- **Do not make claims about export-control compliance** — not in the product,
+  not in docs, not in a deck. Whether this software satisfies ITAR/EAR is a
+  legal conclusion, and no engineering decision can supply it. That line is
+  unchanged and is not the owner's to waive on our behalf, because it binds
+  what we tell *customers*.
+- Do not document handling procedures for controlled technical data.
+- MR-4 classification monotonicity and the per-classification egress allowlist
+  remain requirements, not options: they are what make a classified room
+  defensible regardless of which regime applies.
+
+The original gate remains open for the *compliance-claim* question. It is
+closed for the *build-it* question.
 
 ## Compliance language
 
