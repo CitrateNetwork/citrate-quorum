@@ -77,6 +77,80 @@ fn charge_for(cost: u64) -> u64 {
     cost.max(1)
 }
 
+/// The chain index behind a `D-…` ledger handle.
+///
+/// The ribbon numbers records from `D-90001`, so the handle is an offset, not an
+/// opaque id. Parsing it here — once, strictly — is what stops a malformed
+/// handle from silently resolving to record 0.
+fn decision_index(id: &str) -> Result<usize, String> {
+    let n: u64 = id
+        .strip_prefix("D-")
+        .and_then(|d| d.parse().ok())
+        .ok_or_else(|| format!("{id} is not a decision handle (expected D-90001 and up)"))?;
+    n.checked_sub(90_001)
+        .map(|i| i as usize)
+        .ok_or_else(|| format!("{id} is below the first decision handle (D-90001)"))
+}
+
+/// `YYYY-MM-DD HH:MM:SS UTC` from epoch-ms.
+///
+/// Done by hand, like `clock_utc`, rather than pulling a date crate in for two
+/// formats. Civil-from-days is Howard Hinnant's algorithm; the round-trip test
+/// pins it against known instants rather than trusting the arithmetic.
+fn iso_utc(ms: i64) -> String {
+    let secs = ms.div_euclid(1000);
+    let days = secs.div_euclid(86_400);
+    let tod = secs.rem_euclid(86_400);
+
+    // days since 1970-01-01 → civil date
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+
+    format!(
+        "{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02} UTC",
+        tod / 3600,
+        (tod % 3600) / 60,
+        tod % 60
+    )
+}
+
+/// A one-line reason for a verdict, derived from the record itself.
+///
+/// Deliberately derived rather than stored: the record IS the evidence, and a
+/// prose reason persisted beside it could drift from the fields it describes.
+fn decision_reason(r: &DecisionRecord) -> String {
+    match r.verdict {
+        Verdict::Allow => format!(
+            "allowed by grant {} at {}",
+            r.grant_id.clone().unwrap_or_else(|| "—".to_string()),
+            hic_str(r.hic)
+        ),
+        Verdict::RequireApproval => format!(
+            "escalated to a human at {} before execution",
+            hic_str(r.hic)
+        ),
+        Verdict::Deny => "refused by policy: no live grant covers this action class, \
+                          classification or budget"
+            .to_string(),
+        Verdict::Ungoverned => "NO live grant stood behind this action — recorded ungoverned \
+                                and alerted, never silently allowed (rule 5)"
+            .to_string(),
+        Verdict::Rejected => "a human refused it; the charge was refunded".to_string(),
+        Verdict::Approved => format!(
+            "a human approved it ({})",
+            r.principal.clone().unwrap_or_else(|| "unnamed".to_string())
+        ),
+    }
+}
+
 /// `HH:MM:SS` UTC from epoch-ms, for the Ledger's TIME column.
 ///
 /// The column was rendering the raw epoch integer, which overflowed into the
@@ -158,6 +232,65 @@ pub struct DecisionDto {
     /// commits to the whole history.
     pub chain_head: String,
     pub ungoverned: bool,
+}
+
+/// One decision rendered as a document — the Ledger's charter register.
+#[derive(Serialize, Clone, Debug)]
+pub struct DecisionDetailDto {
+    pub id: String,
+    pub what: String,
+    pub when: String,
+    pub principal: String,
+    pub agent: String,
+    pub grant: String,
+    pub protocol: String,
+    pub verdict: String,
+    pub hic: String,
+    pub reason: String,
+    pub model: String,
+    pub params: String,
+    pub correlation: String,
+    pub chain_pos: String,
+    /// The chained hash stored for this record — `BLAKE3(prev_head ++ record)`.
+    pub entry_hash: String,
+    /// The record's own content hash, independent of its chain position: the
+    /// leaf an inclusion proof is built from.
+    pub content_hash: String,
+    pub chain_head: String,
+    pub merkle_root: String,
+    /// How many sibling hashes the inclusion proof needed.
+    pub proof_len: usize,
+    /// Whether this record's content hash + proof recompute the Merkle root.
+    pub included: bool,
+    pub source: String,
+}
+
+/// What the Verify affordance actually checked.
+#[derive(Serialize, Clone, Debug)]
+pub struct VerifyDecisionDto {
+    /// The whole chain replayed from genesis and every stored hash matched.
+    pub chain_intact: bool,
+    /// This record proved into the tenant's Merkle root.
+    pub included: bool,
+    pub records: usize,
+    pub entry_hash: String,
+    pub merkle_root: String,
+    pub proof_len: usize,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct CorrelationEventDto {
+    pub t: String,
+    pub kind: String,
+    pub text: String,
+    pub link: String,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct CorrelationViewDto {
+    pub events: Vec<CorrelationEventDto>,
+    /// Rule 11: what was searched, and what is deliberately not in the answer.
+    pub source: String,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -1431,6 +1564,166 @@ impl QuorumBackend {
         })
     }
 
+    /// One decision, as a document (the Ledger's charter register).
+    ///
+    /// Every field is read back out of the evidence chain — nothing is inferred
+    /// by the caller. `id` is the same `D-…` handle the ribbon shows; an id that
+    /// does not resolve is an error, never an empty document.
+    pub fn ledger_decision(&self, tenant: &str, id: &str) -> Result<DecisionDetailDto, String> {
+        let index = decision_index(id)?;
+        let chain = self
+            .chains
+            .get(tenant)
+            .ok_or_else(|| format!("no evidence chain for this tenant — {id} cannot be read"))?;
+        let (record, entry_hash) = chain.entry(index).ok_or_else(|| {
+            format!(
+                "{id} is not in this tenant's chain ({} records)",
+                chain.len()
+            )
+        })?;
+
+        // The inclusion proof is computed here rather than trusted: it is the
+        // artifact that makes a single record checkable by someone who does not
+        // hold the rest of the chain.
+        let root = chain.merkle_root();
+        let proof = chain.merkle_proof(index).unwrap_or_default();
+        let included = quorum_audit::verify_inclusion(record.content_hash(), &proof, root);
+
+        Ok(DecisionDetailDto {
+            id: id.to_string(),
+            what: record.action_class.clone(),
+            when: iso_utc(record.timestamp_ms),
+            principal: record
+                .principal
+                .clone()
+                // An absent principal is the whole point of an ungoverned
+                // record. Say it, do not blank it.
+                .unwrap_or_else(|| "— none: this action had no accountable human".to_string()),
+            agent: record.agent.clone(),
+            grant: record.grant_id.clone().unwrap_or_else(|| {
+                if record.verdict == Verdict::Ungoverned {
+                    "— none: recorded ungoverned".to_string()
+                } else {
+                    "— none: a human acting directly holds the authority itself".to_string()
+                }
+            }),
+            // Rule 1: there is no deployed governance protocol contract behind
+            // this verdict yet, and saying "PRT-004" would be an invention.
+            protocol: "— none deployed: this verdict came from quorum-policy evaluating \
+                       the tenant's live grants locally (governance contracts land in QRM-S6/S7)"
+                .to_string(),
+            verdict: verdict_str(record.verdict).to_string(),
+            hic: hic_str(record.hic).to_string(),
+            reason: decision_reason(record),
+            model: if record.model_id.is_empty() {
+                "— not stated by the caller".to_string()
+            } else {
+                record.model_id.clone()
+            },
+            params: if record.params_hash == [0u8; 32] {
+                "— no params committed to".to_string()
+            } else {
+                hex_encode(&record.params_hash)
+            },
+            correlation: record.correlation_id.clone(),
+            chain_pos: format!("record {} of {}", index + 1, chain.len()),
+            entry_hash: hex_encode(&entry_hash),
+            content_hash: hex_encode(&record.content_hash()),
+            chain_head: hex_encode(&chain.head()),
+            merkle_root: hex_encode(&root),
+            proof_len: proof.len(),
+            included,
+            source: format!(
+                "the tenant's BLAKE3 evidence chain (quorum-audit HashChain), record {index}",
+            ),
+        })
+    }
+
+    /// Re-verify one decision, on demand: recompute the whole chain from
+    /// genesis AND recompute the Merkle root from this record plus its
+    /// inclusion proof.
+    ///
+    /// Both checks are real and local. Neither says anything about the chain —
+    /// `anchor` reports that separately, because "my copy is intact" and "the
+    /// world agrees with my copy" are different claims and collapsing them is
+    /// how a verify button becomes theatre.
+    pub fn ledger_verify_decision(
+        &self,
+        tenant: &str,
+        id: &str,
+    ) -> Result<VerifyDecisionDto, String> {
+        let index = decision_index(id)?;
+        let chain = self.chains.get(tenant).ok_or_else(|| {
+            format!("no evidence chain for this tenant — {id} cannot be verified")
+        })?;
+        let (record, entry_hash) = chain.entry(index).ok_or_else(|| {
+            format!(
+                "{id} is not in this tenant's chain ({} records)",
+                chain.len()
+            )
+        })?;
+        let root = chain.merkle_root();
+        let proof = chain.merkle_proof(index).unwrap_or_default();
+        Ok(VerifyDecisionDto {
+            chain_intact: chain.verify(),
+            included: quorum_audit::verify_inclusion(record.content_hash(), &proof, root),
+            records: chain.len(),
+            entry_hash: hex_encode(&entry_hash),
+            merkle_root: hex_encode(&root),
+            proof_len: proof.len(),
+        })
+    }
+
+    /// Everything this tenant recorded under one correlation id, oldest first.
+    ///
+    /// The correlation id is how a meeting, the grants it authorised, the
+    /// actions taken under them and the resulting change are threaded together.
+    /// Only the parts that exist locally appear; the rest is named in `source`
+    /// rather than drawn as an empty node on a timeline.
+    pub fn ledger_correlation(&self, tenant: &str, corr: &str) -> CorrelationViewDto {
+        let mut events = Vec::new();
+        if let Some(chain) = self.chains.get(tenant) {
+            for (i, record) in chain.records().enumerate() {
+                if record.correlation_id != corr && !record.correlation_id.starts_with(corr) {
+                    continue;
+                }
+                // `meeting.ratify` records carry `{meeting id} @ {hash}` as
+                // their correlation, so a meeting id threads its own ratifying
+                // act. That is why the prefix match above exists.
+                let kind = match record.action_class.as_str() {
+                    c if c.starts_with("meeting.") => "meeting",
+                    c if c.starts_with("grant.") => "grant",
+                    _ => "action",
+                };
+                events.push(CorrelationEventDto {
+                    t: clock_utc(record.timestamp_ms),
+                    kind: kind.to_string(),
+                    text: format!(
+                        "{} · {} · {}",
+                        record.action_class,
+                        verdict_str(record.verdict),
+                        record
+                            .principal
+                            .clone()
+                            .unwrap_or_else(|| format!("{} (ungoverned)", record.agent))
+                    ),
+                    link: format!("D-{}", 90001 + i as u64),
+                });
+            }
+        }
+        let source = if events.is_empty() {
+            format!("no record in this tenant's evidence chain carries the correlation id {corr}")
+        } else {
+            format!(
+                "{} record(s) in this tenant's evidence chain carrying correlation {corr}. \
+                 Pull requests and calendar events are not in this timeline: the repo and \
+                 calendar connectors are not built (QRM-S8).",
+                events.len()
+            )
+        };
+        CorrelationViewDto { events, source }
+    }
+
     pub fn ledger_rows(&self, tenant: &str) -> Vec<LedgerRow> {
         let Some(chain) = self.chains.get(tenant) else {
             return Vec::new(); // empty chain → honest empty ledger
@@ -1867,6 +2160,37 @@ pub fn ledger_records(backend: Backend<'_>) -> Result<Vec<LedgerRow>, String> {
     Ok(b.ledger_rows(tenant.as_str()))
 }
 
+/// One decision as a document. A local read of the tenant's evidence chain —
+/// it makes no chain call, so it is fast and works offline.
+#[tauri::command]
+pub fn ledger_decision(backend: Backend<'_>, id: String) -> Result<DecisionDetailDto, String> {
+    let b = lock(&backend)?;
+    let tenant = b.require_tenant()?;
+    b.ledger_decision(tenant.as_str(), &id)
+}
+
+/// Re-verify one decision: replay the chain and re-prove the record's inclusion.
+#[tauri::command]
+pub fn ledger_verify_decision(
+    backend: Backend<'_>,
+    id: String,
+) -> Result<VerifyDecisionDto, String> {
+    let b = lock(&backend)?;
+    let tenant = b.require_tenant()?;
+    b.ledger_verify_decision(tenant.as_str(), &id)
+}
+
+/// The timeline of everything recorded under one correlation id.
+#[tauri::command]
+pub fn ledger_correlation(
+    backend: Backend<'_>,
+    corr: String,
+) -> Result<CorrelationViewDto, String> {
+    let b = lock(&backend)?;
+    let tenant = b.require_tenant()?;
+    Ok(b.ledger_correlation(tenant.as_str(), &corr))
+}
+
 // ---- meetings commands (WP-S5.5) ------------------------------------
 
 #[tauri::command]
@@ -2104,6 +2428,38 @@ pub fn journal_brief(
     b.standup_brief(tenant.as_str(), &agent, &meeting)
 }
 
+/// The evidence chain's own state, in one read.
+///
+/// Composed here rather than in the frontend because these five facts must
+/// describe the SAME chain at the same instant: assembled from five separate
+/// round trips, a record could land between them and the surface would show a
+/// head that does not match the count beside it.
+#[derive(Serialize, Clone, Debug)]
+pub struct LedgerStateDto {
+    pub head: String,
+    pub merkle_root: String,
+    pub records: usize,
+    pub ungoverned: usize,
+    /// The chain replayed from genesis and every stored hash matched.
+    pub intact: bool,
+    pub tenant: String,
+}
+
+#[tauri::command]
+pub fn ledger_state(backend: Backend<'_>) -> Result<LedgerStateDto, String> {
+    let b = lock(&backend)?;
+    let tenant = b.require_tenant()?;
+    let t = tenant.as_str();
+    Ok(LedgerStateDto {
+        head: b.ledger_head(t),
+        merkle_root: b.ledger_merkle_root(t),
+        records: b.chains.get(t).map(HashChain::len).unwrap_or(0),
+        ungoverned: b.ledger_ungoverned_count(t),
+        intact: b.ledger_verify(t),
+        tenant: t.to_string(),
+    })
+}
+
 #[tauri::command]
 pub fn ledger_head(backend: Backend<'_>) -> Result<String, String> {
     let b = lock(&backend)?;
@@ -2283,6 +2639,129 @@ mod tests {
         assert!(d.grant_id.is_none());
         assert_eq!(b.ledger_ungoverned_count("bca"), 1);
         assert_eq!(b.ledger_rows("bca").len(), 1);
+    }
+
+    #[test]
+    fn a_decision_reads_back_as_a_document_that_proves_itself() {
+        let mut b = QuorumBackend::default();
+        b.issue_grant(
+            &grant("sbt-41", &["repo.write"], "CUI", 100, "2"),
+            &t("bca"),
+            0,
+        )
+        .unwrap();
+        b.evaluate_and_record(
+            &action("sbt-41", "repo.write", "Public", 3),
+            &t("bca"),
+            1000,
+        )
+        .unwrap();
+
+        // D-90001 is the grant issuance itself — issuing authority is a
+        // recorded act, so the governed action is the SECOND record.
+        assert_eq!(
+            b.ledger_decision("bca", "D-90001").unwrap().what,
+            "grant.issue"
+        );
+
+        let d = b.ledger_decision("bca", "D-90002").unwrap();
+        assert_eq!(d.what, "repo.write");
+        assert_eq!(d.agent, "sbt-41");
+        assert_eq!(d.verdict, "allow");
+        assert_eq!(d.chain_pos, "record 2 of 2");
+        assert_eq!(d.correlation, "X-7104");
+        // The proof is computed, not asserted: this is the claim the Verify
+        // affordance makes, so the read itself must be able to make it.
+        assert!(
+            d.included,
+            "the record must prove into the tenant's Merkle root"
+        );
+        assert_eq!(d.entry_hash, b.ledger_head("bca"));
+        assert_eq!(d.merkle_root, b.ledger_merkle_root("bca"));
+        // Rule 1: no invented protocol id behind a locally-evaluated verdict.
+        assert!(d.protocol.starts_with("— none deployed"), "{}", d.protocol);
+    }
+
+    #[test]
+    fn an_ungoverned_decision_says_it_had_no_human_rather_than_blanking_the_field() {
+        let mut b = QuorumBackend::default();
+        b.evaluate_and_record(&action("sbt-9", "repo.write", "Public", 1), &t("bca"), 1000)
+            .unwrap();
+        let d = b.ledger_decision("bca", "D-90001").unwrap();
+        assert_eq!(d.verdict, "ungoverned");
+        assert!(
+            d.principal.contains("no accountable human"),
+            "{}",
+            d.principal
+        );
+        assert!(d.grant.contains("ungoverned"), "{}", d.grant);
+        assert!(d.reason.contains("NO live grant"), "{}", d.reason);
+    }
+
+    #[test]
+    fn a_handle_that_resolves_to_nothing_is_an_error_not_record_zero() {
+        let mut b = QuorumBackend::default();
+        b.evaluate_and_record(&action("sbt-9", "repo.write", "Public", 1), &t("bca"), 1000)
+            .unwrap();
+        for bad in ["", "D-", "90001", "D-abc", "X-7104", "D-1"] {
+            assert!(
+                b.ledger_decision("bca", bad).is_err(),
+                "{bad} must not resolve to a decision"
+            );
+        }
+        // In range for the handle format, past the end of the chain.
+        assert!(b.ledger_decision("bca", "D-90002").is_err());
+        assert!(b.ledger_decision("bca", "D-90001").is_ok());
+    }
+
+    #[test]
+    fn verify_reports_both_checks_separately() {
+        let mut b = QuorumBackend::default();
+        for i in 0..3 {
+            b.evaluate_and_record(
+                &action("sbt-9", "repo.write", "Public", 1),
+                &t("bca"),
+                1000 + i,
+            )
+            .unwrap();
+        }
+        let v = b.ledger_verify_decision("bca", "D-90002").unwrap();
+        assert!(v.chain_intact);
+        assert!(v.included);
+        assert_eq!(v.records, 3);
+        assert!(v.proof_len > 0, "a chain of 3 needs sibling hashes");
+    }
+
+    #[test]
+    fn a_correlation_gathers_its_records_and_says_what_it_did_not_search() {
+        let mut b = QuorumBackend::default();
+        b.evaluate_and_record(&action("sbt-9", "repo.write", "Public", 1), &t("bca"), 1000)
+            .unwrap();
+        let mut other = action("sbt-9", "spend", "Public", 1);
+        other.correlation_id = "X-0000".into();
+        b.evaluate_and_record(&other, &t("bca"), 2000).unwrap();
+
+        let v = b.ledger_correlation("bca", "X-7104");
+        assert_eq!(v.events.len(), 1, "only the matching correlation");
+        assert_eq!(v.events[0].link, "D-90001");
+        assert_eq!(v.events[0].kind, "action");
+        // The timeline states what it CANNOT show, rather than implying the
+        // absent parts do not exist.
+        assert!(v.source.contains("not built"), "{}", v.source);
+
+        let empty = b.ledger_correlation("bca", "X-nothing");
+        assert!(empty.events.is_empty());
+        assert!(empty.source.contains("no record"), "{}", empty.source);
+    }
+
+    #[test]
+    fn iso_utc_renders_known_instants() {
+        assert_eq!(iso_utc(0), "1970-01-01 00:00:00 UTC");
+        // 2026-07-26T14:33:02Z — checked against `date -u -d @1785076382`.
+        assert_eq!(iso_utc(1_785_076_382_000), "2026-07-26 14:33:02 UTC");
+        // Leap day, and the last second of a year.
+        assert_eq!(iso_utc(1_709_164_800_000), "2024-02-29 00:00:00 UTC");
+        assert_eq!(iso_utc(1_767_225_599_000), "2025-12-31 23:59:59 UTC");
     }
 
     #[test]

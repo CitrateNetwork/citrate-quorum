@@ -257,6 +257,58 @@ impl HashChain {
         self.entries.iter().map(|(r, _)| r)
     }
 
+    /// One entry: its record and the chained hash that was stored for it.
+    ///
+    /// The chained hash is what makes a single decision citable — "record 3,
+    /// entry `b3:…`" is checkable by anyone holding the preceding records,
+    /// where the record alone is not.
+    pub fn entry(&self, index: usize) -> Option<(&DecisionRecord, [u8; 32])> {
+        self.entries.get(index).map(|(r, h)| (r, *h))
+    }
+
+    /// A Merkle inclusion proof for record `index` against [`Self::merkle_root`].
+    ///
+    /// Each step is `(sibling, sibling_is_right)`. Feed it to
+    /// [`verify_inclusion`] with the record's content hash to recompute the
+    /// root — which is what makes "verify this decision" a real check rather
+    /// than a spinner: an auditor holding one record, this proof and the
+    /// anchored root needs nothing else from us.
+    ///
+    /// Mirrors [`merkle_root`] exactly, including the odd-node duplication rule;
+    /// `inclusion_proofs_verify_against_the_root` pins the two together for
+    /// every chain length up to 9, which is where an off-by-one in the
+    /// duplication rule shows up.
+    pub fn merkle_proof(&self, index: usize) -> Option<Vec<([u8; 32], bool)>> {
+        if index >= self.entries.len() {
+            return None;
+        }
+        let mut level: Vec<[u8; 32]> = self
+            .entries
+            .iter()
+            .map(|(r, _)| leaf_hash(&r.content_hash()))
+            .collect();
+        let mut i = index;
+        let mut proof = Vec::new();
+        while level.len() > 1 {
+            let sibling_is_right = i % 2 == 0;
+            let sibling_index = if sibling_is_right { i + 1 } else { i - 1 };
+            // An odd level duplicates its last node, so the last element's
+            // sibling is itself.
+            let sibling = *level.get(sibling_index).unwrap_or(&level[i]);
+            proof.push((sibling, sibling_is_right));
+
+            let mut next = Vec::with_capacity(level.len().div_ceil(2));
+            for pair in level.chunks(2) {
+                let left = pair[0];
+                let right = if pair.len() == 2 { pair[1] } else { pair[0] };
+                next.push(node_hash(&left, &right));
+            }
+            level = next;
+            i /= 2;
+        }
+        Some(proof)
+    }
+
     /// The Merkle root over this chain's record content hashes — the value
     /// committed to `AnchorRegistry` as the day's `NightlyMerkle` anchor. Anyone
     /// with the records can recompute it and verify inclusion.
@@ -271,6 +323,25 @@ impl HashChain {
     }
 }
 
+/// The domain-separated leaf hash. Split out so [`merkle_root`] and
+/// [`HashChain::merkle_proof`] cannot drift apart — a proof built with a
+/// different leaf rule than the root verifies against nothing.
+fn leaf_hash(leaf: &[u8; 32]) -> [u8; 32] {
+    let mut h = blake3::Hasher::new();
+    h.update(b"\x00leaf");
+    h.update(leaf);
+    *h.finalize().as_bytes()
+}
+
+/// The domain-separated internal-node hash.
+fn node_hash(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+    let mut h = blake3::Hasher::new();
+    h.update(b"\x01node");
+    h.update(left);
+    h.update(right);
+    *h.finalize().as_bytes()
+}
+
 /// A binary Merkle root over `leaves` (each already a 32-byte hash). An empty set
 /// hashes to the zero root; an odd level duplicates its last node (standard).
 /// Domain-separated (leaf vs node) so a leaf can't be reinterpreted as a node.
@@ -278,29 +349,34 @@ pub fn merkle_root(leaves: &[[u8; 32]]) -> [u8; 32] {
     if leaves.is_empty() {
         return [0u8; 32];
     }
-    let mut level: Vec<[u8; 32]> = leaves
-        .iter()
-        .map(|l| {
-            let mut h = blake3::Hasher::new();
-            h.update(b"\x00leaf");
-            h.update(l);
-            *h.finalize().as_bytes()
-        })
-        .collect();
+    let mut level: Vec<[u8; 32]> = leaves.iter().map(leaf_hash).collect();
     while level.len() > 1 {
         let mut next = Vec::with_capacity(level.len().div_ceil(2));
         for pair in level.chunks(2) {
             let left = pair[0];
             let right = if pair.len() == 2 { pair[1] } else { pair[0] };
-            let mut h = blake3::Hasher::new();
-            h.update(b"\x01node");
-            h.update(&left);
-            h.update(&right);
-            next.push(*h.finalize().as_bytes());
+            next.push(node_hash(&left, &right));
         }
         level = next;
     }
     level[0]
+}
+
+/// Recompute a Merkle root from one leaf and its inclusion proof.
+///
+/// `leaf` is the record's own content hash — NOT the leaf hash: the domain
+/// separation is applied here, so a caller cannot accidentally verify a node as
+/// though it were a leaf.
+pub fn verify_inclusion(leaf: [u8; 32], proof: &[([u8; 32], bool)], root: [u8; 32]) -> bool {
+    let mut acc = leaf_hash(&leaf);
+    for (sibling, sibling_is_right) in proof {
+        acc = if *sibling_is_right {
+            node_hash(&acc, sibling)
+        } else {
+            node_hash(sibling, &acc)
+        };
+    }
+    acc == root
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -516,6 +592,72 @@ mod tests {
         assert!(c.append(governed_rejection).is_ok());
         assert!(c.append(ungoverned_rejection).is_ok());
         assert!(c.verify());
+    }
+
+    /// The whole point of an inclusion proof: a holder of ONE record plus the
+    /// proof can recompute the anchored root without the other records.
+    ///
+    /// Swept across every length up to 9 because the odd-node duplication rule
+    /// is where a proof and a root drift apart, and it only bites at odd levels.
+    #[test]
+    fn inclusion_proofs_verify_against_the_root() {
+        for n in 1..=9usize {
+            let mut c = HashChain::new(tenant());
+            for i in 0..n {
+                c.append(governed("repo.write", &format!("X-{i}"), i as i64))
+                    .unwrap();
+            }
+            let root = c.merkle_root();
+            for i in 0..n {
+                let (record, _) = c.entry(i).expect("entry in range");
+                let proof = c.merkle_proof(i).expect("proof in range");
+                assert!(
+                    verify_inclusion(record.content_hash(), &proof, root),
+                    "chain of {n}: record {i} did not prove into the root"
+                );
+            }
+        }
+    }
+
+    /// A proof must not verify a record the chain does not hold — otherwise
+    /// "verified" would mean nothing.
+    #[test]
+    fn a_foreign_record_does_not_prove_into_the_root() {
+        let mut c = HashChain::new(tenant());
+        for i in 0..4 {
+            c.append(governed("repo.write", &format!("X-{i}"), i))
+                .unwrap();
+        }
+        let proof = c.merkle_proof(2).unwrap();
+        let forged = governed("spend", "X-forged", 99);
+        assert!(!verify_inclusion(
+            forged.content_hash(),
+            &proof,
+            c.merkle_root()
+        ));
+        // …nor the right record against the wrong root.
+        let (record, _) = c.entry(2).unwrap();
+        assert!(!verify_inclusion(record.content_hash(), &proof, [0u8; 32]));
+    }
+
+    #[test]
+    fn an_out_of_range_index_has_no_entry_and_no_proof() {
+        let mut c = HashChain::new(tenant());
+        c.append(governed("repo.write", "X-1", 1)).unwrap();
+        assert!(c.entry(1).is_none());
+        assert!(c.merkle_proof(1).is_none());
+        assert!(c.merkle_proof(0).is_some());
+    }
+
+    /// The entry hash a citation names must be the one the chain actually
+    /// stored — not one recomputed from a different rule.
+    #[test]
+    fn the_entry_hash_is_the_hash_append_returned() {
+        let mut c = HashChain::new(tenant());
+        let h = c.append(governed("repo.write", "X-1", 1)).unwrap();
+        let (_, stored) = c.entry(0).unwrap();
+        assert_eq!(h, stored);
+        assert_eq!(stored, c.head());
     }
 
     #[test]

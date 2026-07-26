@@ -11,7 +11,7 @@ import type { BridgeContract } from "./domains";
 import { createSimBridge } from "./sim";
 import { createTauriBridge } from "./tauri";
 
-export type { BridgeContract } from "./domains";
+export type { BridgeContract, LedgerState } from "./domains";
 export * from "./types";
 
 export const bridge: BridgeContract =

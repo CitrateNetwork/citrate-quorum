@@ -11,11 +11,12 @@
 // S2D.3 freeze costs backend rework — owner decision, not a PR comment.
 // =====================================================================
 import type {
+  ActivityLine,
   Agent,
   Block,
   CalAccount,
   CalEvent,
-  CorrelationEvent,
+  CorrelationView,
   Decision,
   DecisionDetail,
   GateDecision,
@@ -26,12 +27,11 @@ import type {
   IngestFile,
   InterviewTurn,
   JournalEntry,
-  LogLine,
   Meeting,
   MeetingAdmit,
   MeetingDetail,
   MeetingSchedule,
-  NodePeer,
+  NodeStatus,
   Protocol,
   Repo,
   Room,
@@ -42,7 +42,8 @@ import type {
   SpecClause,
   StandupBrief,
   Subscribe,
-  TenancyNode,
+  TenancyView,
+  VerifyDecision,
   Wallet,
 } from "./types";
 
@@ -104,12 +105,30 @@ export interface WalletDomain {
   importIdentity(mnemonic: string): Promise<{ exists: boolean; address: string | null; reason: string | null }>;
 }
 
+/**
+ * The chain this app reads.
+ *
+ * **Contract change, QRM Phase 0.** This domain was frozen at S2D.3 as
+ * `peers(): Promise<NodePeer[]>`, `logs: Subscribe<LogLine>` and a SYNCHRONOUS
+ * `blocks(height): Block[]`. None of the three survived contact with a real
+ * chain, and the shape was changed rather than faked:
+ *
+ * - `blocks` cannot be synchronous — every row is an `eth_getBlockByNumber`.
+ * - There is no peer LIST to return: `net_peerCount` gives a count, and 40204's
+ *   public RPC exposes no peer enumeration. A list of invented peer rows is
+ *   exactly the defect this repo keeps finding, so the count moved into
+ *   `status()` and `peers()` is gone.
+ * - There are no node logs to stream: this app supervises no node. `activity()`
+ *   returns the app's OWN record of every RPC it issued, which is a real thing
+ *   an operator can use to tell "the chain is down" from "it never asked".
+ */
 export interface NodeDomain {
-  peers(): Promise<NodePeer[]>;
-  /** Live log stream. */
-  logs: Subscribe<LogLine>;
-  /** The most recent blocks below `height` (GhostDAG rows). */
-  blocks(height: number): Block[];
+  /** Height, peer count, client, sync state, measured latency. */
+  status(): Promise<NodeStatus>;
+  /** The most recent blocks, newest first (the backend clamps `count`). */
+  blocks(count: number): Promise<Block[]>;
+  /** What this app has asked the chain, newest first. */
+  activity(): Promise<ActivityLine[]>;
 }
 
 export interface AgentsDomain {
@@ -134,12 +153,32 @@ export interface RoomsDomain {
   // TODO(wire): open/join/post/invite; stt.start() consent + local transcription.
 }
 
+/** The evidence chain's own state — head, root, counts, integrity. */
+export interface LedgerState {
+  head: string;
+  merkleRoot: string;
+  records: number;
+  ungoverned: number;
+  intact: boolean;
+  tenant: string;
+}
+
 export interface LedgerDomain {
   query(): Promise<Decision[]>;
+  /** All five facts in one read, so they describe the same chain at once. */
+  state(): Promise<LedgerState>;
   /** The streaming decision ribbon (new rows arrive over time). */
   stream: Subscribe<Decision>;
   decision(id: string): Promise<DecisionDetail>;
-  correlation(id: string): Promise<CorrelationEvent[]>;
+  /**
+   * Re-verify one decision on demand: replay the chain from genesis AND
+   * recompute the Merkle root from this record plus its inclusion proof. Both
+   * are local checks over evidence we hold — neither says anything about the
+   * chain, which is reported separately, because "my copy is intact" and "the
+   * world agrees with my copy" are different claims.
+   */
+  verifyDecision(id: string): Promise<VerifyDecision>;
+  correlation(id: string): Promise<CorrelationView>;
   // TODO(wire): asOf(ts) time-travel snapshot pagination; exportPack(range).
 }
 
@@ -200,7 +239,8 @@ export interface ReposDomain {
 }
 
 export interface SettingsDomain {
-  tenancy(): Promise<TenancyNode[]>;
+  /** The on-chain tenant tree, plus where it came from or why it is empty. */
+  tenancy(): Promise<TenancyView>;
   // TODO(wire): identity federation status; models; license.seats metering source.
 }
 

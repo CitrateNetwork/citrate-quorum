@@ -1,22 +1,27 @@
 // =====================================================================
-// citrate-quorum — Tauri adapter (QRM-S2 · partially LIVE)
+// citrate-quorum — Tauri adapter (QRM-S2 · mostly LIVE)
 //
 // Domains with a real Rust backend today call it (Rule 1: real data or an
 // honest error, never fabricated). LIVE here:
 //
 //  · policy  — the gate. Evaluates against the tenant's live grants and
 //              appends the decision to the tenant's BLAKE3 evidence chain.
-//  · ledger  — reads that same chain back.
+//  · ledger  — reads that same chain back, including one decision as a
+//              document with a recomputed Merkle inclusion proof.
 //  · session  — the active tenant scope (`current()` still needs the IdP).
 //  · meetings — the governed meeting record: agenda frozen under a BLAKE3
 //              hash, minutes composed from the evidence chain, ratification
-//              recorded as a HIC-1 act. NOT anchored on chain — see the
-//              anchor row, which says so rather than hiding it.
+//              recorded as a HIC-1 act, and the on-chain anchor row.
+//  · node     — chain 40204 over the address book's rpcUrl: height, peer
+//              count, client, sync state, recent blocks, and this app's own
+//              record of every RPC it issued.
+//  · wallet   — the vault's address and its live balances.
+//  · settings — the on-chain tenant tree from TenantHierarchy.
 //
-// Every other domain throws Unavailable until its sprint wires it (rooms need
-// the comms relay, governance needs the chain, calendar needs OAuth, …). The
-// SHARED signing surface (config / custody / auth / ceremony) is already live
-// in the kit (WP-S1.3).
+// Still unavailable, each for a stated reason: rooms (the comms relay),
+// governance (the S6/S7 contracts), calendar (OAuth consent), repos (a GitHub
+// App), and `session.current` (the OIDC RP). The SHARED signing surface
+// (config / custody / auth / ceremony) is live in the kit (WP-S1.3).
 //
 // The tenant scope lives in the Rust backend, not here: no call below names a
 // tenant, and a command with no scope established fails closed with an honest
@@ -25,7 +30,12 @@
 import type { BridgeContract } from "../domains";
 import {
   Unavailable,
+  type ActivityLine,
+  type Block,
+  type CorrelationEvent,
+  type CorrelationView,
   type Decision,
+  type DecisionDetail,
   type GateDecision,
   type Agent,
   type GovernedAction,
@@ -34,12 +44,16 @@ import {
   type JournalEntry,
   type Meeting,
   type MeetingDetail,
+  type NodeStatus,
   type StandupBrief,
   type MeetingState,
   type Classification,
   type HicLevel,
   type PendingApproval,
+  type TenancyView,
   type Unsubscribe,
+  type VerifyDecision,
+  type Wallet,
 } from "../types";
 import {
   actionApprove,
@@ -54,7 +68,16 @@ import {
   approvalsPending,
   journalBrief,
   journalList,
+  ledgerCorrelation,
+  ledgerDecision,
   ledgerRecords,
+  ledgerState,
+  ledgerVerifyDecision,
+  nodeActivity,
+  nodeBlocks,
+  nodeStatus,
+  tenancyTree,
+  walletSummary,
   meetingAdmit,
   meetingAnchor,
   meetingClose,
@@ -97,13 +120,6 @@ const na =
   (op: string) =>
   (): Promise<never> =>
     Promise.reject(new Unavailable(op));
-
-/** Synchronous domain methods (streams return an Unsubscribe; `node.blocks`
- *  returns an array) have no promise for the failure to live in, so these do
- *  throw. Callers of a synchronous method are expected to guard it. */
-const naSync = (op: string) => (): never => {
-  throw new Unavailable(op);
-};
 
 const naStream =
   (op: string) =>
@@ -165,13 +181,68 @@ export function createTauriBridge(): BridgeContract {
         })),
     },
     wallet: {
-      summary: na("wallet.summary"),
+      // LIVE (Phase 0): the vault's address + live balances from the endpoint
+      // the address book names. `eth_getBalance` for the native currency,
+      // ERC-20 `balanceOf` for booked tokens.
+      summary: async (): Promise<Wallet> => {
+        const w = await walletSummary();
+        return {
+          address: w.address,
+          chainId: w.chain_id,
+          rpcUrl: w.rpc_url,
+          keyStore: w.key_store,
+          source: w.source,
+          tokens: w.tokens,
+          notes: w.notes,
+          activityNote: w.activity_note,
+        };
+      },
       // LIVE (QRM-S6): the signing identity in the OS-keyring vault.
       identity: () => walletStatus(),
       createIdentity: () => walletCreate(),
       importIdentity: (mnemonic: string) => walletImport(mnemonic),
     },
-    node: { peers: na("node.peers"), logs: naStream("node.logs"), blocks: naSync("node.blocks") },
+    // LIVE (Phase 0): chain 40204 over the book's rpcUrl. `activity` is this
+    // app's own RPC record — see NodeDomain for why there is no peer list and
+    // no node log stream.
+    node: {
+      status: async (): Promise<NodeStatus> => {
+        const s = await nodeStatus();
+        return {
+          rpcUrl: s.rpc_url,
+          book: s.book,
+          chainId: s.chain_id,
+          height: s.height,
+          peers: s.peers,
+          client: s.client,
+          syncing: s.syncing,
+          latencyMs: s.latency_ms,
+          baseFeeWei: s.base_fee_wei,
+          blueScore: s.blue_score,
+        };
+      },
+      blocks: async (count: number): Promise<Block[]> =>
+        (await nodeBlocks(count)).map((b) => ({
+          height: b.height,
+          hash: b.hash,
+          txs: b.txs,
+          proposer: b.proposer,
+          gasUsed: b.gas_used,
+          gasLimit: b.gas_limit,
+          timestamp: b.timestamp,
+          blueScore: b.blue_score,
+          mergeParents: b.merge_parents,
+        })),
+      activity: async (): Promise<ActivityLine[]> =>
+        (await nodeActivity()).map((l) => ({
+          t: l.t,
+          // The Rust side emits INFO/ERROR; anything else is passed through
+          // rather than coerced into a level it did not claim.
+          lvl: l.lvl as ActivityLine["lvl"],
+          module: l.module,
+          msg: l.msg,
+        })),
+    },
     agents: {
       // LIVE: the fleet this tenant has evidence about (`agents_known`). The
       // registry-only fields (vendor, model, capsules, reputation) are simply
@@ -224,6 +295,17 @@ export function createTauriBridge(): BridgeContract {
     ledger: {
       // LIVE: the real per-tenant hash chain.
       query: () => ledgerRecords(),
+      state: async () => {
+        const s = await ledgerState();
+        return {
+          head: s.head,
+          merkleRoot: s.merkle_root,
+          records: s.records,
+          ungoverned: s.ungoverned,
+          intact: s.intact,
+          tenant: s.tenant,
+        };
+      },
       // LIVE: poll the chain, emit rows appended since the last poll.
       stream: (onEvent: (e: Decision) => void): Unsubscribe => {
         let seen = 0;
@@ -246,10 +328,58 @@ export function createTauriBridge(): BridgeContract {
           clearInterval(handle);
         };
       },
-      // Not yet: single-decision detail + correlation need the on-chain anchor
-      // proof + the meeting/PR join, which land with the chain and rooms wiring.
-      decision: na("ledger.decision"),
-      correlation: na("ledger.correlation"),
+      // LIVE (Phase 0): one decision as a document, read back out of the same
+      // chain the ribbon reads — including the inclusion proof, recomputed
+      // here rather than asserted.
+      decision: async (id: string): Promise<DecisionDetail> => {
+        const d = await ledgerDecision(id);
+        return {
+          id: d.id,
+          what: d.what,
+          when: d.when,
+          principal: d.principal,
+          agent: d.agent,
+          grant: d.grant,
+          protocol: d.protocol,
+          verdict: d.verdict,
+          hic: d.hic,
+          reason: d.reason,
+          model: d.model,
+          params: d.params,
+          correlation: d.correlation,
+          chainPos: d.chain_pos,
+          entryHash: d.entry_hash,
+          contentHash: d.content_hash,
+          chainHead: d.chain_head,
+          merkleRoot: d.merkle_root,
+          proofLen: d.proof_len,
+          included: d.included,
+          source: d.source,
+        };
+      },
+      verifyDecision: async (id: string): Promise<VerifyDecision> => {
+        const v = await ledgerVerifyDecision(id);
+        return {
+          chainIntact: v.chain_intact,
+          included: v.included,
+          records: v.records,
+          entryHash: v.entry_hash,
+          merkleRoot: v.merkle_root,
+          proofLen: v.proof_len,
+        };
+      },
+      correlation: async (corr: string): Promise<CorrelationView> => {
+        const c = await ledgerCorrelation(corr);
+        return {
+          events: c.events.map((e) => ({
+            t: e.t,
+            kind: e.kind as CorrelationEvent["kind"],
+            text: e.text,
+            link: e.link,
+          })),
+          source: c.source,
+        };
+      },
     },
     // LIVE (QRM-S5): the governed meeting record. `list`/`get` read the
     // tenant's durable meeting store; an empty tenant returns an empty list,
@@ -372,6 +502,25 @@ export function createTauriBridge(): BridgeContract {
     },
     calendar: { accounts: na("calendar.accounts"), events: na("calendar.events") },
     repos: { list: na("repos.list"), prs: na("repos.prs"), peek: na("repos.peek") },
-    settings: { tenancy: na("settings.tenancy") },
+    // LIVE (Phase 0): TenantHierarchy on chain, resolved by name from the BFR
+    // address book. A tree that is empty because the contract has no root says
+    // exactly that — it does not render as "no tenants".
+    settings: {
+      tenancy: async (): Promise<TenancyView> => {
+        const t = await tenancyTree();
+        return {
+          rows: t.rows.map((r) => ({
+            depth: r.depth,
+            name: r.name,
+            admins: r.admins,
+            ceiling: r.ceiling,
+            threshold: r.threshold,
+            id: r.id,
+          })),
+          source: t.source,
+          note: t.note,
+        };
+      },
+    },
   };
 }

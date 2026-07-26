@@ -30,6 +30,7 @@ mod addresses;
 mod agent_bridge;
 mod anchor;
 mod backend;
+mod chain;
 mod store;
 mod wallet_setup;
 
@@ -200,6 +201,10 @@ pub fn run() {
             backend::journal_list,
             backend::journal_brief,
             backend::ledger_records,
+            backend::ledger_decision,
+            backend::ledger_verify_decision,
+            backend::ledger_correlation,
+            backend::ledger_state,
             backend::ledger_head,
             backend::ledger_merkle_root,
             backend::ledger_verify,
@@ -212,6 +217,14 @@ pub fn run() {
             backend::allowance_revoke,
             backend::vote_cast,
             backend::session_resolve,
+            // live chain reads (Phase 0) — node posture, the block explorer,
+            // this app's own RPC activity, the on-chain tenant tree, and the
+            // signing identity's balances. All reads; none of them signs.
+            chain::node_status,
+            chain::node_blocks,
+            chain::node_activity,
+            chain::tenancy_tree,
+            chain::wallet_summary,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -223,11 +236,14 @@ mod tests {
     /// Every quorum-authored source file. The scan below claimed to cover "the
     /// backend source" while only reading `lib.rs`; it now actually does, which
     /// matters most for `agent_bridge.rs` — the surface agents talk to.
-    const QUORUM_SOURCES: [(&str, &str); 4] = [
+    const QUORUM_SOURCES: [(&str, &str); 5] = [
         ("lib.rs", include_str!("lib.rs")),
         ("backend.rs", include_str!("backend.rs")),
         ("store.rs", include_str!("store.rs")),
         ("agent_bridge.rs", include_str!("agent_bridge.rs")),
+        // chain.rs talks to the RPC. It reads only — this scan is what keeps
+        // "reads only" true as it grows.
+        ("chain.rs", include_str!("chain.rs")),
     ];
 
     /// The single-signing-path guard, quorum side (WP-S1.2 acceptance: the
