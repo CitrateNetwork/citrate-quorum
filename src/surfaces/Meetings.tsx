@@ -3,10 +3,10 @@
 // ratified, templates) and the detail document (agenda frozen at open, minutes,
 // dissent first-class, attendance attested, decisions) with the Ratify ceremony.
 // Reads bridge.meetings.list()/get(); ratify routes through useCeremony().
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { bridge } from "../bridge";
 import { DomainErrorPlate, useDomain } from "../components/DomainState";
-import type { Meeting, MeetingDetail } from "../bridge";
+import type { Classification, Meeting, MeetingDetail, MeetingTemplate } from "../bridge";
 import { useCeremony } from "../ceremony/Ceremony";
 
 const CLS_COLOR: Record<string, string> = { Public: "var(--z-silver)", Proprietary: "var(--info)", CUI: "var(--warn)", ITAR: "var(--danger)" };
@@ -17,11 +17,43 @@ const STATE_LABEL: Record<string, string> = {
   scheduled: "scheduled", "in-progress": "in progress", awaiting: "awaiting ratification", ratified: "ratified", inquorate: "inquorate",
 };
 
+/**
+ * The templates an operator can schedule from.
+ *
+ * `minHumans` is DATA, not a caption: it is sent to the backend and becomes the
+ * quorum rule enforced at close. These used to be display-only chips whose
+ * captions ("5 signers", "3 humans") described a rule nothing implemented, so
+ * the words and the behaviour could not disagree because the behaviour did not
+ * exist. Now they cannot disagree because they are the same number.
+ */
+const TEMPLATES: MeetingTemplate[] = [
+  { name: "Standup", minHumans: 2, classification: "Proprietary", note: "2 humans · agents optional" },
+  { name: "Change-control", minHumans: 5, classification: "CUI", note: "5 signers · CUI" },
+  { name: "Incident review", minHumans: 3, classification: "Proprietary", note: "3 humans · postmortem" },
+  { name: "Quarterly governance", minHumans: 7, classification: "CUI", note: "board seat required" },
+];
+
 export function Meetings() {
   const [detail, setDetail] = useState<MeetingDetail | null>(null);
   const [selectedState, setSelectedState] = useState<string>("ratified");
-  const [ratified, setRatified] = useState(false);
+  const [ratifyError, setRatifyError] = useState("");
+  const [operator, setOperator] = useState("");
+  const [formOpen, setFormOpen] = useState(false);
+  const [form, setForm] = useState({
+    name: "", when: "", template: TEMPLATES[0].name, workspace: "",
+  });
+  const [formError, setFormError] = useState("");
+  const [admitName, setAdmitName] = useState("");
+  const [admitVendor, setAdmitVendor] = useState("");
+  const [admitClearance, setAdmitClearance] = useState<Classification>("CUI");
+  const [actionError, setActionError] = useState("");
   const ceremony = useCeremony();
+
+  // Ratification must name the human who signed it; the backend refuses an
+  // anonymous ratifier outright.
+  useEffect(() => {
+    bridge.session.operator().then((o) => setOperator(o ?? "")).catch(() => {});
+  }, []);
 
 
   // Honest failure (S2D.4/§5.1): this surface's primary read is meetings.list().
@@ -40,26 +72,145 @@ export function Meetings() {
 
   const open = (m: Meeting) => {
     setSelectedState(m.state);
-    setRatified(m.state === "ratified");
     bridge.meetings.get(m.id).then(setDetail).catch(() => {});
+  };
+
+  /**
+   * Re-read the register and, if a meeting is open, its detail + state.
+   *
+   * `meetings` is derived from `primary`, not mirrored into local state (#24),
+   * so the register is refreshed by re-running the read rather than by
+   * assigning to it. The rows are also fetched directly here because the
+   * selected meeting's new state is needed synchronously.
+   */
+  const refresh = async (id?: string) => {
+    const rows = await bridge.meetings.list();
+    primary.retry();
+    if (id) {
+      const row = rows.find((r) => r.id === id);
+      if (row) setSelectedState(row.state);
+      setDetail(await bridge.meetings.get(id));
+    }
+  };
+
+  const schedule = async () => {
+    setFormError("");
+    const tpl = TEMPLATES.find((x) => x.name === form.template) ?? TEMPLATES[0];
+    if (!form.name.trim() || !form.when.trim()) {
+      setFormError("a meeting needs a name and a time");
+      return;
+    }
+    try {
+      await bridge.meetings.schedule({
+        // The id must identify one meeting in this tenant; the backend refuses
+        // a duplicate. Derived from the time it was created rather than the
+        // name, so scheduling two standups does not collide.
+        id: `m-${Date.now().toString(36)}`,
+        name: form.name.trim(),
+        when: form.when.trim(),
+        template: tpl.name,
+        minHumans: tpl.minHumans,
+        classification: tpl.classification,
+        // Empty means no source: the backend records an empty agenda that says
+        // it was not generated, rather than inventing items.
+        workspace: form.workspace.trim() || undefined,
+      });
+      setForm({ name: "", when: "", template: TEMPLATES[0].name, workspace: "" });
+      setFormOpen(false);
+      await refresh();
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const admit = async () => {
+    if (!detail || !admitName.trim()) return;
+    setActionError("");
+    try {
+      await bridge.meetings.admit({
+        id: detail.id,
+        name: admitName.trim(),
+        vendor: admitVendor.trim() || undefined,
+        // Attested, because this IS the attestation: an operator recording
+        // someone as present. An unattested row would not count for quorum or
+        // for MR-4, which is a different act than the one this button performs.
+        attested: true,
+        clearance: admitClearance,
+      });
+      setAdmitName("");
+      setAdmitVendor("");
+      await refresh(detail.id);
+    } catch (e) {
+      // MR-4 refusals land here and MUST be shown — an under-cleared attendee
+      // silently dropped would leave the operator believing they were admitted.
+      setActionError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const lifecycle = async (step: "open" | "close") => {
+    if (!detail) return;
+    setActionError("");
+    try {
+      if (step === "open") await bridge.meetings.open(detail.id);
+      else await bridge.meetings.close(detail.id);
+      await refresh(detail.id);
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+    }
   };
 
   const ratify = async () => {
     if (!detail) return;
+    setRatifyError("");
+    // The hash the signer is shown must be the hash the backend records
+    // against. Read it first, display it, and pass the SAME value back — if the
+    // minutes move in between, the backend refuses rather than recording a
+    // signature over something nobody saw.
+    let contentHash: string;
+    try {
+      contentHash = await bridge.meetings.contentHash(detail.id);
+    } catch (e) {
+      setRatifyError(e instanceof Error ? e.message : String(e));
+      return;
+    }
+
     const r = await ceremony.request({
       kind: "ratify",
       title: `Ratify minutes — ${detail.name}`,
       origin: "user",
-      action: { actionClass: "meeting.ratify", classification: "Proprietary", agent: "user", mandatoryHic1: true },
+      action: { actionClass: "meeting.ratify", classification: detail.classification, agent: "user", mandatoryHic1: true },
       rows: [
         { k: "Meeting", v: detail.name },
         { k: "When", v: detail.when },
         { k: "Agenda hash", v: detail.agendaHash },
-        { k: "Minutes", v: `${detail.minutes.length} items · 1 decision · 1 dissent recorded` },
-        { k: "Effect", v: "anchors the minutes on chain — they become evidence" },
+        // Counted, not asserted. This row read "1 decision · 1 dissent
+        // recorded" as a literal, which was true of the design mock and of
+        // nothing else.
+        { k: "Minutes", v: `${detail.minutes.length} items · ${detail.decisions.length} decisions · ${detail.dissent.length} dissent recorded` },
+        { k: "You are signing", v: contentHash },
+        // The old row promised "anchors the minutes on chain". Nothing anchors
+        // anything yet — AnchorRegistry is not resolvable in this build — and a
+        // ceremony that misstates its own effect is the worst place to be
+        // imprecise.
+        { k: "Effect", v: "records your signature over the hash above, in this tenant's evidence chain. It does NOT anchor on chain — see the anchor row." },
       ],
+      // The write runs INSIDE the ceremony, before it can claim to be on
+      // record. Doing it after `request()` resolved meant it ran on dismiss —
+      // after the dialog had already said the record existed.
+      commit: async () => {
+        await bridge.meetings.ratify(detail.id, operator, contentHash);
+        return "ratified · minutes hash-chained locally, not anchored on chain";
+      },
     });
-    if (r.outcome === "settled") setRatified(true);
+    if (r.outcome !== "settled") return;
+    // Re-read rather than setting a local flag: the backend is the record, and
+    // a surface that decides for itself that it is ratified is exactly the
+    // "stamped On record while the write failed" bug from S4.
+    try {
+      await refresh(detail.id);
+    } catch (e) {
+      setRatifyError(e instanceof Error ? e.message : String(e));
+    }
   };
 
   if (!detail) {
@@ -68,8 +219,54 @@ export function Meetings() {
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <span className="eyebrow">The record — every meeting, planned and ratified</span>
           <div style={{ flex: 1 }} />
-          <button className="btn btn-primary btn-sm">Schedule from template</button>
+          <button className="btn btn-primary btn-sm" onClick={() => setFormOpen((v) => !v)}>
+            {formOpen ? "Cancel" : "Schedule a meeting"}
+          </button>
         </div>
+
+        {formOpen && (
+          <div className="surface" style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+            <span className="eyebrow">Schedule — the template sets the quorum rule</span>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span className="mono" style={{ fontSize: 9, letterSpacing: ".1em", textTransform: "uppercase", color: "var(--tx-3)" }}>Name</span>
+                <input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                  placeholder="Weekly Standup" style={{ padding: "7px 9px", fontSize: 13 }} />
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span className="mono" style={{ fontSize: 9, letterSpacing: ".1em", textTransform: "uppercase", color: "var(--tx-3)" }}>When (RFC3339)</span>
+                <input value={form.when} onChange={(e) => setForm((f) => ({ ...f, when: e.target.value }))}
+                  placeholder="2026-07-30T09:00:00Z" style={{ padding: "7px 9px", fontSize: 13 }} />
+              </label>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <span className="mono" style={{ fontSize: 9, letterSpacing: ".1em", textTransform: "uppercase", color: "var(--tx-3)" }}>Template</span>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {TEMPLATES.map((tpl) => {
+                  const on = form.template === tpl.name;
+                  return (
+                    <button key={tpl.name} onClick={() => setForm((f) => ({ ...f, template: tpl.name }))}
+                      className="mono" style={{ fontSize: 10, cursor: "pointer", background: "transparent", color: on ? "var(--tx-1)" : "var(--tx-2)", border: `1px solid ${on ? "var(--accent)" : "var(--line-2)"}`, padding: "5px 10px" }}>
+                      {tpl.name} <span style={{ color: "var(--tx-3)" }}>· {tpl.note} · {tpl.classification}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span className="mono" style={{ fontSize: 9, letterSpacing: ".1em", textTransform: "uppercase", color: "var(--tx-3)" }}>Workspace (optional) — the agenda is generated from its active sprint files</span>
+              <input value={form.workspace} onChange={(e) => setForm((f) => ({ ...f, workspace: e.target.value }))}
+                placeholder="/home/you/Projects/citrate-quorum" className="mono" style={{ padding: "7px 9px", fontSize: 12 }} />
+              <span className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)", lineHeight: 1.5 }}>
+                Left empty, the meeting opens with an empty agenda that says it was not generated — never with invented items.
+              </span>
+            </label>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <button className="btn btn-primary btn-sm" onClick={schedule}>Schedule</button>
+              {formError && <span className="mono" style={{ fontSize: 11, color: "var(--danger)" }}>{formError}</span>}
+            </div>
+          </div>
+        )}
         <div className="surface" style={{ display: "flex", flexDirection: "column" }}>
           <div className="mono" style={{ display: "grid", gridTemplateColumns: "1fr 150px 130px 110px 120px 150px", gap: 10, padding: "8px 16px", fontSize: 9, letterSpacing: ".12em", textTransform: "uppercase", color: "var(--tx-3)", borderBottom: "1px solid var(--line-1)" }}>
             <span>Meeting</span><span>When</span><span>Template</span><span>Attendees</span><span>Class</span><span>State</span>
@@ -84,18 +281,31 @@ export function Meetings() {
               <span className="mono" style={{ fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase", color: STATE_COLOR[m.state] }}>{STATE_LABEL[m.state]}</span>
             </div>
           ))}
+          {meetings.length === 0 && (
+            <div className="mono" style={{ fontSize: 11, lineHeight: 1.6, color: "var(--tx-3)", padding: "14px 16px" }}>
+              No meetings in this tenant yet. This register is empty because nothing has been
+              scheduled — not because a read failed.
+            </div>
+          )}
         </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {[["Standup", "2 humans · agents optional"], ["Change-control", "5 signers · CUI"], ["Incident review", "3 humans · postmortem"], ["Quarterly governance", "board seat required"]].map(([n, req]) => (
-            <span key={n} className="mono" style={{ fontSize: 10, color: "var(--tx-2)", border: "1px solid var(--line-2)", padding: "4px 10px" }}>{n} <span style={{ color: "var(--tx-3)" }}>· {req}</span></span>
-          ))}
+        {/* Rule 11: this line names where the rows actually come from. It used
+            to claim "MinutesRegistry + relay archive" — neither of which
+            exists. MinutesRegistry is a QRM-S6 contract that is not written,
+            and there is no relay archive until Rooms (QRM-S3). */}
+        <div className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)", lineHeight: 1.6 }}>
+          Read from meetings.list() → this tenant's local meeting store. Minutes are hash-chained
+          locally and verifiable offline; they are not on a chain — MeetingRegistry and
+          AnchorRegistry land with the governance contracts (QRM-S6).
         </div>
-        <div className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)" }}>Read from meetings.list() → MinutesRegistry + relay archive</div>
       </div>
     );
   }
 
-  const isRatified = ratified || selectedState === "ratified";
+  // Derived from the RECORD, not from a local flag. The flag was set at open
+  // and never updated by a successful ratification, so the document went on
+  // showing "Awaiting ratification" after it had been signed — the surface
+  // disagreeing with the evidence it is supposed to display.
+  const isRatified = detail.ratified || selectedState === "ratified";
   const isUnratified = !isRatified && (selectedState === "awaiting" || selectedState === "in-progress");
 
   return (
@@ -114,7 +324,7 @@ export function Meetings() {
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <span className="mono" style={{ fontSize: 10, color: "var(--tx-3)" }}>agenda {detail.agendaHash}</span>
-            {isRatified && detail.anchor && <span className="mono" style={{ fontSize: 10, color: "var(--tx-3)" }}>anchored {detail.anchor}</span>}
+            {isRatified && <span className="mono" style={{ fontSize: 10, color: "var(--tx-3)" }}>anchor: {detail.anchor ?? "unknown"}</span>}
           </div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 300px" }}>
@@ -128,7 +338,15 @@ export function Meetings() {
                   <span className="mono" style={{ fontSize: 9, color: "var(--tx-3)" }}>{a.src}</span>
                 </div>
               ))}
-              <div className="mono" style={{ fontSize: 9, color: "var(--tx-3)", marginTop: 6 }}>A changed agenda creates a linked successor meeting — this one has none.</div>
+              {/* This used to read "A changed agenda creates a linked successor
+                  meeting — this one has none." There is no successor-meeting
+                  feature; the sentence described behaviour that does not exist
+                  anywhere in the product. What IS true is the freeze rule. */}
+              <div className="mono" style={{ fontSize: 9, color: "var(--tx-3)", marginTop: 6, lineHeight: 1.6 }}>
+                {detail.agendaHash.startsWith("not frozen")
+                  ? "Not frozen yet — opening the meeting commits this agenda under a BLAKE3 hash."
+                  : "Frozen at open. Recompute this hash from the items above to verify it offline."}
+              </div>
             </div>
             <div>
               <div className="lbl">Minutes</div>
@@ -145,10 +363,38 @@ export function Meetings() {
                 ))}
               </div>
             )}
+            {/* The lifecycle, driven from the UI. Each button is shown only in
+                the state where it is legal — the backend enforces the same
+                transitions, so a visible-but-doomed control would be a lie
+                about what the record permits. */}
+            {(selectedState === "scheduled" || selectedState === "in-progress") && (
+              <div style={{ display: "flex", alignItems: "center", gap: 10, border: "1px solid var(--line-2)", padding: "12px 14px" }}>
+                <span style={{ fontSize: 13, flex: 1 }}>
+                  {selectedState === "scheduled"
+                    ? "Opening freezes the agenda under a BLAKE3 hash. It cannot change afterwards."
+                    : "Closing composes the minutes from the governed actions recorded since it opened, and decides quorum."}
+                </span>
+                <button className="btn btn-primary btn-sm" onClick={() => lifecycle(selectedState === "scheduled" ? "open" : "close")}>
+                  {selectedState === "scheduled" ? "Open — freeze the agenda" : "Close — compose minutes"}
+                </button>
+              </div>
+            )}
+            {actionError && (
+              <div className="mono" style={{ fontSize: 11, lineHeight: 1.5, color: "var(--danger)", border: "1px solid var(--danger)", padding: "10px 12px" }}>
+                refused — {actionError}
+              </div>
+            )}
             {isUnratified && (
               <div style={{ display: "flex", alignItems: "center", gap: 12, border: "1px solid var(--warn)", background: "var(--warn-bg)", padding: "12px 14px" }}>
-                <span style={{ fontSize: 13, flex: 1 }}>These minutes are a draft. Ratifying anchors them on chain — they become evidence a board member can verify.</span>
+                <span style={{ fontSize: 13, flex: 1 }}>These minutes are a draft. Ratifying records your signature over their hash in this tenant's evidence chain, which a board member can verify offline. It does not anchor them on chain yet — that lands with the governance contracts.</span>
                 <button className="btn btn-primary" onClick={ratify}>Ratify — sign</button>
+              </div>
+            )}
+            {/* A refused ratification must say so. The S4 bug this guards
+                against stamped "On record" while the write had failed. */}
+            {ratifyError && (
+              <div className="mono" style={{ fontSize: 11, lineHeight: 1.5, color: "var(--danger)", border: "1px solid var(--danger)", padding: "10px 12px" }}>
+                ratification refused — {ratifyError}
               </div>
             )}
           </div>
@@ -162,6 +408,30 @@ export function Meetings() {
                   <span className="mono" style={{ fontSize: 8.5, color: "var(--tx-3)" }}>{at.agent ?? (at.note ? "observer" : "human")}</span>
                 </div>
               ))}
+              {detail.attendance.length === 0 && (
+                <span className="mono" style={{ fontSize: 10.5, color: "var(--tx-3)" }}>nobody admitted yet</span>
+              )}
+
+              {/* Admission closes when the meeting does — the backend refuses
+                  it, and offering a control that can only fail is worse than
+                  not offering it. */}
+              {(selectedState === "scheduled" || selectedState === "in-progress") && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--line-1)" }}>
+                  <span className="mono" style={{ fontSize: 9, letterSpacing: ".1em", textTransform: "uppercase", color: "var(--tx-3)" }}>Attest an attendee</span>
+                  <input value={admitName} onChange={(e) => setAdmitName(e.target.value)} placeholder="name" style={{ padding: "6px 8px", fontSize: 12 }} />
+                  <input value={admitVendor} onChange={(e) => setAdmitVendor(e.target.value)} placeholder="vendor (leave empty for a human)" className="mono" style={{ padding: "6px 8px", fontSize: 11 }} />
+                  <select value={admitClearance} onChange={(e) => setAdmitClearance(e.target.value as Classification)} className="mono" style={{ padding: "6px 8px", fontSize: 11 }}>
+                    {(["Public", "Proprietary", "CUI", "ITAR"] as Classification[]).map((c) => (
+                      <option key={c} value={c}>cleared to {c}</option>
+                    ))}
+                  </select>
+                  <button className="btn btn-ghost btn-sm" onClick={admit} disabled={!admitName.trim()}>Attest present</button>
+                  <span className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)", lineHeight: 1.5 }}>
+                    Only humans count toward quorum ({detail.attendance.filter((a) => !a.agent).length} of {TEMPLATES.find((x) => x.name === (meetings.find((m) => m.id === detail.id)?.tpl ?? ""))?.minHumans ?? "?"} required).
+                    Someone cleared below {detail.classification} is refused — MR-4.
+                  </span>
+                </div>
+              )}
             </div>
             <div>
               <div className="lbl">Decisions</div>
@@ -172,7 +442,10 @@ export function Meetings() {
                 </div>
               ))}
             </div>
-            <div className="mono" style={{ fontSize: 9, color: "var(--tx-3)", borderTop: "1px solid var(--line-1)", paddingTop: 10, lineHeight: 1.6 }}>Read from meetings.get() → MinutesRegistry · print-ready under @media print</div>
+            {/* Rule 11 again: this claimed "MinutesRegistry", a QRM-S6
+                contract that is not written. The detail comes from the same
+                local store as the register. */}
+            <div className="mono" style={{ fontSize: 9, color: "var(--tx-3)", borderTop: "1px solid var(--line-1)", paddingTop: 10, lineHeight: 1.6 }}>Read from meetings.get() → this tenant's local meeting store · print-ready under @media print</div>
           </div>
         </div>
       </div>

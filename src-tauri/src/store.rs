@@ -48,6 +48,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use quorum_audit::{DecisionRecord, HashChain, HicLevel, Verdict};
+use quorum_meetings::{Attendee, Dissent, Meeting, MeetingState, MinuteDecision, Template};
 use quorum_policy::{CapabilityGrant, GrantHic, VoteAllowance};
 use quorum_tenancy::{Classification, TenantId};
 
@@ -212,6 +213,69 @@ struct StoredGrant {
     expires_at_ms: i64,
     hic: String,
     revoked: bool,
+}
+
+/// A meeting on disk (WP-S5.3).
+///
+/// The agenda is stored as its items **and** its frozen hash rather than the
+/// hash alone. Keeping only the hash would make a ratified meeting
+/// unverifiable offline: you could confirm nothing, because the document the
+/// signature commits to would be gone. Keeping only the items would let the
+/// hash be recomputed — and therefore silently repaired — after an edit.
+/// Storing both means a tampered agenda fails to match on load.
+#[derive(Serialize, Deserialize)]
+struct StoredMeeting {
+    id: String,
+    name: String,
+    when: String,
+    tenant: String,
+    template: String,
+    min_humans: usize,
+    classification: String,
+    state: String,
+    agenda: Vec<StoredAgendaItem>,
+    agenda_skipped: usize,
+    /// Hex, or absent while the meeting is still `scheduled`.
+    agenda_hash: Option<String>,
+    agenda_source: String,
+    attendance: Vec<StoredAttendee>,
+    minutes: Vec<String>,
+    decisions: Vec<StoredMinuteDecision>,
+    dissent: Vec<StoredDissent>,
+    ratified_by: Option<String>,
+    ratified_at: Option<u64>,
+    /// The chain length when the meeting opened — the lower bound of the
+    /// window its minutes are composed from.
+    opened_at_index: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct StoredAgendaItem {
+    n: u32,
+    text: String,
+    src: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct StoredAttendee {
+    name: String,
+    attested: bool,
+    agent: Option<String>,
+    note: Option<String>,
+    clearance: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct StoredMinuteDecision {
+    id: String,
+    text: String,
+    link: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+struct StoredDissent {
+    who: String,
+    text: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -667,6 +731,226 @@ impl EvidenceStore {
             })
             .collect())
     }
+
+    // ---- the workspace (WP-S5.7) -------------------------------------
+
+    /// The directory this tenant's `.agentile` artifacts live in.
+    ///
+    /// A tenant-level fact, not a per-meeting one: the same workspace feeds
+    /// every agenda AND every standup brief, so storing it on one meeting
+    /// would leave briefs guessing which meeting to ask.
+    pub fn save_workspace(&self, tenant: &str, workspace: &str) -> Result<(), StoreError> {
+        let dir = self.ensure_tenant_dir(tenant)?;
+        let body = serde_json::json!({ "workspace": workspace }).to_string();
+        write_atomic(&dir.join("workspace.json"), body.as_bytes())
+    }
+
+    pub fn load_workspace(&self, tenant: &str) -> Option<String> {
+        let raw = fs::read_to_string(self.tenant_dir(tenant).join("workspace.json")).ok()?;
+        let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+        v.get("workspace")?.as_str().map(str::to_string)
+    }
+
+    // ---- meetings (WP-S5.3) ------------------------------------------
+
+    pub fn save_meetings(
+        &self,
+        tenant: &str,
+        meetings: &[MeetingRecord],
+    ) -> Result<(), StoreError> {
+        let dir = self.ensure_tenant_dir(tenant)?;
+        let stored: Vec<StoredMeeting> = meetings.iter().map(store_meeting).collect();
+        let body = serde_json::to_vec(&stored).map_err(|e| StoreError::Io(e.to_string()))?;
+        write_atomic(&dir.join("meetings.json"), &body)
+    }
+
+    pub fn load_meetings(&self, tenant: &str) -> Result<Vec<MeetingRecord>, StoreError> {
+        let path = self.tenant_dir(tenant).join("meetings.json");
+        let Ok(raw) = fs::read_to_string(&path) else {
+            return Ok(Vec::new());
+        };
+        let stored: Vec<StoredMeeting> =
+            serde_json::from_str(&raw).map_err(|e| StoreError::Corrupt {
+                line: 0,
+                detail: format!("meetings.json does not parse ({e})"),
+            })?;
+        stored.into_iter().map(restore_meeting).collect()
+    }
+}
+
+/// A meeting plus the two facts the domain crate deliberately does not hold:
+/// where its agenda came from, and the chain index it opened at.
+#[derive(Clone, Debug)]
+pub struct MeetingRecord {
+    pub meeting: Meeting,
+    /// The Rule 11 provenance line for the agenda.
+    pub agenda_source: String,
+    /// Chain length when the meeting opened — the lower bound of the window
+    /// its minutes are composed from.
+    pub opened_at_index: Option<u64>,
+}
+
+fn store_meeting(r: &MeetingRecord) -> StoredMeeting {
+    let m = &r.meeting;
+    StoredMeeting {
+        id: m.id.clone(),
+        name: m.name.clone(),
+        when: m.when.clone(),
+        tenant: m.tenant.clone(),
+        template: m.template.name.clone(),
+        min_humans: m.template.min_humans,
+        classification: classification_str(m.classification).to_string(),
+        state: m.state().as_str().to_string(),
+        agenda: m
+            .agenda
+            .items()
+            .iter()
+            .map(|i| StoredAgendaItem {
+                n: i.n,
+                text: i.text.clone(),
+                src: i.src.clone(),
+            })
+            .collect(),
+        agenda_skipped: m.agenda.skipped,
+        agenda_hash: m.agenda_hash().map(|h| hex_encode(&h)),
+        agenda_source: r.agenda_source.clone(),
+        attendance: m
+            .attendance
+            .iter()
+            .map(|a| StoredAttendee {
+                name: a.name.clone(),
+                attested: a.attested,
+                agent: a.agent.clone(),
+                note: a.note.clone(),
+                clearance: a.clearance.map(|c| classification_str(c).to_string()),
+            })
+            .collect(),
+        minutes: m.minutes.clone(),
+        decisions: m
+            .decisions
+            .iter()
+            .map(|d| StoredMinuteDecision {
+                id: d.id.clone(),
+                text: d.text.clone(),
+                link: d.link,
+            })
+            .collect(),
+        dissent: m
+            .dissent
+            .iter()
+            .map(|d| StoredDissent {
+                who: d.who.clone(),
+                text: d.text.clone(),
+            })
+            .collect(),
+        ratified_by: m.ratified_by.clone(),
+        ratified_at: m.ratified_at,
+        opened_at_index: r.opened_at_index,
+    }
+}
+
+fn restore_meeting(s: StoredMeeting) -> Result<MeetingRecord, StoreError> {
+    let classification =
+        classification_from_str(&s.classification).ok_or_else(|| StoreError::Corrupt {
+            line: 0,
+            detail: format!("meeting {} has unknown classification", s.id),
+        })?;
+    let state = MeetingState::from_wire(&s.state).ok_or_else(|| StoreError::Corrupt {
+        line: 0,
+        detail: format!("meeting {} has unknown state {}", s.id, s.state),
+    })?;
+
+    let mut m = Meeting::schedule(
+        s.id.clone(),
+        s.name,
+        s.when,
+        s.tenant,
+        Template::new(s.template, s.min_humans),
+        classification,
+    );
+
+    // Rebuild the agenda BEFORE restoring the state, because `add_agenda_item`
+    // refuses once a hash is present — the freeze is real even on reload.
+    for item in &s.agenda {
+        m.add_agenda_item(item.text.clone(), item.src.clone())
+            .map_err(|e| StoreError::Corrupt {
+                line: 0,
+                detail: format!("meeting {}: {e}", s.id),
+            })?;
+    }
+    m.agenda.skipped = s.agenda_skipped;
+
+    let agenda_hash = s.agenda_hash.as_ref().map(|hex| hex32(hex));
+
+    // A stored agenda whose items no longer hash to the stored frozen value has
+    // been edited on disk. Refusing to load it is the point: a ratified meeting
+    // whose agenda can be swapped underneath the signature is not evidence.
+    if let Some(expected) = agenda_hash {
+        if m.agenda.hash() != expected {
+            return Err(StoreError::Corrupt {
+                line: 0,
+                detail: format!(
+                    "meeting {}: the stored agenda does not match its frozen hash — \
+                     it was edited after the meeting opened",
+                    s.id
+                ),
+            });
+        }
+    }
+
+    for a in s.attendance {
+        let clearance = match &a.clearance {
+            Some(c) => Some(
+                classification_from_str(c).ok_or_else(|| StoreError::Corrupt {
+                    line: 0,
+                    detail: format!(
+                        "meeting {}: attendee {} has unknown clearance",
+                        s.id, a.name
+                    ),
+                })?,
+            ),
+            None => None,
+        };
+        let mut att = if let Some(vendor) = a.agent {
+            Attendee::agent(a.name, vendor)
+        } else {
+            Attendee::human(a.name)
+        };
+        att.attested = a.attested;
+        att.note = a.note;
+        att.clearance = clearance;
+        // Pushed directly rather than via `admit`: reloading is not admission,
+        // and re-running MR-4 here would reject a meeting that was legitimately
+        // held before someone's clearance changed.
+        m.attendance.push(att);
+    }
+
+    m.minutes = s.minutes;
+    m.decisions = s
+        .decisions
+        .into_iter()
+        .map(|d| MinuteDecision {
+            id: d.id,
+            text: d.text,
+            link: d.link,
+        })
+        .collect();
+    m.dissent = s
+        .dissent
+        .into_iter()
+        .map(|d| Dissent {
+            who: d.who,
+            text: d.text,
+        })
+        .collect();
+
+    m.restore(state, agenda_hash, s.ratified_by, s.ratified_at);
+
+    Ok(MeetingRecord {
+        meeting: m,
+        agenda_source: s.agenda_source,
+        opened_at_index: s.opened_at_index,
+    })
 }
 
 /// Write `bytes` to `path` so a crash leaves either the old file or the new one,
@@ -1008,5 +1292,90 @@ mod tests {
     fn hex_round_trips_a_params_hash() {
         let h = [0xab_u8; 32];
         assert_eq!(hex32(&hex_encode(&h)), h);
+    }
+
+    // ---- meetings (WP-S5.3) ------------------------------------------
+
+    fn ratified_meeting() -> MeetingRecord {
+        let mut m = Meeting::schedule(
+            "m-1",
+            "Weekly Standup",
+            "2026-07-23T09:00:00Z",
+            "citrate",
+            Template::new("Standup", 2),
+            Classification::Proprietary,
+        );
+        for who in ["R. Ortiz", "M. Okonkwo"] {
+            m.admit(
+                Attendee::human(who)
+                    .attested()
+                    .cleared_to(Classification::Cui),
+            )
+            .unwrap();
+        }
+        m.add_agenda_item("S5.1 — the meetings domain", "sprint-qrm-s5/SCOPE.md")
+            .unwrap();
+        m.open().unwrap();
+        m.close(vec!["Reports accepted.".into()]).unwrap();
+        let h = m.content_hash();
+        m.ratify("R. Ortiz", 1_753_460_000, h).unwrap();
+        MeetingRecord {
+            meeting: m,
+            agenda_source: "generated from sprint-qrm-s5".into(),
+            opened_at_index: Some(3),
+        }
+    }
+
+    #[test]
+    fn a_ratified_meeting_reloads_ratified_and_still_frozen() {
+        let root = TempRoot::new();
+        let store = root.store();
+        let rec = ratified_meeting();
+        let signed = rec.meeting.content_hash();
+
+        store.save_meetings("acme", &[rec]).unwrap();
+        let back = store.load_meetings("acme").unwrap();
+
+        assert_eq!(back.len(), 1);
+        let m = &back[0].meeting;
+        assert_eq!(m.state(), MeetingState::Ratified);
+        assert_eq!(m.ratified_by.as_deref(), Some("R. Ortiz"));
+        assert_eq!(back[0].opened_at_index, Some(3));
+        assert_eq!(back[0].agenda_source, "generated from sprint-qrm-s5");
+        // The hash the human signed survives the round trip — otherwise the
+        // signature commits to something the reloaded app cannot reproduce.
+        assert_eq!(m.content_hash(), signed);
+        // And the agenda is still frozen: reloading is not a way back in.
+        assert!(m.agenda_hash().is_some());
+    }
+
+    #[test]
+    fn a_meeting_whose_agenda_was_edited_on_disk_refuses_to_load() {
+        // The attack this exists for: swap the agenda under a ratified
+        // meeting, and the signature would appear to cover text nobody signed.
+        let root = TempRoot::new();
+        let store = root.store();
+        store.save_meetings("acme", &[ratified_meeting()]).unwrap();
+
+        let path = store.tenant_dir("acme").join("meetings.json");
+        let raw = fs::read_to_string(&path).unwrap();
+        let tampered = raw.replace(
+            "S5.1 — the meetings domain",
+            "S5.1 — something else entirely",
+        );
+        assert_ne!(raw, tampered, "the test must actually change the agenda");
+        fs::write(&path, tampered).unwrap();
+
+        let err = store.load_meetings("acme").unwrap_err();
+        assert!(
+            format!("{err}").contains("does not match its frozen hash"),
+            "expected a frozen-hash mismatch, got: {err}"
+        );
+    }
+
+    #[test]
+    fn an_empty_tenant_has_no_meetings_rather_than_an_error() {
+        let root = TempRoot::new();
+        assert!(root.store().load_meetings("never-seen").unwrap().is_empty());
     }
 }

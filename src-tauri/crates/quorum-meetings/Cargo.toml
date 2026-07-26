@@ -1,0 +1,19 @@
+# WP-S5 core — a meeting as a governed object: an agenda frozen at open under a
+# BLAKE3 hash, attendance that is attested rather than asserted, MR-4
+# classification monotonicity, and a ratification that is a signature over a
+# hash. Pure domain logic; the store, the ceremony and the chain live outside.
+[package]
+name = "quorum-meetings"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "citrate-quorum meetings domain — agenda freeze + agendaHash, MR-4 classification monotonicity, quorum, and the ratification state machine."
+
+[dependencies]
+quorum-tenancy = { path = "../quorum-tenancy" }
+blake3 = "1"
+
+[lints]
+workspace = true

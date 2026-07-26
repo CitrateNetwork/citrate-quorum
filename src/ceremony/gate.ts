@@ -104,3 +104,35 @@ export async function runGate(
   }
   return { open: true, gate };
 }
+
+/**
+ * What the ceremony is allowed to say once it settles.
+ *
+ * Pulled out of the dialog and made pure because this exact sentence was
+ * wrong: the fallback asserted "recorded against your name in this tenant's
+ * evidence chain" for every intent, including human-origin ones that skip the
+ * agent gate and therefore record nothing at that moment. The chain was
+ * provably empty while the claim was on screen.
+ *
+ * The rule, in precedence order:
+ *  1. the commit told us what it did — use its words;
+ *  2. the gate recorded a decision — name the chain head it produced;
+ *  3. there was a commit but it returned nothing — a write did happen;
+ *  4. nothing was written — say exactly that, and do not imply otherwise.
+ */
+export function settledNote(input: {
+  commitNote?: string | void;
+  chainHead?: string;
+  hasCommit: boolean;
+}): string {
+  if (typeof input.commitNote === "string" && input.commitNote.length > 0) {
+    return input.commitNote;
+  }
+  if (input.chainHead) {
+    return `decision recorded · chain head ${input.chainHead.slice(0, 10)}…`;
+  }
+  if (input.hasCommit) {
+    return "committed — recorded against your name in this tenant's evidence chain";
+  }
+  return "approved by you · this ceremony recorded nothing — the action it authorises is written by whatever you do next";
+}

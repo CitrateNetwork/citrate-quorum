@@ -8,3 +8,6 @@ dist/
 !.env.example
 src-tauri/gen/
 target/
+
+# Python bytecode from the verification scripts.
+__pycache__/

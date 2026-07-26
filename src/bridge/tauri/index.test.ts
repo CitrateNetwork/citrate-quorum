@@ -231,3 +231,119 @@ describe("tauri adapter — tenant scope + ledger", () => {
     }
   });
 });
+
+describe("tauri adapter — meetings (QRM-S5)", () => {
+  beforeEach(() => {
+    invoke.mockReset();
+  });
+
+  const detail = (over: Record<string, unknown> = {}) => ({
+    id: "m-1",
+    name: "Weekly Standup",
+    when: "2026-07-23T09:00:00Z",
+    tenant: "acme",
+    classification: "Proprietary",
+    state: "ratified",
+    agenda_hash: "0xabc123",
+    agenda_source: "generated from sprint-qrm-s5",
+    agenda_skipped: 0,
+    ratified: true,
+    ratified_by: "R. Ortiz",
+    ratified_at: 1753460000000,
+    content_hash: "0xdeadbeef",
+    anchor: { anchored: false, reference: null, reason: "not anchored — no chain address book" },
+    quorate: true,
+    min_humans: 2,
+    attested_humans: 2,
+    agenda: [{ n: 1, text: "S5.1", src: "sprint-qrm-s5/SCOPE.md" }],
+    attendance: [{ name: "R. Ortiz", attested: true, agent: null, note: null }],
+    minutes: ["Reports accepted."],
+    decisions: [{ id: "D-1", text: "allow — ci.rerun", link: true }],
+    dissent: [],
+    ...over,
+  });
+
+  it("carries the unavailable anchor REASON, so unanchored never reads as anchored", async () => {
+    // The R-A risk: `anchor` left undefined simply does not render, and a
+    // ratified-but-unanchored meeting then looks identical to an anchored one.
+    invoke.mockResolvedValue(detail());
+    const d = await createTauriBridge().meetings.get("m-1");
+    expect(d.anchor).toBe("not anchored — no chain address book");
+    expect(d.ratified).toBe(true);
+  });
+
+  it("prefers the reference once something actually anchors", async () => {
+    invoke.mockResolvedValue(
+      detail({ anchor: { anchored: true, reference: "block 1284067 · root 0x66d1", reason: "" } }),
+    );
+    const d = await createTauriBridge().meetings.get("m-1");
+    expect(d.anchor).toBe("block 1284067 · root 0x66d1");
+  });
+
+  it("says an unfrozen agenda is unfrozen rather than rendering a blank hash", async () => {
+    invoke.mockResolvedValue(detail({ agenda_hash: null, state: "scheduled", ratified: false }));
+    const d = await createTauriBridge().meetings.get("m-1");
+    expect(d.agendaHash).toBe("not frozen — the agenda is still open");
+  });
+
+  it("maps the register without naming a tenant (Rule 6)", async () => {
+    invoke.mockResolvedValue([
+      {
+        id: "m-1",
+        name: "Weekly Standup",
+        when: "2026-07-23T09:00:00Z",
+        tpl: "Standup",
+        humans: 2,
+        agents: 3,
+        classification: "Proprietary",
+        state: "ratified",
+      },
+    ]);
+    const rows = await createTauriBridge().meetings.list();
+    expect(rows[0]).toMatchObject({ id: "m-1", humans: 2, agents: 3, state: "ratified" });
+    // No argument at all — the tenant scope is backend-owned (Rule 6).
+    expect(invoke).toHaveBeenCalledWith("meetings_list");
+  });
+
+  it("hands ratify the exact hash it was given", async () => {
+    invoke.mockResolvedValue({ decision_id: 4 });
+    await createTauriBridge().meetings.ratify("m-1", "R. Ortiz", "0xdeadbeef");
+    expect(invoke).toHaveBeenCalledWith("meeting_ratify", {
+      id: "m-1",
+      by: "R. Ortiz",
+      expectHash: "0xdeadbeef",
+    });
+  });
+});
+
+describe("tauri adapter — journals + briefs (QRM-S5.7)", () => {
+  beforeEach(() => {
+    invoke.mockReset();
+  });
+
+  it("passes an undecided authorship through as undefined, never false", async () => {
+    // Rust sends `null` for "we did not decide". Coercing that to `false`
+    // would render an agent as a human in an attributed record.
+    invoke.mockResolvedValue({
+      entries: [
+        { id: "j1", date: "2026-07-25", who: "Claude Opus 4.8, directed by @SaulBuilds", kind: "journal", text: "Running it is the test", human: null },
+      ],
+      source: "6 journals + 4 retros",
+    });
+    const [e] = await createTauriBridge().journal.list();
+    expect(e.human).toBeUndefined();
+    expect(e.who).toBe("Claude Opus 4.8, directed by @SaulBuilds");
+  });
+
+  it("maps a brief's sections in order", async () => {
+    invoke.mockResolvedValue({
+      agent: "sbt-41",
+      meeting: "Weekly Standup",
+      sections: [["Waiting on a human", "nothing pending"], ["Since last time", "3 entries"]],
+      source: "6 journals + 4 retros",
+    });
+    const b = await createTauriBridge().journal.brief("sbt-41", "m-1");
+    expect(b.sections[0][0]).toBe("Waiting on a human");
+    expect(invoke).toHaveBeenCalledWith("journal_brief", { agent: "sbt-41", meeting: "m-1" });
+  });
+});

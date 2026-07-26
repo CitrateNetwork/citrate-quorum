@@ -680,6 +680,7 @@ dependencies = [
  "quorum-audit",
  "quorum-clearance",
  "quorum-license",
+ "quorum-meetings",
  "quorum-policy",
  "quorum-rbac",
  "quorum-session",
@@ -3318,6 +3319,14 @@ dependencies = [
 [[package]]
 name = "quorum-license"
 version = "0.0.0"
+
+[[package]]
+name = "quorum-meetings"
+version = "0.0.0"
+dependencies = [
+ "blake3",
+ "quorum-tenancy",
+]
 
 [[package]]
 name = "quorum-policy"

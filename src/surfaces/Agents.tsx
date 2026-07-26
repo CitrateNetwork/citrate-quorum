@@ -122,13 +122,18 @@ export function Agents() {
       // Revoking a capability always requires a human at HIC-1 (Rule 5).
       action: { actionClass: "grant.revoke", classification: "Proprietary", agent: "user", mandatoryHic1: true },
       rows: [{ k: "Grant", v: `${g.id} · ${g.classes}` }, { k: "Agent", v: `${sel.name} · ${orDash(sel.sbt)}` }, { k: "Scope", v: g.scope }, { k: "Effect", v: "immediate — the capability is gone at the next checkpoint" }],
+      // This used to run after the ceremony resolved, with `.catch(() => {})`.
+      // A revocation that failed was discarded in silence while the operator
+      // read "On record" and "the capability is gone" — the grant stayed live.
+      // The named operator, not a form field that happens to be filled in:
+      // a revocation attributed to a placeholder is not evidence of who did it.
+      commit: async () => {
+        await bridge.agents.revoke(sel.id, g.id, operator);
+        return `grant ${g.id} revoked`;
+      },
     });
     if (r.outcome === "settled") {
       setRevoked((s) => new Set(s).add(g.id));
-      // The named operator, not a form field that happens to be filled in:
-      // "operator" as a principal is a placeholder, and a revocation attributed
-      // to a placeholder is not evidence of who did it.
-      await bridge.agents.revoke(sel.id, g.id, operator).catch(() => {});
       setRefresh((n) => n + 1);
     }
   };
@@ -139,12 +144,21 @@ export function Agents() {
       kind: "revoke", title: `Revoke ALL grants — ${sel.name}`, origin: "user",
       action: { actionClass: "grant.revoke-all", classification: "Proprietary", agent: "user", mandatoryHic1: true },
       rows: [{ k: "Agent", v: `${sel.name} · ${orDash(sel.sbt)}` }, { k: "Grants revoked", v: `${liveGrants.length} live grants` }, { k: "Keeps", v: "identity + history" }, { k: "Loses", v: "every capability" }, { k: "Running actions", v: "abort at the next checkpoint (<25s)" }],
+      // Same fix as revokeGrant, and it matters more here: a kill switch that
+      // silently drops half the revocations is the worst possible control.
+      // The FIRST failure aborts, so the count in the note is the count that
+      // actually happened.
+      commit: async () => {
+        let done = 0;
+        for (const g of liveGrants) {
+          await bridge.agents.revoke(sel.id, g.id, operator);
+          done += 1;
+        }
+        return `${done} grant(s) revoked`;
+      },
     });
     if (r.outcome === "settled") {
       setRevoked(new Set(liveGrants.map((g) => g.id)));
-      for (const g of liveGrants) {
-        await bridge.agents.revoke(sel.id, g.id, operator).catch(() => {});
-      }
       setRefresh((n) => n + 1);
     }
   };
@@ -180,25 +194,27 @@ export function Agents() {
         { k: "Expires", v: `${form.days} days` },
         { k: "Issued by", v: form.principal },
       ],
+      // The grant is written inside the ceremony, so a refusal (a duplicate
+      // id, a degraded store) returns the dialog to review with the reason
+      // rather than surfacing behind a modal that already said "On record".
+      commit: async () => {
+        await bridge.agents.issue({
+          id: grantId,
+          agent,
+          principal: form.principal.trim(),
+          tenantScope: form.scope.trim(),
+          actionClasses: classes,
+          classificationCeiling: form.ceiling,
+          budgetUnits: form.budget,
+          expiresAtMs,
+          hic: form.hic,
+        });
+        return `grant ${grantId} issued to ${agent}`;
+      },
     });
     if (r.outcome !== "settled") return;
-    try {
-      await bridge.agents.issue({
-        id: grantId,
-        agent,
-        principal: form.principal.trim(),
-        tenantScope: form.scope.trim(),
-        actionClasses: classes,
-        classificationCeiling: form.ceiling,
-        budgetUnits: form.budget,
-        expiresAtMs,
-        hic: form.hic,
-      });
-      setFormOpen(false);
-      setRefresh((n) => n + 1);
-    } catch (e) {
-      setFormError(e instanceof Error ? e.message : String(e));
-    }
+    setFormOpen(false);
+    setRefresh((n) => n + 1);
   };
 
   // A grant revoked in an earlier session comes back from the backend with

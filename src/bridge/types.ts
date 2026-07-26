@@ -222,6 +222,46 @@ export interface Meeting {
   classification: Classification;
   state: MeetingState;
 }
+/**
+ * A meeting template. `minHumans` is the quorum rule the backend enforces at
+ * close — it is data, not a caption, so the chips a user picks from and the
+ * rule that decides quorate/inquorate cannot drift apart.
+ */
+export interface MeetingTemplate {
+  name: string;
+  minHumans: number;
+  /** The classification this template defaults to. */
+  classification: Classification;
+  /** What the template means, for the operator choosing it. */
+  note: string;
+}
+
+export interface MeetingSchedule {
+  id: string;
+  name: string;
+  /** RFC3339. The backend stores it verbatim and never parses it. */
+  when: string;
+  template: string;
+  minHumans: number;
+  classification: Classification;
+  /**
+   * Directory whose `.agentile/sprints/active/{'*'}/SCOPE.md` files become the
+   * agenda. Omitted means an empty agenda that says it was not generated —
+   * never invented items.
+   */
+  workspace?: string;
+}
+
+export interface MeetingAdmit {
+  id: string;
+  name: string;
+  /** Set for an agent; omitted for a human. Only humans count toward quorum. */
+  vendor?: string;
+  attested: boolean;
+  /** Unknown clearance fails closed to Public (MR-4). */
+  clearance?: Classification;
+}
+
 export interface MeetingDetail {
   id: string;
   name: string;
@@ -557,6 +597,23 @@ export interface SignatureIntent {
   /** Undecodable calldata forces an explicit ack before Sign enables. */
   rawUnverified?: boolean;
   cost?: string;
+  /**
+   * The write this signature authorises, run BY the ceremony.
+   *
+   * Callers used to await `request()` and then perform the write themselves.
+   * But `request()` resolves when the operator DISMISSES the dialog, and the
+   * dialog reaches "On record" well before that — so the ceremony announced a
+   * record that did not exist yet, and a write that then failed left the
+   * operator believing it had succeeded. One caller even swallowed the error.
+   *
+   * Supplying `commit` closes that window: the ceremony awaits it between
+   * signing and settling, a rejection returns the dialog to review with the
+   * reason shown, and only a successful commit is allowed to say "on record".
+   * Return a string to become the settled note (e.g. a chain head).
+   *
+   * This mirrors what answering an escalation already does — see `onSign`.
+   */
+  commit?: () => Promise<string | void>;
 }
 
 /** A stream subscription: register a listener, get an unsubscribe fn (§6.4). */
