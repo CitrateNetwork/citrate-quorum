@@ -3,7 +3,7 @@
 // ratified, templates) and the detail document (agenda frozen at open, minutes,
 // dissent first-class, attendance attested, decisions) with the Ratify ceremony.
 // Reads bridge.meetings.list()/get(); ratify routes through useCeremony().
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { bridge } from "../bridge";
 import { DomainErrorPlate, useDomain } from "../components/DomainState";
 import type { Classification, Meeting, MeetingDetail, MeetingTemplate } from "../bridge";
@@ -75,10 +75,17 @@ export function Meetings() {
     bridge.meetings.get(m.id).then(setDetail).catch(() => {});
   };
 
-  /** Re-read the register and, if a meeting is open, its detail + state. */
+  /**
+   * Re-read the register and, if a meeting is open, its detail + state.
+   *
+   * `meetings` is derived from `primary`, not mirrored into local state (#24),
+   * so the register is refreshed by re-running the read rather than by
+   * assigning to it. The rows are also fetched directly here because the
+   * selected meeting's new state is needed synchronously.
+   */
   const refresh = async (id?: string) => {
     const rows = await bridge.meetings.list();
-    setMeetings(rows);
+    primary.retry();
     if (id) {
       const row = rows.find((r) => r.id === id);
       if (row) setSelectedState(row.state);
