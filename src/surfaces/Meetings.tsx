@@ -5,6 +5,7 @@
 // Reads bridge.meetings.list()/get(); ratify routes through useCeremony().
 import { useEffect, useState } from "react";
 import { bridge } from "../bridge";
+import { meetingRegisterIntent } from "../bridge/tauri/commands";
 import { DomainErrorPlate, useDomain } from "../components/DomainState";
 import type { Classification, Meeting, MeetingDetail, MeetingTemplate } from "../bridge";
 import { useCeremony } from "../ceremony/Ceremony";
@@ -222,14 +223,28 @@ export function Meetings() {
         // anything yet — AnchorRegistry is not resolvable in this build — and a
         // ceremony that misstates its own effect is the worst place to be
         // imprecise.
-        { k: "Effect", v: "records your signature over the hash above, in this tenant's evidence chain. It does NOT anchor on chain — see the anchor row." },
+        { k: "Effect", v: "records your signature over the hash above in this tenant's evidence chain, then registers that hash in MeetingRegistry on chain 40204. Signing needs an unlocked vault; if the chain write fails the ratification still stands and the anchor row will say so." },
       ],
       // The write runs INSIDE the ceremony, before it can claim to be on
       // record. Doing it after `request()` resolved meant it ran on dismiss —
       // after the dialog had already said the record existed.
       commit: async () => {
         await bridge.meetings.ratify(detail.id, operator, contentHash);
-        return "ratified · minutes hash-chained locally, not anchored on chain";
+        return "ratified · minutes hash-chained locally";
+      },
+      // After the local ratification succeeds, register the commitment in
+      // MeetingRegistry. `prepare` builds the tx as a PENDING kit ceremony and
+      // signs nothing; the ceremony's `sign_and_broadcast` is what signs.
+      //
+      // Only a ratified meeting can be registered, so this necessarily runs
+      // after `commit` — and if it fails, the meeting stays ratified locally
+      // and the anchor row says so.
+      chainTx: {
+        label: "registered in MeetingRegistry",
+        prepare: async () => {
+          const v = await meetingRegisterIntent(detail.id);
+          return { id: v.id, rawUnverified: v.rawUnverified };
+        },
       },
     });
     if (r.outcome !== "settled") return;
@@ -418,7 +433,7 @@ export function Meetings() {
             )}
             {isUnratified && (
               <div style={{ display: "flex", alignItems: "center", gap: 12, border: "1px solid var(--warn)", background: "var(--warn-bg)", padding: "12px 14px" }}>
-                <span style={{ fontSize: 13, flex: 1 }}>These minutes are a draft. Ratifying records your signature over their hash in this tenant's evidence chain, which a board member can verify offline. It does not yet register them in MeetingRegistry — the contract is deployed and the anchor row reads it, but the write is not wired.</span>
+                <span style={{ fontSize: 13, flex: 1 }}>These minutes are a draft. Ratifying records your signature over their hash in this tenant's evidence chain, which a board member can verify offline. It then registers that hash in MeetingRegistry on chain, so a board member can verify it against the chain rather than against us.</span>
                 <button className="btn btn-primary" onClick={ratify}>Ratify — sign</button>
               </div>
             )}

@@ -82,7 +82,7 @@ pub enum AnchorState {
 /// Ethereum keccak256 (NOT SHA3-256 — `sha3::Keccak256` is the pre-NIST
 /// padding Ethereum uses; `sha3::Sha3_256` would silently produce different
 /// selectors and every call would hit a non-existent function).
-fn keccak256(bytes: &[u8]) -> [u8; 32] {
+pub fn keccak256(bytes: &[u8]) -> [u8; 32] {
     use sha3::{Digest, Keccak256};
     let mut h = Keccak256::new();
     h.update(bytes);
@@ -112,6 +112,53 @@ fn encode(sig: &str, words: &[[u8; 32]]) -> String {
     out.extend_from_slice(&selector(sig));
     for w in words {
         out.extend_from_slice(w);
+    }
+    hex_of(&out)
+}
+
+/// ABI-encode `MeetingRegistry.register(bytes32,bytes32,bytes32,bytes32,uint64,string)`.
+///
+/// The `string cid` makes the call DYNAMIC: the head carries six words (four
+/// bytes32, the uint64 left-padded, and an OFFSET to the cid) and the tail
+/// carries the cid's length followed by its bytes padded to 32. Getting the
+/// offset wrong produces calldata that still decodes — into different values —
+/// so there is a test pinning the exact byte layout.
+pub fn encode_register(
+    tenant: [u8; 32],
+    meeting_id: [u8; 32],
+    agenda_hash: [u8; 32],
+    minutes_hash: [u8; 32],
+    ratified_at: u64,
+    cid: &str,
+) -> String {
+    let mut out = Vec::new();
+    out.extend_from_slice(&selector(
+        "register(bytes32,bytes32,bytes32,bytes32,uint64,string)",
+    ));
+    out.extend_from_slice(&tenant);
+    out.extend_from_slice(&meeting_id);
+    out.extend_from_slice(&agenda_hash);
+    out.extend_from_slice(&minutes_hash);
+
+    let mut ts = [0u8; 32];
+    ts[24..].copy_from_slice(&ratified_at.to_be_bytes());
+    out.extend_from_slice(&ts);
+
+    // Offset to the cid, measured from the START of the argument head (i.e.
+    // after the selector): six words precede it.
+    let mut off = [0u8; 32];
+    off[24..].copy_from_slice(&(6u64 * 32).to_be_bytes());
+    out.extend_from_slice(&off);
+
+    let bytes = cid.as_bytes();
+    let mut len = [0u8; 32];
+    len[24..].copy_from_slice(&(bytes.len() as u64).to_be_bytes());
+    out.extend_from_slice(&len);
+    if !bytes.is_empty() {
+        out.extend_from_slice(bytes);
+        let pad = (32 - (bytes.len() % 32)) % 32;
+        // `repeat_n` is 1.82; this workspace pins MSRV 1.80.
+        out.extend(std::iter::repeat(0u8).take(pad));
     }
     hex_of(&out)
 }
@@ -206,6 +253,36 @@ pub fn check(
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn register_calldata_has_the_exact_dynamic_layout() {
+        let d = encode_register([0x11; 32], [0x22; 32], [0x33; 32], [0x44; 32], 7, "");
+        // 0x + selector(4) + 6 head words + 1 length word, all hex.
+        assert_eq!(d.len(), 2 + 8 + (7 * 64), "unexpected calldata length: {d}");
+        let body = &d[10..]; // past "0x" + selector
+                             // word 5 is the uint64 timestamp, right-aligned
+        let ts_word = &body[4 * 64..5 * 64];
+        assert!(
+            ts_word.ends_with("07"),
+            "timestamp not right-aligned: {ts_word}"
+        );
+        // word 6 is the offset to the cid = 6 * 32 = 0xc0
+        let off_word = &body[5 * 64..6 * 64];
+        assert!(
+            off_word.ends_with("c0"),
+            "cid offset must be 0xc0: {off_word}"
+        );
+        // word 7 is the cid length = 0
+        assert_eq!(&body[6 * 64..7 * 64], &"0".repeat(64));
+    }
+
+    #[test]
+    fn a_non_empty_cid_is_length_prefixed_and_padded() {
+        let d = encode_register([0; 32], [0; 32], [0; 32], [1; 32], 0, "bafy104e");
+        // adds one more word of padded data
+        assert_eq!(d.len(), 2 + 8 + (8 * 64));
+        assert!(d.ends_with(&"0".repeat(48)), "cid must be right-padded");
+    }
 
     #[test]
     fn selectors_match_the_abi_signatures() {

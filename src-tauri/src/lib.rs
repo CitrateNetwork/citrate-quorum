@@ -196,6 +196,7 @@ pub fn run() {
             backend::meeting_content_hash,
             backend::meeting_ratify,
             backend::meeting_anchor,
+            backend::meeting_register_intent,
             backend::journal_list,
             backend::journal_brief,
             backend::ledger_records,
