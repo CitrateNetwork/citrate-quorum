@@ -39,6 +39,10 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
 
   useEffect(() => {
     if (phase !== "resolve") return;
+    // Deliberate: re-entering the resolve phase must clear the tick marks
+    // before the real attempt re-runs. A green check is a claim that the step
+    // happened (Rule 1), so a stale one from the previous attempt would lie.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- see above
     setChecks(0);
     let cancelled = false;
     const timers: ReturnType<typeof setTimeout>[] = [];

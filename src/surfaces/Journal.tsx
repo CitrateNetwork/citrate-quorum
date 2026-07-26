@@ -5,10 +5,9 @@
 import { useEffect, useState } from "react";
 import { bridge } from "../bridge";
 import { DomainErrorPlate, useDomain } from "../components/DomainState";
-import type { JournalEntry, StandupBrief } from "../bridge";
+import type { StandupBrief } from "../bridge";
 
 export function Journal() {
-  const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [brief, setBrief] = useState<StandupBrief | null>(null);
   const [briefNote, setBriefNote] = useState("");
 
@@ -42,9 +41,8 @@ export function Journal() {
   // A read that cannot succeed must say so and offer a retry, not sit in a
   // loading state forever.
   const primary = useDomain(() => bridge.journal.list(), "journal.list()");
-  useEffect(() => {
-    if (primary.state.status === "ready") setEntries(primary.state.data);
-  }, [primary.state]);
+  // Derived, not mirrored (see Agents.tsx).
+  const entries = primary.state.status === "ready" ? primary.state.data : [];
   if (primary.state.status === "error") {
     return (
       <div style={{ padding: 18 }}>

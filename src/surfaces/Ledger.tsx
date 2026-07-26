@@ -65,7 +65,11 @@ export function Ledger() {
   // A read that cannot succeed must say so and offer a retry, not sit in a
   // loading state forever.
   const primary = useDomain(() => bridge.ledger.query(), "ledger.query()");
+  // Deliberate, unlike the other surfaces: `rows` is SEEDED from the query and
+  // then appended to by the live decision stream above, so it has two writers
+  // and cannot be a derived constant.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- see above
     if (primary.state.status === "ready") setRows(primary.state.data);
   }, [primary.state]);
 

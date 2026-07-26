@@ -6,7 +6,7 @@
 import { useEffect, useState } from "react";
 import { bridge } from "../bridge";
 import { DomainErrorPlate, useDomain } from "../components/DomainState";
-import type { Block, LogLine, NodePeer, Session } from "../bridge";
+import type { Block, LogLine, Session } from "../bridge";
 
 const LVL_COLOR: Record<string, string> = { INFO: "var(--ok)", WARN: "var(--warn)", DEBUG: "var(--tx-3)", ERROR: "var(--danger)" };
 
@@ -14,7 +14,6 @@ export function Node() {
   const [session, setSession] = useState<Session | null>(null);
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [logs, setLogs] = useState<LogLine[]>([]);
-  const [peers, setPeers] = useState<NodePeer[]>([]);
   const [sel, setSel] = useState<Block | null>(null);
   const [lvl, setLvl] = useState<string>("all");
 
@@ -37,9 +36,8 @@ export function Node() {
   // A read that cannot succeed must say so and offer a retry, not sit in a
   // loading state forever.
   const primary = useDomain(() => bridge.node.peers(), "node.peers()");
-  useEffect(() => {
-    if (primary.state.status === "ready") setPeers(primary.state.data);
-  }, [primary.state]);
+  // Derived, not mirrored (see Agents.tsx).
+  const peers = primary.state.status === "ready" ? primary.state.data : [];
   if (primary.state.status === "error") {
     return (
       <div style={{ padding: 18 }}>

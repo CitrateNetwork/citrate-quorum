@@ -144,9 +144,16 @@ run "no fabricated stats in surfaces" "no src/surfaces yet (design prototype)" "
 # React hooks after a top-level conditional return crash at runtime only when
 # that return is taken — a path tsc and happy-path tests never walk. Two of the
 # S2D.4 honesty guards shipped with exactly that bug.
-run "no hooks after early return" "no src/ yet, or no python runner" \
-    "[ -d src ] && command -v ${PYRUN[0]}" \
-    "${PYRUN[@]}" "$ROOT/scripts/check_hooks_after_return.py"
+#
+# This replaced `scripts/check_hooks_after_return.py`, a hand-rolled tripwire
+# whose own docstring said to delete it the day eslint landed. eslint's
+# `react-hooks/rules-of-hooks` reasons about the real control-flow graph rather
+# than indentation, so it also catches the cases the tripwire structurally
+# could not: arrow-function components, hooks inside loops, and hooks after a
+# `&&` short-circuit. Both directions were negative-controlled before the swap.
+run "eslint (rules-of-hooks + deps)" "no node_modules yet" \
+    "[ -d node_modules ]" \
+    npm run --silent lint
 # Surfaces + components MUST use semantic tokens (var(--...)), never literal hex.
 # src/shell is excluded: the sidebar is fixed evergreen brand chrome that
 # hardcodes the same on-dark palette as citrate-core's Sidebar.tsx (no semantic

@@ -89,6 +89,10 @@ export function Dashboard({ onGo }: { onGo: (id: string) => void }) {
 
   useEffect(() => {
     if (ledger.state.status !== "ready") return;
+    // Deliberate: the ribbon is SEEDED from the query and then merged with the
+    // live stream below, so it has two writers and cannot be derived. This is
+    // the shape the PR #15 dedup fix depends on.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- see above
     setRibbon(ledger.state.data.slice(0, 8));
     let unsub: (() => void) | undefined;
     try {

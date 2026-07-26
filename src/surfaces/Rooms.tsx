@@ -6,7 +6,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { bridge } from "../bridge";
 import { DomainErrorPlate, useDomain } from "../components/DomainState";
-import type { Room, RoomEvent, RosterMember } from "../bridge";
+import type { RoomEvent, RosterMember } from "../bridge";
 import { VENDORS } from "../theme/vendors";
 
 const CLS_COLOR: Record<string, string> = { Public: "var(--z-silver)", Proprietary: "var(--info)", CUI: "var(--warn)", ITAR: "var(--danger)" };
@@ -34,7 +34,6 @@ function RosterRow({ m }: { m: RosterMember }) {
 
 export function Rooms() {
   const [view, setView] = useState<"list" | "consent" | "room">("list");
-  const [rooms, setRooms] = useState<Room[]>([]);
   const [events, setEvents] = useState<RoomEvent[]>([]);
   const [roster, setRoster] = useState<RosterMember[]>([]);
 
@@ -42,6 +41,10 @@ export function Rooms() {
 
   useEffect(() => {
     if (view !== "room") return;
+    // Deliberate: entering a room must clear the previous room's transcript
+    // before this room's stream is subscribed. Showing another room's events
+    // for even one frame would be a classification leak, not a cosmetic bug.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- see above
     setEvents([]);
     let unsub: (() => void) | undefined;
     try {
@@ -68,9 +71,8 @@ export function Rooms() {
   // A read that cannot succeed must say so and offer a retry, not sit in a
   // loading state forever.
   const primary = useDomain(() => bridge.rooms.list(), "rooms.list()");
-  useEffect(() => {
-    if (primary.state.status === "ready") setRooms(primary.state.data);
-  }, [primary.state]);
+  // Derived, not mirrored (see Agents.tsx).
+  const rooms = primary.state.status === "ready" ? primary.state.data : [];
   if (primary.state.status === "error") {
     return (
       <div style={{ padding: 18 }}>

@@ -93,7 +93,12 @@ export function Agents() {
   }, [refresh]);
 
   const primary = useDomain(() => bridge.agents.list(), "agents.list()");
+  // NOT derived like the other surfaces: `fleet` has a second writer — the
+  // refresh effect above re-reads it after an issue or a revoke, because the
+  // backend is the record and this surface must not show a grant it just
+  // revoked. Seeding local state from the read is therefore load-bearing here.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- see above
     if (primary.state.status === "ready") setFleet(primary.state.data);
   }, [primary.state]);
   if (primary.state.status === "error") {

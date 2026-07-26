@@ -46,6 +46,10 @@ export function Shell() {
   }, []);
 
   const go = (id: string) => {
+    // Writing `location.hash` IS the navigation — this is a DOM side effect in
+    // an event handler, not a mutation of React-owned state. The compiler's
+    // immutability rule cannot tell the two apart.
+    // eslint-disable-next-line react-hooks/immutability -- see above
     window.location.hash = `#/${id}`;
     setRoute(id);
   };
