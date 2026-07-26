@@ -7,12 +7,18 @@
 import { useState } from "react";
 import { bridge } from "../bridge";
 import { DomainErrorPlate, useDomain } from "../components/DomainState";
+import { VaultPanel } from "../wallet/VaultPanel";
+import { WalletSetup } from "../wallet/WalletSetup";
 
 type Tab = "tenancy" | "identity" | "models" | "license" | "compliance";
 const CLS_COLOR: Record<string, string> = { Public: "var(--z-silver)", Proprietary: "var(--info)", CUI: "var(--warn)", ITAR: "var(--danger)" };
 
 export function Settings({ onGo }: { onGo: (id: string) => void }) {
   const [tab, setTab] = useState<Tab>("tenancy");
+  // Bumped whenever the vault's state changes. Remounting WalletSetup is the
+  // simplest correct way to make it re-read the identity: a vault that just
+  // unlocked turns "no signing identity" into a real address.
+  const [vaultEpoch, setVaultEpoch] = useState(0);
 
   // Honest failure (S2D.4/§5.1): this surface's primary read is settings.tenancy().
   // A read that cannot succeed must say so and offer a retry, not sit in a
@@ -22,8 +28,14 @@ export function Settings({ onGo }: { onGo: (id: string) => void }) {
   const tenancy = primary.state.status === "ready" ? primary.state.data : [];
   if (primary.state.status === "error") {
     return (
-      <div style={{ padding: 18 }}>
+      <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 16 }}>
         <DomainErrorPlate source="settings.tenancy()" error={primary.state.error} onRetry={primary.retry} lands="It reads TenantHierarchy on chain and needs a live chain." />
+        {/* Neither the vault nor the signing identity depends on the tenancy
+            read. Hiding them behind that failure would make both unreachable in
+            exactly the state where an operator needs to set them up. The vault
+            comes first: nothing can be sealed into a locked one. */}
+        <VaultPanel onChange={() => setVaultEpoch((n) => n + 1)} />
+        <WalletSetup key={vaultEpoch} />
       </div>
     );
   }
@@ -59,6 +71,9 @@ export function Settings({ onGo }: { onGo: (id: string) => void }) {
       )}
 
       {tab === "identity" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <VaultPanel onChange={() => setVaultEpoch((n) => n + 1)} />
+        <WalletSetup key={vaultEpoch} />
         <div className="surface" style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ display: "grid", gridTemplateColumns: "190px 1fr", gap: "8px 12px", fontSize: 13 }}>
             {row("Federation", "Meridian Okta · OIDC · healthy")}
@@ -67,6 +82,7 @@ export function Settings({ onGo }: { onGo: (id: string) => void }) {
             {row("Deprovision SLA", "15 minutes")}
           </div>
           <div style={{ border: "1px solid var(--warn)", background: "var(--warn-bg)", padding: "10px 12px", fontSize: 12.5, lineHeight: 1.5 }}>Honest note: this SLA <em>is</em> the agent kill-switch SLA. When a human leaves, every grant issued under their authority suspends within the same window.</div>
+        </div>
         </div>
       )}
 

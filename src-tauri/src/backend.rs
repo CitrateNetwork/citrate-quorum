@@ -1980,6 +1980,94 @@ pub fn meeting_anchor(backend: Backend<'_>, id: String) -> Result<AnchorState, S
     Ok(anchor::check(&book, &tenant, &id, hex32(&content_hash)))
 }
 
+/// Build the on-chain minutes registration as a PENDING kit ceremony and return
+/// its id. **Signs nothing.**
+///
+/// This follows citrate-core's `wallet_send` exactly: the command assembles the
+/// transaction and stores it as a pending ceremony; the human then approves via
+/// `ceremony::sign_and_broadcast`, which is the only command that signs. The
+/// `from` is THIS vault's wallet address — the kit refuses to sign a tx whose
+/// `from` is not the address its key derives to, so a registration is always
+/// authored by the human who ratified.
+///
+/// Data source: `MeetingRegistry.register(...)`, contract resolved by name from
+/// the canonical address book at runtime.
+#[tauri::command]
+pub fn meeting_register_intent(
+    backend: Backend<'_>,
+    custody: tauri::State<'_, citrate_core_kit::custody::CustodyState>,
+    ceremony: tauri::State<'_, citrate_core_kit::ceremony::CeremonyState>,
+    id: String,
+) -> Result<citrate_core_kit::ceremony::CeremonyView, String> {
+    use citrate_core_kit::ceremony::{IntentKind, SignatureIntent};
+
+    // Everything the tx needs, gathered under the lock and then released.
+    let (tenant, agenda_hash, minutes_hash, ratified_at) = {
+        let b = lock(&backend)?;
+        let tenant = b.require_tenant()?;
+        let rec = b
+            .meetings
+            .get(tenant.as_str())
+            .and_then(|ms| ms.iter().find(|r| r.meeting.id == id))
+            .ok_or_else(|| format!("no meeting {id} in this tenant"))?;
+        // Only a ratified meeting has anything to register: the commitment IS
+        // the human signature over the minutes.
+        if rec.meeting.state() != MeetingState::Ratified {
+            return Err(format!(
+                "meeting {id} is {} — only a ratified meeting can be registered",
+                rec.meeting.state().as_str()
+            ));
+        }
+        (
+            tenant.as_str().to_string(),
+            rec.meeting.agenda_hash().unwrap_or([0u8; 32]),
+            rec.meeting.content_hash(),
+            rec.meeting.ratified_at.unwrap_or(0),
+        )
+    };
+
+    let book = AddressBook::load().map_err(|e| e.to_string())?;
+    let to = book
+        .get(anchor::MEETING_REGISTRY)
+        .ok_or_else(|| {
+            format!(
+                "{} is not in the address book ({}) — nothing to register against",
+                anchor::MEETING_REGISTRY,
+                book.describe()
+            )
+        })?
+        .to_string();
+
+    // The sender is THIS vault's wallet (public address only, never the key).
+    let wallet = citrate_core_kit::wallet::address(&custody.0).map_err(|e| e.to_string())?;
+
+    let data = anchor::encode_register(
+        anchor::keccak256(tenant.as_bytes()),
+        anchor::keccak256(id.as_bytes()),
+        agenda_hash,
+        minutes_hash,
+        ratified_at,
+        "",
+    );
+
+    let raw = serde_json::json!({
+        "from": wallet.address,
+        "to": to,
+        "value": "0x0",
+        "data": data,
+        "gas": format!("0x{:x}", 300_000u64),
+        "chainId": format!("0x{:x}", book.chain_id),
+    })
+    .to_string();
+
+    Ok(ceremony.0.request(SignatureIntent {
+        origin: "local-user".to_string(),
+        kind: IntentKind::Transaction,
+        chain_id: book.chain_id,
+        raw,
+    }))
+}
+
 /// Record a ratification. The human ceremony has already happened; this turns
 /// it into evidence. `expect_hash` is what the signer was shown.
 #[tauri::command]

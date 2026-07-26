@@ -598,6 +598,24 @@ export interface SignatureIntent {
   rawUnverified?: boolean;
   cost?: string;
   /**
+   * A chain transaction this approval also authorises, run through the KIT's
+   * signing path after `commit` succeeds.
+   *
+   * `prepare` returns the id of a PENDING kit ceremony (built by a Rust command
+   * that assembles the tx and signs nothing). The ceremony then calls
+   * `sign_and_broadcast` on that id — the only command that signs, gated on an
+   * unlocked vault, single-use, and refusing any tx whose `from` is not the
+   * vault's own address.
+   *
+   * A FAILED chain write does not undo `commit`: the governance act really
+   * happened locally. It is reported as its own outcome instead of being folded
+   * into success or into failure.
+   */
+  chainTx?: {
+    prepare: () => Promise<{ id: string; rawUnverified?: boolean }>;
+    label: string;
+  };
+  /**
    * The write this signature authorises, run BY the ceremony.
    *
    * Callers used to await `request()` and then perform the write themselves.

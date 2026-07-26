@@ -48,6 +48,7 @@ import {
 } from "../bridge";
 import { LoaderMark } from "../components/LoaderMark";
 import { runGate, settledNote as computeSettledNote, type CeremonyResult } from "./gate";
+import { signAndBroadcast } from "../bridge/tauri/commands";
 
 export type { CeremonyResult } from "./gate";
 
@@ -271,6 +272,32 @@ export function CeremonyProvider({ children }: { children: ReactNode }) {
         return;
       }
     }
+
+    // The chain leg. This is the ONLY place quorum reaches the real signer: a
+    // Rust command assembles the transaction as a PENDING kit ceremony (signing
+    // nothing), and `sign_and_broadcast` consumes that id — single-use, gated on
+    // an unlocked vault, and refusing any tx whose `from` is not this vault's
+    // own address.
+    //
+    // A failure here does NOT roll back `commit`. The governance act happened
+    // locally and is valid; only the chain write did not. Reporting it as a
+    // failed ceremony would tell the operator their ratification did not happen,
+    // which would be false — so it settles with the truth on the note, and the
+    // anchor row independently shows the same gap.
+    let chainNote: string | undefined;
+    if (head.intent.chainTx) {
+      try {
+        const pending = await head.intent.chainTx.prepare();
+        const res = await signAndBroadcast(pending.id, Boolean(pending.rawUnverified));
+        chainNote = `${head.intent.chainTx.label} · tx ${shortHead(res.txHash)}${
+          res.blockNumber ? ` · block ${res.blockNumber}` : ""
+        }`;
+      } catch (e) {
+        chainNote = `${head.intent.chainTx.label} FAILED — ${
+          e instanceof Error ? e.message : String(e)
+        }`;
+      }
+    }
     // signing → broadcasting → settled. Broadcasting compresses the real
     // checkpoint-finality wait (~25s / 50 blocks, BFT 67%); the Tauri adapter
     // keeps this loader and reports real progress (DESIGN_NOTES TODO(wire)).
@@ -289,11 +316,16 @@ export function CeremonyProvider({ children }: { children: ReactNode }) {
         // gate and therefore records NOTHING at this point. The chain was
         // provably empty while this text was on screen.
         setSettledNote(
-          computeSettledNote({
-            commitNote,
-            chainHead: head.gate.chainHead,
-            hasCommit: Boolean(head.intent.commit),
-          }),
+          [
+            computeSettledNote({
+              commitNote,
+              chainHead: head.gate.chainHead,
+              hasCommit: Boolean(head.intent.commit),
+            }),
+            chainNote,
+          ]
+            .filter(Boolean)
+            .join(" · "),
         );
       }, 2400),
     );

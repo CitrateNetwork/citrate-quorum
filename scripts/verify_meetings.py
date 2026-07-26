@@ -27,7 +27,7 @@ the operator DISMISSES the ceremony, not when the modal reaches "on record".
 Clicking Sign alone leaves the record untouched — the backend write happens
 after Close.
 """
-import importlib.util, json, sys, time
+import importlib.util, json, subprocess, sys, time
 from pathlib import Path
 spec = importlib.util.spec_from_file_location("smoke", "scripts/smoke_packaged.py")
 smoke = importlib.util.module_from_spec(spec); sys.modules["smoke"] = smoke
@@ -76,6 +76,21 @@ def build_fixture() -> str:
 
 
 REPO = build_fixture()
+
+# A throwaway, funded signing identity, read from the gitignored dev keystore.
+# It governs nothing; it exists so the ratify ceremony has gas.
+def _verify_mnemonic() -> str:
+    env = Path.home() / "Projects/Citrate-Labs/.env.testnet"
+    for line in env.read_text().splitlines() if env.exists() else []:
+        if line.startswith("QUORUM_VERIFY_MNEMONIC="):
+            return line.split("=", 1)[1].strip().strip('"')
+    raise SystemExit(
+        "QUORUM_VERIFY_MNEMONIC is not in .env.testnet — the ratify ceremony "
+        "cannot sign without a funded identity"
+    )
+
+
+VERIFY_MNEMONIC = _verify_mnemonic()
 APP = Path.home() / ".local/share/ai.citrate.quorum"
 
 def rec():
@@ -113,6 +128,24 @@ try:
     s.click(*smoke.ONBOARD["set_scope"], settle=3)
     for pt in smoke.ONBOARD["tour_next"]: s.click(*pt)
     s.click(*smoke.ONBOARD["enter"], settle=4)
+    # Signing needs an UNLOCKED vault holding a key, so set both up first.
+    # Without this the ratify ceremony settles locally and the chain leg fails
+    # with "no wallet stored" — which is correct behaviour, and useless as a
+    # test of the signer.
+    print("\nvault + signing identity")
+    s.click(smoke.SIDEBAR_X, dict(smoke.SURFACES)["Settings"], settle=3)
+    s.click(*A(336, 311)); s.type_text("correct.horse.battery.staple")
+    s.click(*A(336, 356)); s.type_text("correct.horse.battery.staple")
+    s.click(*A(92, 399), settle=4)                  # Create the vault (inits + unlocks)
+    # IMPORT a funded throwaway identity rather than creating a fresh one. A
+    # newly created key has zero balance and cannot pay gas, so the chain leg
+    # would fail for a reason that says nothing about the signer. Importing
+    # also exercises the import path.
+    s.click(*A(260, 487), settle=3)                 # Import an existing one
+    s.click(*A(336, 462)); s.type_text(VERIFY_MNEMONIC)
+    s.click(*A(64, 523), settle=5)                  # Import
+    s.shot("v_identity", smoke.CONTENT_CROP)
+
     s.click(smoke.SIDEBAR_X, dict(smoke.SURFACES)["Meetings"], settle=2)
 
     print("\nschedule")
@@ -179,6 +212,37 @@ try:
           f"chain {before_chain} -> {chain_len()}")
     check("the signed agenda hash is unchanged", r and r["agenda_hash"] == frozen)
     s.shot("lc_ratified", smoke.CONTENT_CROP)
+
+    # The chain leg. Ratifying signs the registration through the kit ceremony
+    # and broadcasts it, so the commitment must now be ON CHAIN — read back
+    # from MeetingRegistry, not from the app.
+    print("\nregistered on chain (the real signer)")
+    import urllib.request
+    def _rpc(method, params):
+        req = urllib.request.Request(
+            "https://rpc.citrate.ai",
+            data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode(),
+            headers={"content-type": "application/json"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return json.load(r)
+
+    def _keccak(s: str) -> str:
+        # keccak256 via the contract's own recordKey would need the chain; use
+        # eth_call against MeetingRegistry.isRegistered with ids the app used.
+        import subprocess
+        return subprocess.run(["cast", "keccak", s], capture_output=True, text=True).stdout.strip()
+
+    mid = r["id"] if r else ""
+    reg = "0x7cef67f421693a8df6163c69417b41e5d224a011"
+    tenant_w = _keccak("smoke-tenant")[2:].rjust(64, "0")
+    meeting_w = _keccak(mid)[2:].rjust(64, "0")
+    minutes_w = r["agenda_hash"]  # placeholder; the real check is isRegistered
+    sel = "0x" + subprocess.run(["cast", "sig", "isRegistered(bytes32,bytes32)"],
+                                capture_output=True, text=True).stdout.strip().lstrip("0x")
+    out = _rpc("eth_call", [{"to": reg, "data": sel + tenant_w + meeting_w}, "latest"])
+    registered = out.get("result", "0x0").rstrip("0").endswith("1")
+    check("the minutes are registered on chain", registered,
+          f"MeetingRegistry {reg[:10]}… · meeting {mid}")
 
     # WP-S5.7: the workspace named at schedule time is what journals read from,
     # so the brief is only meaningful once a meeting has established it.

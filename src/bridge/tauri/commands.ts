@@ -180,6 +180,89 @@ export function grantRevoke(
   return invoke<boolean>("grant_revoke", { agent, grantId, revokedBy });
 }
 
+// ---- the kit signing path (shared surface) --------------------------
+//
+// `sign_and_broadcast` is the ONLY command that produces a real, broadcast
+// 40204 transaction. It consumes a pending ceremony bound to `id` — no
+// auto-approve, no "approve latest" — signs with the vault key, and fails
+// closed if the vault is locked.
+
+export interface CeremonyViewDto {
+  id: string;
+  origin: string;
+  chainId: number;
+  rawUnverified?: boolean;
+}
+export interface BroadcastResultDto {
+  txHash: string;
+  blockNumber: number | null;
+}
+
+export function signAndBroadcast(id: string, rawAck: boolean): Promise<BroadcastResultDto> {
+  return invoke<BroadcastResultDto>("sign_and_broadcast", { id, rawAck });
+}
+export function signReject(id: string): Promise<void> {
+  return invoke<void>("sign_reject", { id });
+}
+/** Build the minutes-registration tx as a PENDING ceremony. Signs nothing. */
+export function meetingRegisterIntent(id: string): Promise<CeremonyViewDto> {
+  return invoke<CeremonyViewDto>("meeting_register_intent", { id });
+}
+
+// ---- custody vault (shared kit surface) ----------------------------
+//
+// The vault is a SHARED kit surface (config / custody / auth / ceremony), not
+// a quorum domain, so it is not part of the BridgeContract — there is no sim
+// analogue of an OS keyring and faking one would be worse than none.
+
+export interface CustodyStatusDto {
+  initialized: boolean;
+  unlocked: boolean;
+  autolockMins: number;
+  keyringStatus: string;
+}
+
+export function custodyStatus(): Promise<CustodyStatusDto> {
+  return invoke<CustodyStatusDto>("custody_status");
+}
+/** Create the vault. The passphrase is zeroized in Rust after use. */
+export function custodyInit(passphrase: string): Promise<void> {
+  return invoke<void>("custody_init", { passphrase });
+}
+export function custodyUnlock(passphrase: string): Promise<void> {
+  return invoke<void>("custody_unlock", { passphrase });
+}
+export function custodyLock(): Promise<void> {
+  return invoke<void>("custody_lock");
+}
+
+// ---- wallet setup (QRM-S6) -----------------------------------------
+
+export interface WalletStatusDto {
+  exists: boolean;
+  address: string | null;
+  reason: string | null;
+}
+/**
+ * The response to creation — the ONLY place a recovery phrase crosses this
+ * boundary, once, at generation. It is never obtainable again: there is no
+ * command that reads it back. Callers must display-and-drop, never persist.
+ */
+export interface WalletCreatedDto {
+  address: string;
+  mnemonic: string;
+}
+
+export function walletStatus(): Promise<WalletStatusDto> {
+  return invoke<WalletStatusDto>("wallet_status");
+}
+export function walletCreate(): Promise<WalletCreatedDto> {
+  return invoke<WalletCreatedDto>("wallet_create");
+}
+export function walletImport(mnemonic: string): Promise<WalletStatusDto> {
+  return invoke<WalletStatusDto>("wallet_import", { mnemonic });
+}
+
 // ---- meetings (QRM-S5) ---------------------------------------------
 
 export interface MeetingRowDto {
