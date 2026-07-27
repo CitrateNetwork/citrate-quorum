@@ -707,6 +707,22 @@ export interface SignatureIntent {
    * This mirrors what answering an escalation already does — see `onSign`.
    */
   commit?: () => Promise<string | void>;
+  /**
+   * A signature this approval produces, and what to do with it.
+   *
+   * `prepare` returns the id of a PENDING kit ceremony staged by a Rust command
+   * that signed nothing. The ceremony then calls `sign_approve` on that id — the
+   * only path that signs — and hands the hex to `apply`.
+   *
+   * Used by the relay login: the operator signs an EIP-191 SIWE message with the
+   * vault key, so their room seat IS their wallet address. One approval per
+   * session; every message after it is signed by the MLS member key.
+   */
+  signature?: {
+    prepare: () => Promise<{ id: string; rawUnverified?: boolean }>;
+    apply: (sigHex: string) => Promise<string | void>;
+    label: string;
+  };
 }
 
 /** A stream subscription: register a listener, get an unsubscribe fn (§6.4). */

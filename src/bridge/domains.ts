@@ -158,8 +158,22 @@ export interface AgentsDomain {
 export interface RoomsDomain {
   /** What this app's relay connection is doing. Never dials by itself. */
   status(): Promise<RoomsStatus>;
-  /** Connect the operator's seat. Idempotent. */
-  connect(operator: string): Promise<RoomsStatus>;
+  /**
+   * Connect the operator's seat — in two phases, because a human signs it.
+   *
+   * `connectIntent` opens the socket, takes the relay's challenge nonce and
+   * builds the SIWE message, signing nothing. The caller runs the ceremony on
+   * the returned id and passes the signature to `connectComplete`. The seat that
+   * results IS the operator's wallet address: the relay recovers it from an
+   * EIP-191 signature.
+   */
+  connectIntent(operator: string): Promise<{
+    ceremonyId: string;
+    address: string;
+    relayUrl: string;
+    siwe: string;
+  }>;
+  connectComplete(ceremonyId: string, signatureHex: string): Promise<RoomsStatus>;
   list(): Promise<Room[]>;
   /** Open a room, admitting an app-held seat for each named agent. */
   open(input: RoomOpen, operator: string): Promise<Room>;

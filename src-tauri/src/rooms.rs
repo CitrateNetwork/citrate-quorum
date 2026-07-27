@@ -30,20 +30,29 @@
 //! `rooms_never_reaches_the_gated_signer` both assert that, and the compiler
 //! already forbids it (the signer is `pub(crate)` to the kit).
 //!
-//! ### The gap this leaves, stated
+//! ### The human seat IS the wallet (as of the kit's EIP-191 path)
 //!
 //! The planset (`02_ARCHITECTURE.md` §3) wants a human's seat bound to **their
-//! wallet address, ceremony-gated** — so a room roster would carry the same
-//! identity as a ratification. That binding is not made here, for a concrete
-//! reason: the relay authenticates SIWE by recovering the signer from an EIP-191
-//! (keccak256, 65-byte recoverable) signature, and the kit's gated signer produces
-//! a 64-byte non-recoverable ECDSA signature over a SHA-256 prehash. They are not
-//! interchangeable, and the fix belongs in the kit's ceremony — which is @rule8
-//! code and needs security sign-off, not a drive-by from this sprint.
+//! wallet address, ceremony-gated**, so a room roster carries the same identity as
+//! a ratification. That binding is now made: [`rooms_connect_intent`] opens the
+//! socket, takes the relay's challenge nonce, builds the SIWE message and hands it
+//! to the SignatureCeremony as a `personal_sign` intent. A human approves it —
+//! seeing the actual EIP-4361 text — and [`rooms_connect_complete`] finishes the
+//! handshake with that signature. The relay recovers the operator's wallet address
+//! and the roster shows it.
 //!
-//! So: the roster labels each seat with the principal it belongs to, and says the
-//! seat's key is a relay identity. It does not claim the seat *is* the wallet.
-//! An honest label beats a binding we did not make.
+//! One approval per SESSION, not per message: MLS group operations sign with the
+//! member's own credential key, generated in-process. "Connect this machine to the
+//! relay as me" is the act that deserves a human; "send this line of chat" is not.
+//!
+//! **What is still not wallet-bound: publishing a KeyPackage.** Its binding
+//! attestation signs a BLAKE3 domain-separated digest, not an EIP-191 message, and
+//! the kit deliberately exposes no "sign this arbitrary 32-byte digest" primitive —
+//! that primitive would sign a transaction hash just as happily. So the operator's
+//! seat does not publish one, which means it can OWN rooms (it creates them) but
+//! cannot be ADDED to someone else's. That limit is real, it is stated on the
+//! surface, and closing it is a citrate-comms protocol change (an EIP-191 binding
+//! attestation), not something to fake here.
 //!
 //! ## Agents hold nothing
 //!
@@ -153,10 +162,33 @@ pub struct RoomsStatus {
     pub note: String,
 }
 
+/// A connected-but-unauthenticated seat, waiting for a human to approve its SIWE
+/// login. Holding it keeps the socket — and the relay's single-use nonce — alive
+/// while someone reads what they are signing.
+struct PendingSeat {
+    pending: comms_session::PendingLogin,
+    principal: String,
+    address: WalletAddress,
+    /// The ceremony this login's signature must come from.
+    ceremony_id: String,
+}
+
+/// What the frontend needs to run the approval.
+#[derive(Serialize, Clone, Debug)]
+pub struct ConnectIntent {
+    pub ceremony_id: String,
+    /// The wallet address the seat will claim — the operator's own.
+    pub address: String,
+    pub relay_url: String,
+    /// The exact EIP-4361 text being signed, for display.
+    pub siwe: String,
+}
+
 /// The rooms subsystem's state. One per app.
 #[derive(Default)]
 pub struct Rooms {
     seats: HashMap<String, Seat>,
+    pending_login: Option<PendingSeat>,
     rooms: Vec<RoomRecord>,
     transcript: Vec<RoomEventDto>,
     next_n: u64,
@@ -228,8 +260,11 @@ fn short(bytes: &[u8]) -> String {
     format!("{hex}…")
 }
 
-/// Load this seat's room identity from the vault, generating and sealing one on
-/// first use.
+/// Load an AGENT seat's room identity from the vault, generating and sealing one
+/// on first use.
+///
+/// Only agent seats. The operator's seat authenticates as the vault's own wallet
+/// through the ceremony ([`rooms_connect_intent`]), so it has no generated key.
 ///
 /// Fails closed on a locked vault: a room key that lives only in memory would
 /// silently become a *different* member on the next launch, and the roster would
@@ -287,41 +322,131 @@ fn hex_gid(g: &GroupId) -> String {
 
 // ---- commands ---------------------------------------------------------------
 
-/// Connect the operator's seat to the relay.
+/// **Phase 1 of connecting the operator's seat.** Opens the socket, takes the
+/// relay's challenge nonce, builds the SIWE message, and hands it to the
+/// SignatureCeremony. **Signs nothing.**
 ///
-/// Idempotent: connecting twice returns the existing session rather than opening
-/// a second one under the same identity.
+/// The returned ceremony id is what the human approves; `sign_approve` on that id
+/// is the only thing that produces a signature, and it is single-use. The socket
+/// stays open in the meantime because the nonce is bound to it — which is why
+/// `comms-session` grew a two-phase login for exactly this shape.
 #[tauri::command]
-pub async fn rooms_connect(
+pub async fn rooms_connect_intent(
     state: tauri::State<'_, RoomsState>,
-    custody: tauri::State<'_, CustodyState>,
+    custody: tauri::State<'_, citrate_core_kit::custody::CustodyState>,
+    ceremony: tauri::State<'_, citrate_core_kit::ceremony::CeremonyState>,
     operator: String,
-) -> Result<RoomsStatus, String> {
+) -> Result<ConnectIntent, String> {
+    use citrate_core_kit::ceremony::{IntentKind, SignatureIntent};
+
     let url = relay_url();
     let domain = relay_domain(&url);
     let mut rooms = state.0.lock().await;
     if rooms.seats.contains_key(&operator) {
-        return Ok(status_of(&rooms, &url, &domain));
+        return Err(format!("{operator} already holds a seat on {url}"));
     }
-    let wallet = seat_identity(&custody, &operator)?;
-    let address = wallet.address();
-    let session = NetSession::login(&url, &domain, Box::new(wallet), now_ms() as u64, false)
+
+    // The PUBLIC address only. This is the one thing rooms.rs reads from the
+    // wallet, and it reads no key: the signature comes from the ceremony.
+    let wallet = citrate_core_kit::wallet::address(&custody.0).map_err(|e| e.to_string())?;
+    let address = parse_address(&wallet.address)?;
+
+    let pending = NetSession::begin(&url, &domain, address, now_ms() as u64, false)
         .await
-        .map_err(|e| format!("relay login failed ({url}): {e}"))?;
-    session
-        .publish_keypackage()
+        .map_err(|e| format!("could not reach the relay at {url}: {e}"))?;
+
+    // What the human will actually see and approve — the EIP-4361 text itself,
+    // not a summary of it. `decode_personal_sign` in the kit surfaces UTF-8
+    // verbatim, so the operator reads the domain, the address and the nonce they
+    // are signing over.
+    let siwe_text = pending.message().to_signing_string();
+    let view = ceremony.0.request(SignatureIntent {
+        origin: format!("rooms · {domain}"),
+        kind: IntentKind::PersonalSign,
+        chain_id: 40204,
+        raw: format!("0x{}", hex::encode(siwe_text.as_bytes())),
+    });
+
+    rooms.pending_login = Some(PendingSeat {
+        pending,
+        principal: operator,
+        address,
+        ceremony_id: view.id.clone(),
+    });
+    Ok(ConnectIntent {
+        ceremony_id: view.id,
+        address: wallet.address,
+        relay_url: url,
+        siwe: siwe_text,
+    })
+}
+
+/// **Phase 2.** Finish the handshake with the signature the ceremony produced.
+///
+/// The relay recovers the signer from the EIP-191 signature; if it recovers
+/// anyone other than the address we claimed, the session is refused rather than
+/// continued under a name we cannot substantiate.
+#[tauri::command]
+pub async fn rooms_connect_complete(
+    state: tauri::State<'_, RoomsState>,
+    ceremony_id: String,
+    signature_hex: String,
+) -> Result<RoomsStatus, String> {
+    let url = relay_url();
+    let domain = relay_domain(&url);
+    let mut rooms = state.0.lock().await;
+    let seat = rooms
+        .pending_login
+        .take()
+        .ok_or("no connection is waiting for a signature — start with rooms_connect_intent")?;
+    // Bind the signature to THIS intent. A signature approved for some other
+    // ceremony must not complete this login (the ceremony is single-use on its
+    // own side; this is the second half of that check, on ours).
+    if seat.ceremony_id != ceremony_id {
+        return Err(format!(
+            "signature is for ceremony {ceremony_id}, but the pending login is {}",
+            seat.ceremony_id
+        ));
+    }
+    let raw = hex::decode(signature_hex.trim_start_matches("0x"))
+        .map_err(|_| "signature is not hex".to_string())?;
+    if raw.len() != 65 {
+        return Err(format!(
+            "expected a 65-byte recoverable signature (r||s||v), got {} bytes — the \
+             ceremony must be signing personal_sign through the kit's EIP-191 path",
+            raw.len()
+        ));
+    }
+    let mut sig = [0u8; 65];
+    sig.copy_from_slice(&raw);
+
+    let session = seat
+        .pending
+        .complete(sig, None)
         .await
-        .map_err(|e| format!("could not publish a KeyPackage to {url}: {e}"))?;
+        .map_err(|e| format!("the relay refused the signed login: {e}"))?;
     rooms.seats.insert(
-        operator.clone(),
+        seat.principal.clone(),
         Seat {
             session,
-            principal: operator,
+            principal: seat.principal,
             kind: SeatKind::Human,
-            address,
+            address: seat.address,
         },
     );
     Ok(status_of(&rooms, &url, &domain))
+}
+
+/// A 20-byte address from `0x…` hex.
+fn parse_address(hex_addr: &str) -> Result<WalletAddress, String> {
+    let body = hex_addr.strip_prefix("0x").unwrap_or(hex_addr);
+    let bytes = hex::decode(body).map_err(|_| format!("not a hex address: {hex_addr}"))?;
+    if bytes.len() != 20 {
+        return Err(format!("not a 20-byte address: {hex_addr}"));
+    }
+    let mut a = [0u8; 20];
+    a.copy_from_slice(&bytes);
+    Ok(WalletAddress(a))
 }
 
 fn status_of(rooms: &Rooms, url: &str, domain: &str) -> RoomsStatus {
@@ -673,18 +798,28 @@ mod tests {
     fn rooms_never_reaches_the_gated_signer() {
         let src = include_str!("rooms.rs");
         let wire = src.split("#[cfg(test)]").next().unwrap_or(src);
+        // The SIGNERS, not the public address. `wallet::address` returns only the
+        // 0x… address and no key material, and the human seat needs it to say who
+        // it is claiming to be; the signature itself comes from the ceremony.
         for banned in [
             "wallet::sign_message",
             "wallet::sign_transaction",
-            "wallet::address",
-            "citrate_core_kit::wallet",
+            "wallet::sign_personal",
         ] {
             assert!(
                 !wire.contains(banned),
-                "rooms.rs must not touch the vault's wallet: found `{banned}`. A room \
-                 identity is a relay identity — see the module header."
+                "rooms.rs must not invoke a gated signer: found `{banned}`. Every \
+                 signature here comes from the SignatureCeremony (the human seat) or \
+                 from a seat's own relay identity (agent seats) — see the module header."
             );
         }
+        // The one wallet call that IS allowed, pinned so a future edit cannot
+        // quietly widen it into something that signs.
+        assert!(
+            wire.matches("citrate_core_kit::wallet::").count() == 1
+                && wire.contains("citrate_core_kit::wallet::address("),
+            "the only permitted wallet call in rooms.rs is `address()` (public, no key)"
+        );
     }
 
     /// The transcript is in memory and says so. If this module ever grows a write

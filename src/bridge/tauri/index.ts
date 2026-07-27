@@ -77,7 +77,8 @@ import {
   ledgerDecision,
   ledgerRecords,
   ledgerState,
-  roomsConnect,
+  roomsConnectComplete,
+  roomsConnectIntent,
   roomsEvents,
   roomsLeave,
   roomsList,
@@ -322,8 +323,17 @@ export function createTauriBridge(): BridgeContract {
     // with a negative control so the proof cannot pass by searching nothing.
     rooms: {
       status: async (): Promise<RoomsStatus> => toRoomsStatus(await roomsStatus()),
-      connect: async (operator: string): Promise<RoomsStatus> =>
-        toRoomsStatus(await roomsConnect(operator)),
+      connectIntent: async (operator: string) => {
+        const i = await roomsConnectIntent(operator);
+        return {
+          ceremonyId: i.ceremony_id,
+          address: i.address,
+          relayUrl: i.relay_url,
+          siwe: i.siwe,
+        };
+      },
+      connectComplete: async (ceremonyId: string, signatureHex: string): Promise<RoomsStatus> =>
+        toRoomsStatus(await roomsConnectComplete(ceremonyId, signatureHex)),
       list: async (): Promise<Room[]> => (await roomsList()).map(toRoom),
       open: async (input, operator: string): Promise<Room> =>
         toRoom(await roomsOpen(operator, input.name, input.classification, input.agents)),

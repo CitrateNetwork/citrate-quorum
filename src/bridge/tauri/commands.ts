@@ -626,8 +626,32 @@ export interface RoomEventDto {
 export function roomsStatus(): Promise<RoomsStatusDto> {
   return invoke<RoomsStatusDto>("rooms_status");
 }
-export function roomsConnect(operator: string): Promise<RoomsStatusDto> {
-  return invoke<RoomsStatusDto>("rooms_connect", { operator });
+export interface ConnectIntentDto {
+  ceremony_id: string;
+  address: string;
+  relay_url: string;
+  siwe: string;
+}
+/** Phase 1: open the socket and hand the SIWE message to the ceremony. Signs nothing. */
+export function roomsConnectIntent(operator: string): Promise<ConnectIntentDto> {
+  return invoke<ConnectIntentDto>("rooms_connect_intent", { operator });
+}
+/** Phase 2: finish the handshake with the signature the ceremony produced. */
+export function roomsConnectComplete(
+  ceremonyId: string,
+  signatureHex: string,
+): Promise<RoomsStatusDto> {
+  return invoke<RoomsStatusDto>("rooms_connect_complete", { ceremonyId, signatureHex });
+}
+/**
+ * The kit's approval — the ONLY thing that produces a signature. Single-use.
+ *
+ * The field is `sigHex`, not `sig_hex`: the kit renames it with serde. Getting
+ * that wrong passes `undefined` to the next command, which fails with a missing
+ * argument rather than anything about signatures — exactly how it presented.
+ */
+export function signApprove(id: string, rawAck: boolean): Promise<{ sigHex: string }> {
+  return invoke<{ sigHex: string }>("sign_approve", { id, rawAck });
 }
 export function roomsOpen(
   operator: string,

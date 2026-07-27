@@ -176,7 +176,10 @@ export function createSimBridge(): BridgeContract {
     },
     rooms: {
       status: () => delay(80, D.ROOMS_STATUS),
-      connect: () => delay(150, D.ROOMS_STATUS),
+      // The sim has no relay and no vault, so there is nothing to sign a login
+      // with. Refusing beats handing back a fake ceremony id.
+      connectIntent: () => Promise.reject(new Unavailable("rooms.connectIntent (the sim has no relay)")),
+      connectComplete: () => Promise.reject(new Unavailable("rooms.connectComplete (the sim has no relay)")),
       list: () => delay(150, D.ROOMS),
       // The sim has no relay and no MLS group. Opening a room that exists only
       // in a fixture would teach an operator the wrong thing about what this

@@ -234,7 +234,8 @@ pub fn run() {
             // of these signs with the vault's wallet; a room identity is a relay
             // identity, sealed in custody under its own slot namespace.
             rooms::rooms_status,
-            rooms::rooms_connect,
+            rooms::rooms_connect_intent,
+            rooms::rooms_connect_complete,
             rooms::rooms_open,
             rooms::rooms_list,
             rooms::rooms_roster,

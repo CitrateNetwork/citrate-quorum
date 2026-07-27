@@ -24,6 +24,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { bridge } from "../bridge";
 import { Domain, useDomain } from "../components/DomainState";
+import { useCeremony } from "../ceremony/Ceremony";
 import type { Classification, Room, RoomEvent, RoomsStatus, RosterMember } from "../bridge";
 
 const CLS_COLOR: Record<string, string> = {
@@ -70,6 +71,7 @@ export function Rooms() {
   const [operator, setOperator] = useState<string>("");
   const [busy, setBusy] = useState<string | null>(null);
 
+  const ceremony = useCeremony();
   const primary = useDomain(() => bridge.rooms.status(), "rooms.status()");
 
   useEffect(() => {
@@ -122,11 +124,47 @@ export function Rooms() {
     };
   }, [active, events.length]);
 
+  // Connecting is a governed act, not a toggle: the operator signs a SIWE
+  // message with the vault key, through the one ceremony, and the seat the relay
+  // grants IS their wallet address. One approval per session — MLS signs every
+  // message after that with the member's own credential key.
   const connect = async () => {
-    setBusy("connecting to the relay…");
+    setBusy("opening the relay socket…");
     try {
-      setStatus(await bridge.rooms.connect(operator || "operator"));
-      setStatusErr(null);
+      const intent = await bridge.rooms.connectIntent(operator || "operator");
+      setBusy(null);
+      const r = await ceremony.request({
+        kind: "raw",
+        title: "Sign in to the comms relay",
+        // "user": the operator is acting under their OWN authority, so this
+        // skips the agent policy gate and is recorded as an approved HIC-1 act
+        // naming them. Sending it through the agent gate would record every
+        // human relay login as ungoverned and inflate the product's own alarm
+        // — the modelling fix from QRM-S4.3, applied here.
+        origin: "user",
+        action: {
+          actionClass: "rooms.connect",
+          classification: "Public",
+          agent: operator || "operator",
+          principal: operator || "operator",
+          mandatoryHic1: true,
+        },
+        rows: [
+          { k: "Relay", v: intent.relayUrl },
+          { k: "Signing as", v: intent.address },
+          { k: "Effect", v: "authenticates this machine to the relay as you, for this session. Room messages after this are signed by the member key, not by you." },
+        ],
+        signature: {
+          label: "relay login",
+          prepare: async () => ({ id: intent.ceremonyId }),
+          apply: async (sigHex: string) => {
+            setStatus(await bridge.rooms.connectComplete(intent.ceremonyId, sigHex));
+            return `seat ${intent.address.slice(0, 10)}… authenticated`;
+          },
+        },
+      });
+      if (r.outcome !== "settled") setStatusErr("the relay login was not completed");
+      else setStatusErr(null);
     } catch (e) {
       setStatusErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -188,7 +226,7 @@ export function Rooms() {
               )}
               <div style={{ flex: 1 }} />
               {!status?.connected && (
-                <button className="btn btn-primary btn-sm" onClick={connect} disabled={Boolean(busy)}>Connect</button>
+                <button className="btn btn-primary btn-sm" onClick={connect} disabled={Boolean(busy)}>Sign in to the relay</button>
               )}
               {status?.connected && (
                 <button className="btn btn-ghost btn-sm" onClick={() => setOpening((v) => !v)} disabled={Boolean(busy)}>Open a room…</button>

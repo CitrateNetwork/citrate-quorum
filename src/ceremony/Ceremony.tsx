@@ -48,7 +48,7 @@ import {
 } from "../bridge";
 import { LoaderMark } from "../components/LoaderMark";
 import { runGate, settledNote as computeSettledNote, type CeremonyResult } from "./gate";
-import { signAndBroadcast } from "../bridge/tauri/commands";
+import { signAndBroadcast, signApprove } from "../bridge/tauri/commands";
 
 export type { CeremonyResult } from "./gate";
 
@@ -273,6 +273,29 @@ export function CeremonyProvider({ children }: { children: ReactNode }) {
       }
     }
 
+    // The signature leg. A Rust command has already staged a PENDING kit ceremony
+    // (signing nothing); `sign_approve` consumes that id and is the only thing
+    // that produces a signature — single-use, gated on an unlocked vault. The
+    // caller then does whatever the signature was for, in `apply`.
+    //
+    // Same ordering rule as `commit`: nothing may claim "on record" before the
+    // work it describes has actually happened.
+    let signatureNote: string | undefined;
+    if (head.intent.signature) {
+      try {
+        const pending = await head.intent.signature.prepare();
+        const sig = await signApprove(pending.id, Boolean(pending.rawUnverified));
+        const note = await head.intent.signature.apply(sig.sigHex);
+        signatureNote = note || `${head.intent.signature.label} · signed`;
+      } catch (e) {
+        setPhase("review");
+        setCommitError(
+          `${head.intent.signature.label} failed — ${e instanceof Error ? e.message : String(e)}`,
+        );
+        return;
+      }
+    }
+
     // The chain leg. This is the ONLY place quorum reaches the real signer: a
     // Rust command assembles the transaction as a PENDING kit ceremony (signing
     // nothing), and `sign_and_broadcast` consumes that id — single-use, gated on
@@ -318,7 +341,7 @@ export function CeremonyProvider({ children }: { children: ReactNode }) {
         setSettledNote(
           [
             computeSettledNote({
-              commitNote,
+              commitNote: commitNote ?? signatureNote,
               chainHead: head.gate.chainHead,
               hasCommit: Boolean(head.intent.commit),
             }),
