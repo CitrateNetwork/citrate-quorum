@@ -255,6 +255,10 @@ export function Rooms() {
                   <div className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)", marginTop: 4, lineHeight: 1.6 }}>
                     Each agent gets its own seat, with a key held by THIS app and sealed in the vault — the agent
                     process never holds one. To the relay an agent seat is indistinguishable from a human's.
+                    <br />
+                    <strong>MR-4:</strong> an agent is admitted only if a live capability grant clears it to this
+                    room's classification. A revoked or expired grant stops clearing it immediately, and the room
+                    opens or is refused as a whole — a partly-admitted room would be worse than none.
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 8 }}>
@@ -344,6 +348,18 @@ export function Rooms() {
 
             <div className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)", lineHeight: 1.7 }}>
               rooms.status() / list() / roster() / events() · {status?.note}
+            </div>
+            <div className="surface" style={{ padding: "12px 14px", display: "flex", flexDirection: "column", gap: 6 }}>
+              <span className="eyebrow">Who may be in this room</span>
+              <span style={{ fontSize: 12.5, color: "var(--tx-2)", lineHeight: 1.6 }}>
+                An <strong>agent</strong> is admitted only if a live capability grant clears it to the room's
+                classification (MR-4), and a room's classification never drops once it is open. The operator's own
+                clearance is <strong>not verified</strong>: it would be the least of their commercial tier, their
+                on-chain clearance (<span className="mono">ClassificationRegistry</span> — deployed, not read yet)
+                and their tenant's ceiling (<span className="mono">TenantHierarchy</span> — deployed with no root).
+                Until one of those is live, the room's classification is the operator's own declaration, recorded
+                as such.
+              </span>
             </div>
             <div style={{ border: "1.5px dashed var(--line-2)", padding: "12px 14px", fontSize: 12.5, color: "var(--tx-3)", lineHeight: 1.6 }}>
               Not built, and deliberately not implied anywhere above: <strong>voice</strong> (there is no audio path,
