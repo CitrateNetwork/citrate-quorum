@@ -1363,4 +1363,42 @@ mod tests {
         }
         assert!(v.note.is_none(), "a populated tree needs no excuse");
     }
+
+    /// The clearance subject key, pinned against the on-chain
+    /// `ClassificationGate.subjectKey` (citrate-chain QRM-S6.3).
+    ///
+    /// The two must agree exactly or the on-chain gate reads a different
+    /// subject's record, finds nothing, and reports `Public` for everyone — a
+    /// fail-open wearing a default's clothing. It would not throw; it would
+    /// quietly clear the whole company.
+    ///
+    /// The literal below is asserted in BOTH repositories
+    /// (`ClassificationGate.t.sol::test_subjectKeyMatchesQuorumsDerivation`).
+    /// Two codebases holding one number is what keeps the agreement true
+    /// without a shared build: move either derivation and one of the two tests
+    /// goes red.
+    #[test]
+    fn clearance_subject_matches_the_on_chain_vector() {
+        const VECTOR: [u8; 32] = [
+            0x54, 0x93, 0x28, 0xa5, 0x43, 0x56, 0x60, 0x21, 0x4b, 0x49, 0x07, 0x99, 0x37, 0x32,
+            0x1d, 0x53, 0xa0, 0xb2, 0x20, 0x40, 0x70, 0xda, 0x2b, 0x80, 0x33, 0x19, 0x21, 0x86,
+            0x31, 0xa4, 0x26, 0xdb,
+        ];
+        assert_eq!(
+            clearance_subject("0x00000000000000000000000000000000000000ab"),
+            VECTOR
+        );
+        // Mixed case is the same subject. A checksummed address pasted from a
+        // block explorer must not read as a different person.
+        assert_eq!(
+            clearance_subject("0x00000000000000000000000000000000000000aB"),
+            VECTOR
+        );
+        // What the on-chain side must NOT be doing: hashing the 20 raw bytes.
+        assert_ne!(clearance_subject("0x00000000000000000000000000000000000000ab"), {
+            let mut raw = [0u8; 20];
+            raw[19] = 0xab;
+            keccak256(&raw)
+        });
+    }
 }
