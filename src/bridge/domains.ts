@@ -16,6 +16,7 @@ import type {
   Block,
   CalAccount,
   CalEvent,
+  ClearanceView,
   CorrelationView,
   Decision,
   DecisionDetail,
@@ -274,6 +275,12 @@ export interface ReposDomain {
 export interface SettingsDomain {
   /** The on-chain tenant tree, plus where it came from or why it is empty. */
   tenancy(): Promise<TenancyView>;
+  /**
+   * A principal's clearance from `ClassificationRegistry`, bounded by their
+   * tenant's ceiling. Fail-closed: an unreachable chain, an absent contract and
+   * an unrecorded subject all end at Public, and each says which it was.
+   */
+  clearance(address: string, tenant: string): Promise<ClearanceView>;
   // TODO(wire): identity federation status; models; license.seats metering source.
 }
 

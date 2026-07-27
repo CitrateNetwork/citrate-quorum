@@ -53,6 +53,8 @@ use crate::anchor::keccak256;
 
 /// The name the tenant tree is booked under, in the BFR book.
 pub const TENANT_HIERARCHY: &str = "TenantHierarchy";
+/// Where a principal's clearance is recorded, in the BFR book.
+pub const CLASSIFICATION_REGISTRY: &str = "ClassificationRegistry";
 
 /// How many observed RPC lines the activity ring buffer keeps. The Node surface
 /// shows the most recent ones; older lines are dropped rather than growing
@@ -864,6 +866,129 @@ fn walk(
     Ok(())
 }
 
+// ---- clearance -------------------------------------------------------------
+
+/// The operator's clearance, as the chain actually has it.
+#[derive(Serialize, Clone, Debug)]
+pub struct ClearanceView {
+    /// The clearance to enforce with — `Public` when nothing is recorded.
+    pub effective: String,
+    /// Whether the registry holds a record at all. `false` with
+    /// `effective == "Public"` means "nobody has said", not "cleared to Public".
+    pub recorded: bool,
+    /// Only meaningful when `recorded`. ITAR requires a definite non-FN.
+    pub foreign_national: Option<bool>,
+    /// The tenant's own ceiling from `TenantHierarchy`, when there is a tree.
+    pub tenant_ceiling: Option<String>,
+    /// The least of what was read — what a room or a document is actually
+    /// bounded by. Never higher than either axis.
+    pub bounded_to: String,
+    /// The subject key the registry was asked about.
+    pub subject: String,
+    /// Rule 11: the contracts, the chain and the book behind this.
+    pub source: String,
+    /// Present when an axis could not be read at all (chain unreachable, or the
+    /// contract absent) — distinct from an axis that answered "nothing recorded".
+    pub note: Option<String>,
+}
+
+/// The subject key a clearance is recorded under.
+///
+/// `keccak256(lowercased 0x address)`. The registry keys on an opaque `bytes32`
+/// so it can carry a DID or an HR id instead; the wallet address is what this app
+/// can actually prove about the person at the keyboard, so it is what we ask
+/// about — and the key is returned in [`ClearanceView::subject`] so an HR oracle
+/// can be pointed at the same value rather than guessing our convention.
+pub fn clearance_subject(address: &str) -> [u8; 32] {
+    keccak256(address.to_ascii_lowercase().as_bytes())
+}
+
+/// Read the operator's clearance from `ClassificationRegistry`, bounded by the
+/// tenant's own ceiling.
+///
+/// Fail-closed in every direction: an unreachable chain, an absent contract, a
+/// subject with no record and a tenant with no node all end at `Public`, and each
+/// says which one happened rather than sharing a sentence.
+pub fn clearance(book: &AddressBook, address: &str, tenant: &str) -> Result<ClearanceView, String> {
+    use quorum_clearance::ClearanceReader;
+
+    let Some(registry) = book.get(CLASSIFICATION_REGISTRY) else {
+        return Err(format!(
+            "{CLASSIFICATION_REGISTRY} is not in the address book ({}) — there is nowhere \
+             to read a clearance from",
+            book.describe()
+        ));
+    };
+    let hierarchy = book.get(TENANT_HIERARCHY).unwrap_or("").to_string();
+    let rpc = Rpc::from_book(book)?;
+    let url = rpc.url().to_string();
+    let reader = ClearanceReader::new(HttpTransport::new(url.clone()), registry, &hierarchy);
+
+    let subject = clearance_subject(address);
+    let tenant_key = keccak256(tenant.as_bytes());
+
+    let record = reader.record(subject);
+    let tenant_ceiling = reader.tenant_ceiling(tenant_key);
+
+    let (effective, recorded, foreign_national, mut note) = match record {
+        Some(r) => (
+            r.effective(),
+            r.is_recorded(),
+            match r {
+                quorum_clearance::ClearanceRecord::Recorded {
+                    foreign_national, ..
+                } => Some(foreign_national),
+                quorum_clearance::ClearanceRecord::Unrecorded => None,
+            },
+            None,
+        ),
+        // The chain could not be asked. That is NOT "no clearance" — it is "we do
+        // not know", and it still enforces as Public, loudly.
+        None => (
+            quorum_tenancy::Classification::Public,
+            false,
+            None,
+            Some(format!(
+                "{CLASSIFICATION_REGISTRY} at {registry} could not be read over {url}. \
+                 Treating the clearance as Public, which is the fail-closed answer — \
+                 not evidence that it IS Public."
+            )),
+        ),
+    };
+
+    // The least of the axes that answered. A tenant with no node contributes
+    // nothing rather than dragging the answer to Public: an unseeded tree is a
+    // deployment gap, and the tenancy surface reports it as one.
+    let bounded = match tenant_ceiling {
+        Some(t) => effective.min(t),
+        None => effective,
+    };
+    if tenant_ceiling.is_none() && note.is_none() && !hierarchy.is_empty() {
+        note = Some(format!(
+            "{TENANT_HIERARCHY} at {hierarchy} holds no node for tenant '{tenant}', so no \
+             tenant ceiling was applied. Create the node under the root to bound this \
+             tenant."
+        ));
+    }
+
+    Ok(ClearanceView {
+        effective: classification_name(effective as u8),
+        recorded,
+        foreign_national,
+        tenant_ceiling: tenant_ceiling.map(|c| classification_name(c as u8)),
+        bounded_to: classification_name(bounded as u8),
+        subject: hex_of(&subject),
+        source: format!(
+            "{CLASSIFICATION_REGISTRY}.getRecord at {registry} + {TENANT_HIERARCHY}.getNode \
+             at {hierarchy} · chain {} · {} · {}",
+            book.chain_id,
+            url,
+            book.describe()
+        ),
+        note,
+    })
+}
+
 // ---- the command surface ---------------------------------------------------
 //
 // None of these takes the backend mutex: they are chain I/O, and holding the
@@ -891,6 +1016,13 @@ pub fn node_blocks(count: u32) -> Result<Vec<BlockRow>, String> {
 #[tauri::command]
 pub fn node_activity() -> Vec<ActivityLine> {
     activity()
+}
+
+/// The operator's clearance, read from chain and bounded by the tenant.
+#[tauri::command]
+pub fn clearance_of(address: String, tenant: String) -> Result<ClearanceView, String> {
+    let book = AddressBook::load_bfr().map_err(|e| e.to_string())?;
+    clearance(&book, &address, &tenant)
 }
 
 /// The tenant tree from `TenantHierarchy` in the BFR book.
@@ -1143,23 +1275,92 @@ mod tests {
         assert_eq!(blocks[0].hash.len(), 66);
     }
 
-    /// Live: the tenancy read against the deployed `TenantHierarchy`. Asserts
-    /// the shape of the answer, whichever of the three it is — the point is that
-    /// it never comes back as a silently empty tree.
+    /// Live: the clearance read against the deployed `ClassificationRegistry`.
+    ///
+    /// Nobody has a clearance recorded on 40204 yet — no HR oracle signer has
+    /// been added — so the interesting assertion is the one that would be easy to
+    /// get wrong: an unrecorded subject must come back `recorded: false` with an
+    /// effective `Public`, NOT as a positive claim that the operator is cleared to
+    /// Public. `getClearance` cannot tell those apart; `getRecord` can, which is
+    /// why the reader uses it.
     #[test]
     #[ignore = "hits the live chain"]
-    fn live_40204_tenancy_answers_or_says_why_not() {
+    fn live_40204_clearance_distinguishes_unrecorded_from_public() {
+        let book = AddressBook::load_bfr().expect("vendored BFR book");
+        let v = clearance(
+            &book,
+            "0x4fAB35c8c5033c80b3a0452A873B81e6ED4ED732",
+            "Citrate",
+        )
+        .expect("the read itself must succeed");
+        assert_eq!(v.effective, "Public", "fail-closed default");
+        assert_eq!(v.bounded_to, "Public");
+        assert!(
+            !v.recorded,
+            "no HR oracle has recorded a clearance on 40204 — if this now fails, one \
+             has, and the assertion below should become the real value"
+        );
+        assert_eq!(
+            v.foreign_national, None,
+            "no record means no FN answer either"
+        );
+        assert!(v.source.contains("ClassificationRegistry.getRecord"));
+        // The subject key is published so an HR oracle can be pointed at exactly
+        // the value this app asks about, rather than guessing our convention.
+        assert_eq!(v.subject.len(), 66, "subject is a 0x-prefixed bytes32");
+        assert_eq!(
+            v.subject,
+            hex_of(&clearance_subject(
+                "0x4FAB35C8C5033C80B3A0452A873B81E6ED4ED732"
+            )),
+            "the subject key must be case-insensitive in the address"
+        );
+    }
+
+    /// Live: the tenancy read against the deployed `TenantHierarchy`.
+    ///
+    /// **This is the only thing that proves `decode_tenant_node` is right.**
+    /// `getNode` returns a DYNAMIC struct holding a `string` and an `address[]`,
+    /// so both tail offsets are relative to the struct start; a paper derivation
+    /// that is one word out still decodes — it just reads the wrong field. Until
+    /// 2026-07-26 there was nothing on chain to decode (`root()` was the zero
+    /// word), so the decoder was pinned only against `cast abi-encode` output.
+    /// The root was seeded that day (tx `0x9c301e12…`, block 148151) and these
+    /// are its real values, read back from the chain rather than taken from the
+    /// script that wrote them.
+    #[test]
+    #[ignore = "hits the live chain"]
+    fn live_40204_tenancy_decodes_the_real_root() {
         let book = AddressBook::load_bfr().expect("vendored BFR book");
         let v = tenancy(&book).expect("the read itself must succeed");
         assert!(v.source.contains("TenantHierarchy"));
-        if v.rows.is_empty() {
+
+        let Some(root) = v.rows.first() else {
+            // An empty tree is still a legal answer, but after the seeding above
+            // the only honest reason left is a book pointing somewhere else.
             let note = v.note.expect("an empty tree must say why it is empty");
+            panic!("expected the seeded root, got an empty tree: {note}");
+        };
+        assert_eq!(root.depth, 0, "the first row is the root");
+        assert_eq!(
+            root.name, "Citrate",
+            "display_name decoded from the wrong word?"
+        );
+        assert_eq!(root.ceiling, "CUI", "classification_max = 2");
+        assert_eq!(root.threshold, "2-of-3", "admin_threshold + admins.len()");
+        // If the `address[]` tail were read at the wrong offset these would be
+        // garbage rather than merely in a different order.
+        for a in [
+            "0xf4fe9b2c6441ff7c081b60716a78193127919783",
+            "0x269deee81cb8eb5899b2d17945b951608e41774b",
+            "0x671f3f4f9cbb0509a28ee4fa0b416dabbc9375c5",
+        ] {
             assert!(
-                note.contains("initRoot") || note.contains("not in the address book"),
-                "{note}"
+                root.admins.to_lowercase().contains(a),
+                "missing admin {a} in {}",
+                root.admins
             );
-        } else {
-            assert_eq!(v.rows[0].depth, 0, "the first row must be the root");
         }
+        assert!(v.note.is_none(), "a populated tree needs no excuse");
     }
 }

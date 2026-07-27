@@ -61,6 +61,61 @@ fn encode_bytes32_call(sel: [u8; 4], arg: [u8; 32]) -> String {
     format!("0x{}", hex::encode(data))
 }
 
+/// Decode `getRecord(bytes32) -> UserClass` far enough to answer the question
+/// `getClearance` cannot: **is there a record at all?**
+///
+/// `getClearance` returns `(Public, false)` for a subject it has never heard of,
+/// which is the right fail-closed default and the wrong thing to SHOW someone.
+/// "Nobody has ever recorded a clearance for you" and "you are cleared to Public"
+/// are different facts with different fixes — the first needs an HR oracle, the
+/// second needs a promotion — and a surface that renders them identically sends
+/// people to solve the wrong problem. (The same distinction MR-4 makes between an
+/// agent with no grant and an agent granted Public.)
+///
+/// `UserClass` is a STATIC tuple — `bytes32, uint8, bool, address, uint64, bool` —
+/// so the return is six head words with no offset word in front. Field → word:
+/// `max_clearance` is word 1, `foreign_national` word 2, `exists` word 5.
+fn decode_record(ret: &[u8]) -> Option<ClearanceRecord> {
+    if ret.len() < 6 * 32 {
+        return None;
+    }
+    let word = |i: usize| &ret[i * 32..(i + 1) * 32];
+    let exists = word(5)[31] != 0;
+    if !exists {
+        return Some(ClearanceRecord::Unrecorded);
+    }
+    Some(ClearanceRecord::Recorded {
+        clearance: classification_from_ordinal(word(1)[31])?,
+        foreign_national: word(2)[31] != 0,
+    })
+}
+
+/// What the registry knows about a subject.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClearanceRecord {
+    /// The registry holds no record. Fails closed to Public everywhere it is
+    /// USED — but a surface must be able to say WHY it is Public.
+    Unrecorded,
+    Recorded {
+        clearance: Classification,
+        foreign_national: bool,
+    },
+}
+
+impl ClearanceRecord {
+    /// The clearance to enforce with. Unrecorded is Public — the same answer the
+    /// contract gives, arrived at deliberately rather than by collapsing.
+    pub fn effective(self) -> Classification {
+        match self {
+            Self::Unrecorded => Classification::Public,
+            Self::Recorded { clearance, .. } => clearance,
+        }
+    }
+    pub fn is_recorded(self) -> bool {
+        matches!(self, Self::Recorded { .. })
+    }
+}
+
 /// Decode `getClearance(bytes32) -> (uint8 clearance, bool foreign_national)`.
 /// Two static 32-byte words; each small value is right-aligned in its word.
 /// Returns `None` on a short return or an out-of-range clearance ordinal.
@@ -126,6 +181,16 @@ impl<T: RpcTransport> ClearanceReader<T> {
             "to": to,
             "data": encode_bytes32_call(sel, arg),
         }))
+    }
+
+    /// The principal's full record — including whether one exists at all.
+    /// `None` means the CHAIN could not be asked, which is a third state again.
+    pub fn record(&self, subject: [u8; 32]) -> Option<ClearanceRecord> {
+        let sel = selector(rbac::classificationregistry::FUNCTIONS, "getRecord");
+        let ret = self
+            .eth_call_bytes32(&self.classification_registry, sel, subject)
+            .ok()?;
+        decode_record(&ret)
     }
 
     /// The principal's on-chain clearance + FN flag, or `None` on any failure.
@@ -360,5 +425,84 @@ mod tests {
         let data = encode_bytes32_call([0xa3, 0x30, 0xd5, 0x2e], SUB);
         assert!(data.starts_with("0xa330d52e"));
         assert_eq!(data.len(), 2 + (4 + 32) * 2); // 0x + 36 bytes hex
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod record_tests {
+    use super::*;
+
+    /// A `UserClass` return, built the way the chain builds it: six static head
+    /// words, no leading offset (the tuple has no dynamic members).
+    fn user_class(clearance: u8, fn_flag: bool, exists: bool) -> Vec<u8> {
+        // Word indices spelled out, because "which word is `exists` in" is the
+        // whole thing this fixture pins.
+        const WORD: usize = 32;
+        let last = |w: usize| w * WORD + 31;
+        let mut out = vec![0u8; 6 * WORD];
+        out[last(1)] = clearance;
+        out[last(2)] = u8::from(fn_flag);
+        out[last(5)] = u8::from(exists);
+        out
+    }
+
+    #[test]
+    fn an_unrecorded_subject_is_not_the_same_as_one_cleared_to_public() {
+        // This is the whole reason `record()` exists alongside `clearance()`.
+        // `getClearance` answers Public for both, which is the right thing to
+        // ENFORCE and the wrong thing to SHOW.
+        let none = decode_record(&user_class(0, false, false)).unwrap();
+        let public = decode_record(&user_class(0, false, true)).unwrap();
+        assert_eq!(none, ClearanceRecord::Unrecorded);
+        assert!(matches!(
+            public,
+            ClearanceRecord::Recorded {
+                clearance: Classification::Public,
+                ..
+            }
+        ));
+        assert_ne!(none, public);
+        // …and they enforce identically. Distinguishing them must not weaken the
+        // fail-closed rule.
+        assert_eq!(none.effective(), Classification::Public);
+        assert_eq!(public.effective(), Classification::Public);
+        assert!(!none.is_recorded());
+        assert!(public.is_recorded());
+    }
+
+    #[test]
+    fn a_recorded_clearance_and_its_fn_flag_decode_from_the_right_words() {
+        match decode_record(&user_class(2, true, true)).unwrap() {
+            ClearanceRecord::Recorded {
+                clearance,
+                foreign_national,
+            } => {
+                assert_eq!(clearance, Classification::Cui);
+                assert!(foreign_national, "the FN flag is word 2, not word 1");
+            }
+            other => panic!("expected Recorded, got {other:?}"),
+        }
+        match decode_record(&user_class(3, false, true)).unwrap() {
+            ClearanceRecord::Recorded {
+                clearance,
+                foreign_national,
+            } => {
+                assert_eq!(clearance, Classification::Itar);
+                assert!(!foreign_national);
+            }
+            other => panic!("expected Recorded, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_short_or_nonsense_return_is_none_never_a_clearance() {
+        assert!(decode_record(&[]).is_none());
+        assert!(decode_record(&[0u8; 5 * 32]).is_none());
+        // An ordinal outside the ladder is refused rather than clamped: guessing
+        // DOWN under-clears someone, guessing UP over-clears them.
+        let mut bogus = user_class(0, false, true);
+        bogus[32 + 31] = 9; // word 1 = max_clearance
+        assert!(decode_record(&bogus).is_none());
     }
 }

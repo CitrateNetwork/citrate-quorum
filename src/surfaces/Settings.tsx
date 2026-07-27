@@ -13,13 +13,99 @@
 //
 // Reads bridge.settings.tenancy(); the vault and signing identity come from the
 // shared kit surface (VaultPanel / WalletSetup).
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { bridge } from "../bridge";
 import { Domain, useDomain } from "../components/DomainState";
 import { VaultPanel } from "../wallet/VaultPanel";
 import { WalletSetup } from "../wallet/WalletSetup";
 
 type Tab = "tenancy" | "identity" | "models" | "license" | "compliance";
+
+/**
+ * The operator's clearance, read from chain.
+ *
+ * The distinction this panel exists to keep: **"nobody has recorded a clearance
+ * for you" is not "you are cleared to Public".** Both enforce as Public — that is
+ * the fail-closed rule and it does not bend — but they need different fixes, and
+ * `ClassificationRegistry.getClearance` answers them identically. The read uses
+ * `getRecord` so the surface can tell you which one you are looking at.
+ */
+function ClearancePanel() {
+  const [address, setAddress] = useState<string | null>(null);
+  const [tenant, setTenant] = useState<string | null>(null);
+  useEffect(() => {
+    bridge.wallet.identity().then((i) => setAddress(i.address)).catch(() => {});
+    bridge.session.activeTenant().then(setTenant).catch(() => {});
+  }, []);
+
+  // The source string carries the arguments deliberately. `useDomain` re-runs on
+  // `source`, and the address and tenant arrive from their own async reads AFTER
+  // the first render — with a constant source the panel fired once against
+  // `null`, reported "no signing identity", and never retried, while the identity
+  // sat rendered two panels above it. An honest error plate for a state that had
+  // already passed is its own kind of false. Naming the arguments also satisfies
+  // Rule 11 better than "settings.clearance()" did.
+  const read = useDomain(
+    () =>
+      address && tenant
+        ? bridge.settings.clearance(address, tenant)
+        : Promise.reject(new Error(
+            address
+              ? "no tenant scope is established yet — a clearance is read per tenant"
+              : "no signing identity yet — a clearance is recorded against an address",
+          )),
+    `settings.clearance(${address ?? "…"}, ${tenant ?? "…"})`,
+  );
+
+  return (
+    <div className="surface" style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+      <span className="eyebrow">Clearance</span>
+      <Domain read={read} source={`settings.clearance(${address ?? "…"}, ${tenant ?? "…"})`} skeletonRows={2}>
+        {(c) => (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "190px 1fr", gap: "8px 12px", fontSize: 13 }}>
+              <span className="lbl" style={{ margin: 0 }}>On chain</span>
+              <span>
+                {c.recorded ? (
+                  <>
+                    <span className="mono" style={{ fontSize: 8.5, letterSpacing: ".1em", color: CLS_COLOR[c.effective] ?? "var(--tx-2)", border: `1px solid ${CLS_COLOR[c.effective] ?? "var(--line-2)"}`, padding: "1px 6px" }}>{c.effective}</span>
+                    {c.foreignNational !== null && (
+                      <span className="mono" style={{ fontSize: 10, color: "var(--tx-3)", marginLeft: 8 }}>
+                        foreign national: {c.foreignNational ? "yes" : "no"}
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <span style={{ color: "var(--warn)" }}>
+                    no record — nobody has recorded a clearance for this address. That is not the same as being
+                    cleared to Public, and it enforces as Public either way.
+                  </span>
+                )}
+              </span>
+              <span className="lbl" style={{ margin: 0 }}>Tenant ceiling</span>
+              <span className="mono" style={{ fontSize: 11.5 }}>{c.tenantCeiling ?? "— no node for this tenant"}</span>
+              <span className="lbl" style={{ margin: 0 }}>Bounded to</span>
+              <span className="mono" style={{ fontSize: 11.5, color: "var(--tx-1)" }}>{c.boundedTo}</span>
+              <span className="lbl" style={{ margin: 0 }}>Subject key</span>
+              <span className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)", wordBreak: "break-all" }}>{c.subject}</span>
+            </div>
+            {c.note && (
+              <div className="mono" style={{ fontSize: 10.5, color: "var(--warn)", border: "1px solid var(--warn)", background: "var(--warn-bg)", padding: "8px 10px", lineHeight: 1.6 }}>
+                {c.note}
+              </div>
+            )}
+            <span className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)", lineHeight: 1.6, wordBreak: "break-word" }}>
+              {c.source}
+              <br />
+              A clearance is written by an HR oracle signer, not by this app — point it at the subject key above.
+              The commercial-tier axis is not read here; the enterprise axes are.
+            </span>
+          </>
+        )}
+      </Domain>
+    </div>
+  );
+}
 const CLS_COLOR: Record<string, string> = { Public: "var(--z-silver)", Proprietary: "var(--info)", CUI: "var(--warn)", ITAR: "var(--danger)" };
 
 /** A plate for something that is not built. Names it, and where it lands. */
@@ -37,6 +123,12 @@ export function Settings({ onGo }: { onGo: (id: string) => void }) {
   // simplest correct way to make it re-read the identity: a vault that just
   // unlocked turns "no signing identity" into a real address.
   const [vaultEpoch, setVaultEpoch] = useState(0);
+  // A SECOND counter, deliberately not the same one. `WalletSetup` is keyed on
+  // `vaultEpoch`, so having its `onReady` bump that same value remounts it, which
+  // fires `onReady` again, which remounts it… — a loop I wrote and the packaged
+  // app showed as a clearance panel that never resolved. The identity signal
+  // feeds only the panels that consume the address.
+  const [identityEpoch, setIdentityEpoch] = useState(0);
 
   const primary = useDomain(() => bridge.settings.tenancy(), "settings.tenancy()");
 
@@ -94,20 +186,24 @@ export function Settings({ onGo }: { onGo: (id: string) => void }) {
       {tab === "identity" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <VaultPanel onChange={() => setVaultEpoch((n) => n + 1)} />
-          <WalletSetup key={vaultEpoch} />
+          {/* `onReady` fires when a key is created, imported, or simply found in
+              an unlocked vault. It had no caller anywhere in the app — so the
+              clearance panel below, which needs the address, had no way to learn
+              it had appeared. Bumping the same epoch remounts that panel. */}
+          <WalletSetup key={vaultEpoch} onReady={() => setIdentityEpoch((n) => n + 1)} />
           <NotBuilt
             what="Upstream identity federation — an enterprise IdP over OIDC, SCIM provisioning, and the deprovision SLA that doubles as the agent kill-switch — is not wired. The app has an OIDC client in the shared kit, but no directory is connected, so nothing here can report a federation, a seat count, or an SLA."
             lands="QRM-S8"
           />
-          <div className="surface" style={{ padding: 16, display: "flex", flexDirection: "column", gap: 8 }}>
-            <span className="eyebrow">Clearance</span>
-            <span style={{ fontSize: 12.5, color: "var(--tx-2)", lineHeight: 1.6 }}>
-              A person's clearance ceiling is resolved fail-closed as the least of their commercial tier, their
-              on-chain clearance and their tenant's <span className="mono">classification_max</span>. The tenant half
-              of that is live on the Tenancy tab. <span className="mono">ClassificationRegistry</span> is deployed but
-              this app does not read it yet, so the on-chain half is not in force.
-            </span>
-          </div>
+          {/* Keyed on the vault epoch, exactly as WalletSetup above is: this
+              panel reads the signing identity ONCE on mount, and the identity
+              does not exist until the vault is unlocked AND a key is imported.
+              Read once, it showed "no signing identity yet" while the address was
+              rendered two panels above — a true sentence about a state that had
+              already passed. Keyed on BOTH epochs, because the vault unlocking
+              and a key arriving are different moments and this panel needs the
+              later one. */}
+          <ClearancePanel key={`${vaultEpoch}:${identityEpoch}`} />
         </div>
       )}
 

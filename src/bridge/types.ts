@@ -570,6 +570,26 @@ export interface TenancyNode {
   /** The node's on-chain id. */
   id: string;
 }
+/**
+ * A principal's clearance, as the chain has it.
+ *
+ * `recorded: false` with `effective: "Public"` means **nobody has said** — not
+ * that they are cleared to Public. The registry's own `getClearance` collapses
+ * those two; this does not, because they need different fixes.
+ */
+export interface ClearanceView {
+  effective: string;
+  recorded: boolean;
+  foreignNational: boolean | null;
+  tenantCeiling: string | null;
+  /** The least of the axes that answered — what a room is actually bounded by. */
+  boundedTo: string;
+  /** The bytes32 key the registry was asked about, so an HR oracle can match it. */
+  subject: string;
+  source: string;
+  note: string | null;
+}
+
 /** The tenant tree, plus where it came from — or why it is empty. */
 export interface TenancyView {
   rows: TenancyNode[];

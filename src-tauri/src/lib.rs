@@ -229,6 +229,7 @@ pub fn run() {
             chain::node_blocks,
             chain::node_activity,
             chain::tenancy_tree,
+            chain::clearance_of,
             chain::wallet_summary,
             // rooms (QRM-S3) — a real MLS group on the citrate-comms relay. None
             // of these signs with the vault's wallet; a room identity is a relay
