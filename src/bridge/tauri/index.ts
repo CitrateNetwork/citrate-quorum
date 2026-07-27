@@ -17,9 +17,10 @@
 //              record of every RPC it issued.
 //  · wallet   — the vault's address and its live balances.
 //  · settings — the on-chain tenant tree from TenantHierarchy.
+//  · rooms    — a real MLS group on the citrate-comms relay; humans and agents
+//               as cryptographic peers, and a relay that can decrypt nothing.
 //
-// Still unavailable, each for a stated reason: rooms (the comms relay),
-// governance (the S6/S7 contracts), calendar (OAuth consent), repos (a GitHub
+// Still unavailable, each for a stated reason: governance (the S6/S7 contracts), calendar (OAuth consent), repos (a GitHub
 // App), and `session.current` (the OIDC RP). The SHARED signing surface
 // (config / custody / auth / ceremony) is live in the kit (WP-S1.3).
 //
@@ -45,6 +46,10 @@ import {
   type Meeting,
   type MeetingDetail,
   type NodeStatus,
+  type Room,
+  type RoomEvent,
+  type RoomsStatus,
+  type RosterMember,
   type StandupBrief,
   type MeetingState,
   type Classification,
@@ -72,6 +77,15 @@ import {
   ledgerDecision,
   ledgerRecords,
   ledgerState,
+  roomsConnectComplete,
+  roomsConnectIntent,
+  roomsEvents,
+  roomsLeave,
+  roomsList,
+  roomsOpen,
+  roomsRoster,
+  roomsSay,
+  roomsStatus,
   ledgerVerifyDecision,
   nodeActivity,
   nodeBlocks,
@@ -96,6 +110,24 @@ import {
 } from "./commands";
 
 /** The Rust DTO is snake_case; the bridge contract is camelCase. */
+const toRoomsStatus = (s: import("./commands").RoomsStatusDto): RoomsStatus => ({
+  connected: s.connected,
+  relayUrl: s.relay_url,
+  relayDomain: s.relay_domain,
+  address: s.address,
+  seats: s.seats,
+  rooms: s.rooms,
+  note: s.note,
+});
+const toRoom = (r: import("./commands").RoomDto): Room => ({
+  id: r.id,
+  name: r.name,
+  classification: r.classification,
+  live: r.live,
+  members: r.members,
+  started: r.started,
+});
+
 const toGate = (d: DecisionResult): GateDecision => ({
   decisionId: d.decision_id,
   verdict: d.verdict,
@@ -120,12 +152,6 @@ const na =
   (op: string) =>
   (): Promise<never> =>
     Promise.reject(new Unavailable(op));
-
-const naStream =
-  (op: string) =>
-  (): Unsubscribe => {
-    throw new Unavailable(op);
-  };
 
 /** Poll interval for the streaming ledger ribbon (ms). The chain is append-only
  *  and low-rate; polling is honest and simple until a push channel lands. */
@@ -291,7 +317,51 @@ export function createTauriBridge(): BridgeContract {
       revoke: (agent: string, grantId: string, revokedBy: string) =>
         grantRevoke(agent, grantId, revokedBy),
     },
-    rooms: { list: na("rooms.list"), roster: na("rooms.roster"), events: naStream("rooms.events") },
+    // LIVE (QRM-S3): a real MLS group on the citrate-comms relay. The relay
+    // carries ciphertext and routing metadata and can decrypt nothing —
+    // src-tauri/tests/server_blindness.rs proves it against a real relay store,
+    // with a negative control so the proof cannot pass by searching nothing.
+    rooms: {
+      status: async (): Promise<RoomsStatus> => toRoomsStatus(await roomsStatus()),
+      connectIntent: async (operator: string) => {
+        const i = await roomsConnectIntent(operator);
+        return {
+          ceremonyId: i.ceremony_id,
+          address: i.address,
+          relayUrl: i.relay_url,
+          siwe: i.siwe,
+        };
+      },
+      connectComplete: async (ceremonyId: string, signatureHex: string): Promise<RoomsStatus> =>
+        toRoomsStatus(await roomsConnectComplete(ceremonyId, signatureHex)),
+      list: async (): Promise<Room[]> => (await roomsList()).map(toRoom),
+      open: async (input, operator: string): Promise<Room> =>
+        toRoom(await roomsOpen(operator, input.name, input.classification, input.agents)),
+      roster: async (roomId: string): Promise<RosterMember[]> =>
+        (await roomsRoster(roomId)).map((m) => ({
+          id: m.id,
+          name: m.name,
+          human: m.human,
+          address: m.address,
+          mlsKey: m.mls_key,
+        })),
+      say: async (roomId: string, principal: string, text: string): Promise<void> => {
+        await roomsSay(roomId, principal, text);
+      },
+      events: async (since: number): Promise<RoomEvent[]> =>
+        (await roomsEvents(since)).map((e) => ({
+          n: e.n,
+          room: e.room,
+          // The Rust side emits `text` or `system` and nothing else — there is no
+          // audio path, so no line here can claim to have been spoken.
+          kind: e.kind === "system" ? "system" : "text",
+          who: e.who,
+          human: e.human,
+          text: e.text,
+          t: e.t,
+        })),
+      leave: (roomId: string) => roomsLeave(roomId),
+    },
     ledger: {
       // LIVE: the real per-tenant hash chain.
       query: () => ledgerRecords(),

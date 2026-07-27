@@ -1,260 +1,361 @@
-// citrate-quorum — Rooms surface (QRM-S2D). Demo beat 2: the governed standup,
-// the "Zoom for agents." Ported from design §ROOMS. Instrument register. Room
-// list → consent gate → three-pane in-room (roster / streaming transcript /
-// work panel with agenda+approvals+live-vote+minutes). Reads bridge.rooms.list()
-// and the bridge.rooms.events transcript stream; humans and agents are peers.
-import { useEffect, useMemo, useState } from "react";
+// citrate-quorum — Rooms surface (QRM-S3). LIVE.
+//
+// A room here is a real MLS group on the citrate-comms relay. Humans and agents
+// are members of the same group; the relay carries ciphertext and routing
+// metadata and can decrypt nothing — proved by `src-tauri/tests/server_blindness.rs`
+// against a real relay store, with a negative control so the proof cannot pass by
+// searching an empty directory.
+//
+// What the ported design prototype showed here and this does NOT, because it does
+// not exist:
+//   · a push-to-talk button and "transcribing locally". There is no audio path at
+//     all. Voice (the stt-worker sidecar) is planset WP5 and is not built; a mic
+//     button that did nothing would be the worst kind of claim to make in a room
+//     that may carry controlled data.
+//   · a consent gate about audio, for the same reason.
+//   · a frozen agenda with a "✓ verified" hash, a live vote with delegated
+//     weights, a contradiction between two attested sources, and draft minutes.
+//     Those are Meetings (live, on its own surface) and Governance (not built);
+//     rendering them here as room furniture invented four features at once.
+//   · a fixed room title, roster and "since 09:00". Rooms are opened by the
+//     operator and the roster is whoever actually joined.
+//
+// Reads bridge.rooms.status/list/roster/events and writes through open/say/leave.
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { bridge } from "../bridge";
-import { DomainErrorPlate, useDomain } from "../components/DomainState";
-import type { RoomEvent, RosterMember } from "../bridge";
-import { VENDORS } from "../theme/vendors";
+import { Domain, useDomain } from "../components/DomainState";
+import { useCeremony } from "../ceremony/Ceremony";
+import type { Classification, Room, RoomEvent, RoomsStatus, RosterMember } from "../bridge";
 
-const CLS_COLOR: Record<string, string> = { Public: "var(--z-silver)", Proprietary: "var(--info)", CUI: "var(--warn)", ITAR: "var(--danger)" };
-const VERDICT_COLOR: Record<string, string> = { allow: "var(--ok)", "require-approval": "var(--warn)", deny: "var(--danger)" };
-function whoColorFrom(roster: RosterMember[], who?: string, human?: boolean) {
-  if (human) return "var(--accent-text)";
-  const m = roster.find((r) => r.id === who || r.name === who);
-  return m?.vendor ? VENDORS[m.vendor]?.color ?? "var(--tx-2)" : "var(--tx-2)";
-}
+const CLS_COLOR: Record<string, string> = {
+  Public: "var(--z-silver)",
+  Proprietary: "var(--info)",
+  CUI: "var(--warn)",
+  ITAR: "var(--danger)",
+};
+const CLASSES: Classification[] = ["Public", "Proprietary", "CUI", "ITAR"];
+/** How often the transcript is drained from the relay (ms). */
+const POLL_MS = 1500;
 
 function RosterRow({ m }: { m: RosterMember }) {
-  const color = m.vendor ? VENDORS[m.vendor]?.color ?? "var(--tx-2)" : "var(--accent)";
-  const initials = m.name.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
+  const color = m.human ? "var(--accent)" : "var(--info)";
+  const initials = m.name
+    .split(/[\s-]+/)
+    .map((w) => w[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 6px", borderRadius: "var(--r-1)" }} title={m.sbt ?? m.role ?? ""}>
-      <span style={{ width: 24, height: 24, borderRadius: 999, background: m.human ? "rgba(142,204,9,.15)" : "var(--srf-2)", border: `1px solid ${color}`, color, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: 600, flexShrink: 0 }}>{initials}</span>
+    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: 6, borderRadius: "var(--r-1)" }} title={`relay identity ${m.address}`}>
+      <span style={{ width: 24, height: 24, borderRadius: 999, background: "var(--srf-2)", border: `1px solid ${color}`, color, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: 600, flexShrink: 0 }}>{initials}</span>
       <div style={{ minWidth: 0, flex: 1 }}>
         <div style={{ fontSize: 12, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.name}</div>
-        <div className="mono" style={{ fontSize: 8.5, color: "var(--tx-3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.human ? m.role : `${VENDORS[m.vendor!]?.name} · ${m.sbt}`}</div>
+        <div className="mono" style={{ fontSize: 8.5, color: "var(--tx-3)" }}>
+          {m.human ? "human" : "agent · key held by this app"} · mls {m.mlsKey}
+        </div>
       </div>
-      {m.hic != null && <span className="mono" style={{ fontSize: 8, color: "var(--tx-3)", flexShrink: 0 }}>HIC-{m.hic}</span>}
     </div>
   );
 }
 
 export function Rooms() {
-  const [view, setView] = useState<"list" | "consent" | "room">("list");
-  const [events, setEvents] = useState<RoomEvent[]>([]);
+  const [status, setStatus] = useState<RoomsStatus | null>(null);
+  const [statusErr, setStatusErr] = useState<string | null>(null);
+  const [active, setActive] = useState<string | null>(null);
   const [roster, setRoster] = useState<RosterMember[]>([]);
+  const [events, setEvents] = useState<RoomEvent[]>([]);
+  const [rooms, setRooms] = useState<Room[]>([]);
+  const [draft, setDraft] = useState("");
+  const [opening, setOpening] = useState(false);
+  const [form, setForm] = useState({ name: "", classification: "Proprietary" as Classification, agents: "" });
+  const [operator, setOperator] = useState<string>("");
+  const [busy, setBusy] = useState<string | null>(null);
 
-  useEffect(() => { bridge.rooms.roster("r-std4").then(setRoster).catch(() => {}); }, []);
+  const ceremony = useCeremony();
+  const primary = useDomain(() => bridge.rooms.status(), "rooms.status()");
 
   useEffect(() => {
-    if (view !== "room") return;
-    // Deliberate: entering a room must clear the previous room's transcript
-    // before this room's stream is subscribed. Showing another room's events
-    // for even one frame would be a classification leak, not a cosmetic bug.
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- see above
-    setEvents([]);
-    let unsub: (() => void) | undefined;
-    try {
-      unsub = bridge.rooms.events((e) => setEvents((p) => [...p, e]));
-    } catch {
-      /* no transcript stream until the relay is wired (QRM-S3) */
+    bridge.session.operator().then((o) => setOperator(o ?? "")).catch(() => {});
+  }, []);
+
+  const refreshRooms = useCallback(() => {
+    bridge.rooms.list().then(setRooms).catch(() => {
+      /* the status plate above carries the connection's own failure */
+    });
+  }, []);
+
+  useEffect(() => {
+    if (primary.state.status === "ready") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- seeded once from the read, then owned here
+      setStatus(primary.state.data);
+      refreshRooms();
     }
-    return unsub;
-  }, [view]);
+  }, [primary.state, refreshRooms]);
 
-  // Aggregate the live vote from the streamed cast/close events.
-  const vote = useMemo(() => {
-    const open = events.find((e) => e.kind === "system" && (e.text ?? "").startsWith("Vote opened"));
-    if (!open) return null;
-    const casts = events.filter((e) => e.kind === "vote-cast");
-    const close = events.find((e) => e.kind === "vote-close");
-    const forW = casts.filter((c) => c.choice === "For").reduce((a, c) => a + (c.weight ?? 0), 0);
-    const abstW = casts.filter((c) => c.choice === "Abstain").reduce((a, c) => a + (c.weight ?? 0), 0);
-    const tot = casts.reduce((a, c) => a + (c.weight ?? 0), 0) || 100;
-    return { q: open.text!.replace("Vote opened — ", ""), casts, forW, abstW, tot, result: close?.text ?? null };
-  }, [events]);
+  // Drain the relay on a beat. Polled, not pushed: same reason the ledger ribbon
+  // polls — no event plumbing, and a room is not a high-rate source.
+  useEffect(() => {
+    if (!status?.connected) return;
+    let live = true;
+    const tick = () => {
+      bridge.rooms
+        .events(0)
+        .then((all) => {
+          if (live) setEvents(all);
+        })
+        .catch(() => {
+          /* a transient drain failure must not clear the transcript */
+        });
+    };
+    tick();
+    const iv = setInterval(tick, POLL_MS);
+    return () => {
+      live = false;
+      clearInterval(iv);
+    };
+  }, [status?.connected]);
 
-  // Honest failure (S2D.4/§5.1): this surface's primary read is rooms.list().
-  // A read that cannot succeed must say so and offer a retry, not sit in a
-  // loading state forever.
-  const primary = useDomain(() => bridge.rooms.list(), "rooms.list()");
-  // Derived, not mirrored (see Agents.tsx).
-  const rooms = primary.state.status === "ready" ? primary.state.data : [];
-  if (primary.state.status === "error") {
-    return (
-      <div style={{ padding: 18 }}>
-        {/* The G1 export-control gate was superseded for Rooms by the owner on
-            2026-07-26 — this plate said otherwise for as long as that was
-            stale, and a surface that misstates why it is empty is the same
-            defect class as one that fabricates data. What actually blocks
-            Rooms is the relay. (The compliance-claim half of G1 still
-            stands, and nothing in this product claims export-control
-            compliance.) */}
-        <DomainErrorPlate source="rooms.list()" error={primary.state.error} onRetry={primary.retry} lands="It lands in QRM-S3 (rooms), which needs the MLS comms relay at wss://comms.citrate.ai — it is not answering." />
-      </div>
-    );
-  }
+  useEffect(() => {
+    if (!active) return;
+    let live = true;
+    bridge.rooms.roster(active).then((r) => live && setRoster(r)).catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [active, events.length]);
 
-  const whoColor = (who?: string, human?: boolean) => whoColorFrom(roster, who, human);
-  const escalation = events.find((e) => e.kind === "tool" && e.escalate);
-  const minutesN = events.filter((e) => ["system", "tool", "contradiction", "vote-close"].includes(e.kind)).length;
+  // Connecting is a governed act, not a toggle: the operator signs a SIWE
+  // message with the vault key, through the one ceremony, and the seat the relay
+  // grants IS their wallet address. One approval per session — MLS signs every
+  // message after that with the member's own credential key.
+  const connect = async () => {
+    setBusy("opening the relay socket…");
+    try {
+      const intent = await bridge.rooms.connectIntent(operator || "operator");
+      setBusy(null);
+      const r = await ceremony.request({
+        kind: "raw",
+        title: "Sign in to the comms relay",
+        // "user": the operator is acting under their OWN authority, so this
+        // skips the agent policy gate and is recorded as an approved HIC-1 act
+        // naming them. Sending it through the agent gate would record every
+        // human relay login as ungoverned and inflate the product's own alarm
+        // — the modelling fix from QRM-S4.3, applied here.
+        origin: "user",
+        action: {
+          actionClass: "rooms.connect",
+          classification: "Public",
+          agent: operator || "operator",
+          principal: operator || "operator",
+          mandatoryHic1: true,
+        },
+        rows: [
+          { k: "Relay", v: intent.relayUrl },
+          { k: "Signing as", v: intent.address },
+          { k: "Effect", v: "authenticates this machine to the relay as you, for this session. Room messages after this are signed by the member key, not by you." },
+        ],
+        signature: {
+          label: "relay login",
+          prepare: async () => ({ id: intent.ceremonyId }),
+          apply: async (sigHex: string) => {
+            setStatus(await bridge.rooms.connectComplete(intent.ceremonyId, sigHex));
+            return `seat ${intent.address.slice(0, 10)}… authenticated`;
+          },
+        },
+      });
+      if (r.outcome !== "settled") setStatusErr("the relay login was not completed");
+      else setStatusErr(null);
+    } catch (e) {
+      setStatusErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
 
-  if (view === "list") {
-    return (
-      <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 10 }}>
-        {rooms.map((rm) => (
-          <div key={rm.id} className="surface" onClick={() => rm.live && setView("consent")} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 16px", cursor: rm.live ? "pointer" : "default" }}>
-            <span style={{ width: 8, height: 8, borderRadius: 999, background: rm.live ? "var(--accent)" : "var(--line-2)", animation: rm.live ? "ccPulse 1.5s infinite" : "none" }} />
-            <span style={{ fontSize: 14, fontWeight: 500, flex: 1 }}>{rm.name}</span>
-            <span className="mono" style={{ fontSize: 9, letterSpacing: ".12em", textTransform: "uppercase", color: CLS_COLOR[rm.classification], border: `1px solid ${CLS_COLOR[rm.classification]}`, padding: "2px 7px" }}>{rm.classification}</span>
-            <span className="mono tabular" style={{ fontSize: 10.5, color: "var(--tx-3)" }}>{rm.members} members{rm.started ? ` · since ${rm.started}` : ""}</span>
-          </div>
-        ))}
-        <div className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)" }}>Read from rooms.list() → relay-wichita-2 · rooms are E2E-encrypted; the relay sees ciphertext</div>
-      </div>
-    );
-  }
+  const open = async () => {
+    setBusy("opening the room — each agent seat logs in and joins…");
+    try {
+      const agents = form.agents.split(",").map((a) => a.trim()).filter(Boolean);
+      const room = await bridge.rooms.open(
+        { name: form.name || "Untitled room", classification: form.classification, agents },
+        operator || "operator",
+      );
+      setStatusErr(null);
+      setOpening(false);
+      setActive(room.id);
+      refreshRooms();
+      bridge.rooms.status().then(setStatus).catch(() => {});
+    } catch (e) {
+      setStatusErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
 
-  if (view === "consent") {
-    return (
-      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-        <div className="surface" style={{ width: 420, padding: 22, display: "flex", flexDirection: "column", gap: 12, borderTop: "2px solid var(--info)" }}>
-          <span className="eyebrow">Before you join</span>
-          <div style={{ fontSize: 15, fontWeight: 500 }}>Audio is transcribed locally</div>
-          <p style={{ fontSize: 13, lineHeight: 1.55, color: "var(--tx-2)", margin: 0 }}>Push-to-talk speech is transcribed on this machine and posted as attributed text. Raw audio is never stored and never leaves this device. The transcript is part of the room record.</p>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button className="btn btn-primary btn-sm" onClick={() => setView("room")}>I consent — join with voice</button>
-            <button className="btn btn-ghost btn-sm" onClick={() => setView("room")}>Join text-only</button>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  const say = async () => {
+    if (!active || !draft.trim()) return;
+    const text = draft;
+    setDraft("");
+    try {
+      await bridge.rooms.say(active, operator || "operator", text);
+    } catch (e) {
+      setStatusErr(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const shown = useMemo(() => events.filter((e) => !active || e.room === active), [events, active]);
 
   return (
-    <div style={{ height: "100%", display: "grid", gridTemplateColumns: "216px 1fr 288px", minHeight: 0 }}>
-      {/* roster */}
-      <div style={{ borderRight: "1px solid var(--line-1)", display: "flex", flexDirection: "column", minHeight: 0, background: "var(--srf-1)" }}>
-        <div style={{ padding: "12px 12px 8px", display: "flex", flexDirection: "column", gap: 2 }}>
-          <span style={{ fontSize: 13.5, fontWeight: 500 }}>Weekly Standup — Line-4</span>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span className="mono" style={{ fontSize: 8.5, letterSpacing: ".12em", textTransform: "uppercase", color: "var(--info)", border: "1px solid var(--info)", padding: "1px 5px" }}>Proprietary</span>
-            <span className="mono" style={{ fontSize: 9, color: "var(--tx-3)" }}>since 09:00</span>
-          </div>
-        </div>
-        <div style={{ flex: 1, overflow: "auto", padding: "4px 8px", display: "flex", flexDirection: "column", gap: 2 }}>
-          {roster.map((m) => <RosterRow key={m.id} m={m} />)}
-        </div>
-        <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6, borderTop: "1px solid var(--line-1)" }}>
-          <button className="btn btn-ghost btn-sm" style={{ width: "100%" }}>Call an agent…</button>
-          <button className="btn btn-danger btn-sm" style={{ width: "100%" }}>Revoke all — this room</button>
-        </div>
-      </div>
-
-      {/* transcript */}
-      <div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
-        <div style={{ flex: 1, overflow: "auto", padding: "14px 18px", display: "flex", flexDirection: "column", gap: 10 }}>
-          {events.map((ev, i) => {
-            if (ev.kind === "system" || ev.kind === "vote-close") {
-              return (
-                <div key={i} className="mono" style={{ borderTop: "1px solid var(--line-2)", borderBottom: "1px solid var(--line-2)", padding: "7px 2px", display: "flex", alignItems: "baseline", gap: 10 }}>
-                  <span style={{ fontSize: 10.5, letterSpacing: ".06em", color: ev.kind === "vote-close" ? "var(--ok)" : "var(--tx-2)" }}>{ev.text}</span>
-                  {ev.meta && <span style={{ fontSize: 9, color: "var(--tx-3)" }}>{ev.meta}</span>}
-                </div>
-              );
-            }
-            if (ev.kind === "speech" || ev.kind === "text") {
-              const c = whoColor(ev.who, ev.human);
-              return (
-                <div key={i} style={{ display: "flex", gap: 10 }}>
-                  <span className="mono" style={{ fontSize: 9.5, color: c, border: `1px solid ${c}`, padding: "2px 7px", height: "fit-content", flexShrink: 0 }}>{ev.who}</span>
-                  <div style={{ minWidth: 0 }}>
-                    <p style={{ fontSize: 13, lineHeight: 1.5, margin: 0, fontStyle: ev.kind === "speech" ? "italic" : "normal" }}>{ev.text}</p>
-                    {ev.cites?.map((cite, j) => (
-                      <span key={j} className="mono" style={{ display: "inline-block", fontSize: 9.5, color: "var(--info)", border: "1px solid var(--info)", padding: "1px 7px", margin: "5px 6px 0 0", cursor: "pointer" }}>{cite}</span>
-                    ))}
-                  </div>
-                </div>
-              );
-            }
-            if (ev.kind === "tool") {
-              const vc = VERDICT_COLOR[ev.verdict ?? "allow"];
-              return (
-                <div key={i} className="mono" style={{ display: "flex", alignItems: "center", gap: 10, border: `1px solid ${ev.escalate ? "var(--warn)" : "var(--line-2)"}`, background: ev.escalate ? "var(--warn-bg)" : "var(--srf-1)", padding: "6px 10px", fontSize: 10.5 }}>
-                  <span style={{ color: whoColor(ev.who) }}>{ev.who}</span>
-                  <span>{ev.tool}</span>
-                  <span style={{ color: vc, textTransform: "uppercase", letterSpacing: ".08em", fontSize: 9 }}>{ev.verdict}</span>
-                  <span style={{ color: "var(--tx-3)" }}>{ev.dur}</span>
-                  <div style={{ flex: 1 }} />
-                  <span style={{ color: "var(--tx-3)", fontSize: 9.5 }}>{ev.result}</span>
-                </div>
-              );
-            }
-            if (ev.kind === "contradiction") {
-              return (
-                <div key={i} style={{ border: "1.5px solid var(--warn)", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8, background: "var(--warn-bg)" }}>
-                  <span className="mono" style={{ fontSize: 9.5, letterSpacing: ".14em", textTransform: "uppercase", color: "var(--warn)" }}>Contradiction — two attested sources disagree</span>
-                  <span style={{ fontSize: 13, fontWeight: 500 }}>{ev.fact}</span>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                    <div className="mono" style={{ fontSize: 10.5, border: "1px solid var(--line-2)", padding: "7px 9px", background: "var(--srf-0)" }}><span style={{ color: "var(--z-cyan)" }}>{ev.a}</span><br />{ev.va}</div>
-                    <div className="mono" style={{ fontSize: 10.5, border: "1px solid var(--line-2)", padding: "7px 9px", background: "var(--srf-0)" }}><span style={{ color: "var(--z-indigo)" }}>{ev.b}</span><br />{ev.vb}</div>
-                  </div>
-                  <span style={{ fontSize: 11.5, color: "var(--tx-2)" }}>{ev.note}</span>
-                  <div style={{ display: "flex", gap: 6 }}><button className="btn btn-ghost btn-sm">Escalate</button><button className="btn btn-ghost btn-sm">Resolve</button><button className="btn btn-ghost btn-sm">Withdraw</button></div>
-                </div>
-              );
-            }
-            if (ev.kind === "vote-cast") {
-              return (
-                <div key={i} className="mono" style={{ fontSize: 10, color: "var(--tx-3)", paddingLeft: 12 }}>▸ <span style={{ color: whoColor(ev.who, ev.human) }}>{ev.who}</span> voted <span style={{ color: "var(--tx-1)" }}>{ev.choice}</span> · weight {ev.weight}{ev.proof ? ` · ${ev.proof}` : ""}</div>
-              );
-            }
-            return null;
-          })}
-        </div>
-        <div style={{ display: "flex", gap: 8, padding: "10px 18px", borderTop: "1px solid var(--line-1)", alignItems: "center" }}>
-          <input className="input" placeholder="Message the room — @agent to address one" style={{ flex: 1 }} />
-          <button className="btn btn-ghost" title="Push to talk — hold">🎙 Hold to talk</button>
-          <span className="mono" style={{ fontSize: 8.5, letterSpacing: ".1em", textTransform: "uppercase", color: "var(--tx-3)" }}>transcribing locally</span>
-        </div>
-      </div>
-
-      {/* work panel */}
-      <div style={{ borderLeft: "1px solid var(--line-1)", overflow: "auto", display: "flex", flexDirection: "column", background: "var(--srf-1)" }}>
-        <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line-1)", display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}><span className="eyebrow">Agenda</span><div style={{ flex: 1 }} /><span className="mono" style={{ fontSize: 9, color: "var(--ok)", border: "1px solid var(--ok)", padding: "1px 7px" }}>✓ verified</span></div>
-          <span className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)" }}>b3:aa17…90c2 · frozen at open</span>
-          {["Agent reports", "hermes calendar ask", "coverage question", "PRT-004 A2 vote"].map((t, i) => (
-            <div key={i} style={{ display: "flex", gap: 8, fontSize: 12, color: "var(--tx-2)" }}><span className="mono tabular" style={{ color: "var(--tx-3)" }}>{i + 1}</span><span>{t}</span></div>
-          ))}
-        </div>
-        <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line-1)", display: "flex", flexDirection: "column", gap: 8 }}>
-          <span className="eyebrow">Approvals pending</span>
-          {escalation ? (
-            <div style={{ border: "1px solid var(--warn)", background: "var(--warn-bg)", padding: "8px 10px", cursor: "pointer", display: "flex", flexDirection: "column", gap: 3 }}>
-              <span className="mono" style={{ fontSize: 9.5, color: "var(--warn)" }}>{escalation.who} · {escalation.tool}</span>
-              <span style={{ fontSize: 11.5, color: "var(--tx-2)" }}>bounded grant requested — review →</span>
+    <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 14, maxWidth: 1100 }}>
+      <Domain
+        read={primary}
+        source="rooms.status()"
+        lands="It needs the citrate-comms relay."
+        skeletonRows={2}
+      >
+        {() => (
+          <>
+            <div className="surface" style={{ padding: "12px 16px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+              <span style={{ width: 8, height: 8, borderRadius: 999, background: status?.connected ? "var(--accent)" : "var(--line-2)", animation: status?.connected ? "ccPulse 1.6s infinite" : "none" }} />
+              <span className="eyebrow">{status?.connected ? "Connected" : "Not connected"}</span>
+              <span className="mono" style={{ fontSize: 10.5, color: "var(--tx-2)" }}>{status?.relayUrl}</span>
+              {status?.address && (
+                <span className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)" }} title="relay identity — not the chain identity that ratifies minutes">
+                  seat {status.address.slice(0, 10)}… · {status.seats} seat{status.seats === 1 ? "" : "s"}
+                </span>
+              )}
+              <div style={{ flex: 1 }} />
+              {!status?.connected && (
+                <button className="btn btn-primary btn-sm" onClick={connect} disabled={Boolean(busy)}>Sign in to the relay</button>
+              )}
+              {status?.connected && (
+                <button className="btn btn-ghost btn-sm" onClick={() => setOpening((v) => !v)} disabled={Boolean(busy)}>Open a room…</button>
+              )}
             </div>
-          ) : (
-            <span style={{ fontSize: 12, color: "var(--tx-3)" }}>None. Asks land here the moment an agent is blocked.</span>
-          )}
-        </div>
-        {vote && (
-          <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line-1)", display: "flex", flexDirection: "column", gap: 8 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}><span className="eyebrow">Live vote</span>{!vote.result && <span style={{ width: 6, height: 6, borderRadius: 999, background: "var(--accent)", animation: "ccPulse 1.4s infinite" }} />}</div>
-            <span style={{ fontSize: 12.5, lineHeight: 1.45 }}>{vote.q}</span>
-            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}><span className="mono" style={{ fontSize: 9.5, width: 52, color: "var(--tx-3)" }}>FOR</span><div style={{ flex: 1, height: 8, background: "var(--srf-inset)", border: "1px solid var(--line-1)" }}><div style={{ height: "100%", width: `${(vote.forW / vote.tot) * 100}%`, background: "var(--accent)" }} /></div><span className="mono tabular" style={{ fontSize: 10 }}>{vote.forW}</span></div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}><span className="mono" style={{ fontSize: 9.5, width: 52, color: "var(--tx-3)" }}>ABSTAIN</span><div style={{ flex: 1, height: 8, background: "var(--srf-inset)", border: "1px solid var(--line-1)" }}><div style={{ height: "100%", width: `${(vote.abstW / vote.tot) * 100}%`, background: "var(--z-silver)" }} /></div><span className="mono tabular" style={{ fontSize: 10 }}>{vote.abstW}</span></div>
-            </div>
-            {vote.casts.filter((c) => c.proof).map((c, i) => (
-              <div key={i} className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)", display: "flex", flexDirection: "column", gap: 1, borderLeft: "2px solid var(--line-2)", paddingLeft: 8 }}>
-                <span><span style={{ color: whoColor(c.who, c.human) }}>{c.who}</span> · {c.choice} · w{c.weight}</span>
-                <span style={{ display: "flex", alignItems: "center", gap: 6 }}>{c.proof} <span style={{ color: "var(--danger)", cursor: "pointer" }}>revoke allowance</span></span>
+            {busy && <div className="mono" style={{ fontSize: 10.5, color: "var(--tx-3)" }}>{busy}</div>}
+            {statusErr && (
+              <div className="mono" style={{ fontSize: 10.5, color: "var(--danger)", border: "1px solid var(--danger)", background: "var(--danger-bg)", padding: "8px 12px", lineHeight: 1.6 }}>
+                {statusErr}
               </div>
-            ))}
-            {vote.result && <div className="cc-stamp mono" style={{ fontSize: 10.5, color: "var(--ok)", border: "1px solid var(--ok)", background: "var(--ok-bg)", padding: "6px 9px" }}>{vote.result}</div>}
-          </div>
+            )}
+
+            {opening && (
+              <div className="surface" style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10, borderTop: "2px solid var(--line-strong)", maxWidth: 620 }}>
+                <span className="eyebrow">Open a room</span>
+                <div><div className="lbl">Name</div><input className="input" style={{ width: "100%" }} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Weekly standup" /></div>
+                <div>
+                  <div className="lbl">Classification</div>
+                  <select className="input" style={{ width: "100%" }} value={form.classification} onChange={(e) => setForm({ ...form, classification: e.target.value as Classification })}>
+                    {CLASSES.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <div className="lbl">Agents to admit (comma separated)</div>
+                  <input className="input" style={{ width: "100%" }} value={form.agents} onChange={(e) => setForm({ ...form, agents: e.target.value })} placeholder="claude-code, codex" />
+                  <div className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)", marginTop: 4, lineHeight: 1.6 }}>
+                    Each agent gets its own seat, with a key held by THIS app and sealed in the vault — the agent
+                    process never holds one. To the relay an agent seat is indistinguishable from a human's.
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button className="btn btn-primary btn-sm" onClick={open} disabled={Boolean(busy)}>Open</button>
+                  <button className="btn btn-ghost btn-sm" onClick={() => setOpening(false)}>Cancel</button>
+                </div>
+              </div>
+            )}
+
+            {rooms.length === 0 && !opening && (
+              <div style={{ border: "1.5px dashed var(--line-2)", padding: "12px 14px", fontSize: 12.5, color: "var(--tx-3)", lineHeight: 1.6 }}>
+                No room is open in this session. Rooms are not listed from the relay — it has no directory to ask,
+                by design, since a directory of who meets whom is metadata this product does not need to centralise.
+              </div>
+            )}
+
+            {rooms.length > 0 && (
+              <div style={{ display: "grid", gridTemplateColumns: "260px minmax(0,1fr)", gap: 14, alignItems: "start" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  {rooms.map((rm) => (
+                    <div key={rm.id} className="surface" onClick={() => setActive(rm.id)} style={{ padding: "12px 14px", cursor: "pointer", display: "flex", flexDirection: "column", gap: 6, borderLeft: active === rm.id ? "2px solid var(--accent)" : "2px solid transparent" }}>
+                      <span style={{ fontSize: 13.5, fontWeight: 500 }}>{rm.name}</span>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span className="mono" style={{ fontSize: 8.5, letterSpacing: ".12em", textTransform: "uppercase", color: CLS_COLOR[rm.classification] ?? "var(--tx-3)", border: `1px solid ${CLS_COLOR[rm.classification] ?? "var(--line-2)"}`, padding: "1px 6px" }}>{rm.classification}</span>
+                        <span className="mono tabular" style={{ fontSize: 9.5, color: "var(--tx-3)" }}>{rm.members} member{rm.members === 1 ? "" : "s"}{rm.started ? ` · ${rm.started}` : ""}</span>
+                      </div>
+                      <span className="mono" style={{ fontSize: 8.5, color: "var(--tx-3)", wordBreak: "break-all" }}>mls group {rm.id.slice(0, 16)}…</span>
+                    </div>
+                  ))}
+                  {active && (
+                    <div className="surface" style={{ display: "flex", flexDirection: "column" }}>
+                      <div style={{ padding: "10px 12px", borderBottom: "1px solid var(--line-1)" }}><span className="eyebrow">Roster</span></div>
+                      <div style={{ padding: 6 }}>
+                        {roster.map((m) => <RosterRow key={m.id} m={m} />)}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="surface" style={{ display: "flex", flexDirection: "column", minHeight: 320 }}>
+                  <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--line-1)", display: "flex", alignItems: "center", gap: 10 }}>
+                    <span className="eyebrow">Transcript</span>
+                    <span style={{ width: 7, height: 7, borderRadius: 999, background: "var(--accent)", animation: "ccPulse 1.6s infinite" }} />
+                    <div style={{ flex: 1 }} />
+                    <span className="mono" style={{ fontSize: 9, color: "var(--tx-3)" }}>decrypted in this process</span>
+                  </div>
+                  <div style={{ flex: 1, overflow: "auto", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 10, maxHeight: 360 }}>
+                    {shown.length === 0 && (
+                      <span className="mono" style={{ fontSize: 10.5, color: "var(--tx-3)" }}>nothing said yet</span>
+                    )}
+                    {shown.map((ev) => {
+                      if (ev.kind === "system") {
+                        return (
+                          <div key={ev.n} className="mono" style={{ borderTop: "1px solid var(--line-2)", borderBottom: "1px solid var(--line-2)", padding: "6px 2px", fontSize: 10.5, color: "var(--tx-2)", display: "flex", gap: 10 }}>
+                            <span className="tabular" style={{ color: "var(--tx-3)" }}>{ev.t}</span>
+                            <span>{ev.text}</span>
+                          </div>
+                        );
+                      }
+                      const c = ev.human ? "var(--accent-text)" : "var(--info)";
+                      return (
+                        <div key={ev.n} style={{ display: "flex", gap: 10 }}>
+                          <span className="mono" style={{ fontSize: 9.5, color: c, border: `1px solid ${c}`, padding: "2px 7px", height: "fit-content", flexShrink: 0 }}>{ev.who}</span>
+                          <div style={{ minWidth: 0 }}>
+                            <p style={{ fontSize: 13, lineHeight: 1.5, margin: 0 }}>{ev.text}</p>
+                            <span className="mono tabular" style={{ fontSize: 9, color: "var(--tx-3)" }}>{ev.t}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div style={{ display: "flex", gap: 8, padding: "10px 14px", borderTop: "1px solid var(--line-1)" }}>
+                    <input
+                      className="input"
+                      style={{ flex: 1 }}
+                      value={draft}
+                      onChange={(e) => setDraft(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") void say(); }}
+                      placeholder={active ? "Message the room" : "Select a room"}
+                      disabled={!active}
+                    />
+                    <button className="btn btn-primary btn-sm" onClick={say} disabled={!active || !draft.trim()}>Send</button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)", lineHeight: 1.7 }}>
+              rooms.status() / list() / roster() / events() · {status?.note}
+            </div>
+            <div style={{ border: "1.5px dashed var(--line-2)", padding: "12px 14px", fontSize: 12.5, color: "var(--tx-3)", lineHeight: 1.6 }}>
+              Not built, and deliberately not implied anywhere above: <strong>voice</strong> (there is no audio path,
+              so nothing here can have been spoken), <strong>a durable transcript</strong> (messages live in memory
+              for this session and are never written to disk — encrypted-at-rest storage is the ENCRYPT program's
+              work), <strong>AgentSBT-attested seats</strong> (a seat carries the agent id this tenant already has
+              evidence about; it claims no on-chain attestation), and <strong>classification-bounded admission</strong>
+              (MR-4 monotonicity — a room carries a classification but does not yet refuse a member below it).
+            </div>
+          </>
         )}
-        <div style={{ padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}><span className="eyebrow">Minutes</span><span className="mono" style={{ fontSize: 8.5, letterSpacing: ".1em", color: "var(--warn)", border: "1px solid var(--warn)", padding: "1px 6px" }}>DRAFT</span></div>
-          <span style={{ fontSize: 12, color: "var(--tx-2)", lineHeight: 1.5 }}>Drafting live from the transcript — {minutesN} record events so far. Ratification happens on Meetings after the room closes.</span>
-          <a href="#/meetings" className="btn btn-ghost btn-sm" style={{ width: "fit-content" }}>Open meeting record →</a>
-        </div>
-      </div>
+      </Domain>
     </div>
   );
 }
