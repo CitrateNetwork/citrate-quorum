@@ -197,6 +197,21 @@ export function nodeBlocks(count: number): Promise<BlockRowDto[]> {
 export function nodeActivity(): Promise<ActivityLineDto[]> {
   return invoke<ActivityLineDto[]>("node_activity");
 }
+export interface ClearanceViewDto {
+  effective: string;
+  recorded: boolean;
+  foreign_national: boolean | null;
+  tenant_ceiling: string | null;
+  bounded_to: string;
+  subject: string;
+  source: string;
+  note: string | null;
+}
+/** The operator's clearance from ClassificationRegistry, bounded by the tenant. */
+export function clearanceOf(address: string, tenant: string): Promise<ClearanceViewDto> {
+  return invoke<ClearanceViewDto>("clearance_of", { address, tenant });
+}
+
 export function tenancyTree(): Promise<TenancyViewDto> {
   return invoke<TenancyViewDto>("tenancy_tree");
 }

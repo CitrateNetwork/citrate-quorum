@@ -241,6 +241,11 @@ export function createSimBridge(): BridgeContract {
       prs: () => delay(150, D.PRS),
       peek: () => delay(140, D.PEEK),
     },
-    settings: { tenancy: () => delay(150, D.TENANCY) },
+    settings: {
+      tenancy: () => delay(150, D.TENANCY),
+      // No chain in this mode, and a fabricated clearance is the one number in
+      // this product that must never be invented.
+      clearance: () => Promise.reject(new Unavailable("settings.clearance (the sim reads no chain)")),
+    },
   };
 }

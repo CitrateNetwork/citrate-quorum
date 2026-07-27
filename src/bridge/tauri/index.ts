@@ -55,6 +55,7 @@ import {
   type Classification,
   type HicLevel,
   type PendingApproval,
+  type ClearanceView,
   type TenancyView,
   type Unsubscribe,
   type VerifyDecision,
@@ -90,6 +91,7 @@ import {
   nodeActivity,
   nodeBlocks,
   nodeStatus,
+  clearanceOf,
   tenancyTree,
   walletSummary,
   meetingAdmit,
@@ -576,6 +578,19 @@ export function createTauriBridge(): BridgeContract {
     // address book. A tree that is empty because the contract has no root says
     // exactly that — it does not render as "no tenants".
     settings: {
+      clearance: async (address: string, tenant: string): Promise<ClearanceView> => {
+        const c = await clearanceOf(address, tenant);
+        return {
+          effective: c.effective,
+          recorded: c.recorded,
+          foreignNational: c.foreign_national,
+          tenantCeiling: c.tenant_ceiling,
+          boundedTo: c.bounded_to,
+          subject: c.subject,
+          source: c.source,
+          note: c.note,
+        };
+      },
       tenancy: async (): Promise<TenancyView> => {
         const t = await tenancyTree();
         return {
