@@ -1,0 +1,52 @@
+# citrate-quorum — accepted advisories, with names, reasons and an expiry.
+#
+# THE RULE THIS FILE IS WRITTEN UNDER
+#
+# An advisory is ignored here only when it cannot be fixed from this repository,
+# and only with the blocker written down in a form someone can re-test. A
+# suppressed advisory is invisible the day someone can finally act on it, so
+# `scripts/check_audit_ignores.py` runs in the gate and FAILS when:
+#   * the expiry below passes (forcing a fresh decision, not a renewal by
+#     default),
+#   * an ignored advisory stops being reported (the ignore is stale — delete it),
+#   * or the upstream blocker lifts (hpke-rs >= 0.7 in the lock), which is the
+#     exact condition that makes these fixable.
+#
+# WHAT IS ACCEPTED, AND WHY
+#
+# All six come from `libcrux`, pulled by `hpke-rs 0.6.1`, pulled by
+# `openmls_rust_crypto 0.5.1`. We got here on purpose: OpenMLS 0.6 pinned
+# `hpke-rs 0.2.0`, which carried FOUR advisories including RUSTSEC-2026-0071 —
+# 9.3 critical, nonce reuse in HPKE context, under the primitive MLS uses to seal
+# a group secret. The owner chose the upgrade (citrate-comms PR #43) and it
+# cleared all four. This is the residue.
+#
+# It cannot be raised from here. Cargo treats `0.0.x` releases as mutually
+# incompatible, so adding a newer libcrux to any manifest simply puts BOTH in the
+# graph — verified, not assumed. The fix needs `hpke-rs >= 0.7`, which
+# `openmls_rust_crypto 0.5.1` does not accept (it requires `^0.6`).
+#
+# Severity has genuinely come down: a critical confidentiality break was traded
+# for high-severity panics, a SHAKE correctness bug, and a constant-time swap on
+# aarch64. That is an improvement, not a resolution, and nothing here should be
+# read as "the MLS stack is clean".
+#
+# Full analysis, including which of these are actually LINKED by the app (two are
+# in the lockfile but not in the built binary's graph):
+# .agentile/docs/audits/2026-07-26_hpke-rs-advisories-in-the-mls-stack.md
+#
+# EXPIRES: 2026-10-26  (three months — re-decide, do not renew by reflex)
+
+[advisories]
+ignore = [
+    # libcrux-sha3 0.0.8 — fixed in >= 0.0.10, which hpke-rs 0.6.1 will not take.
+    "RUSTSEC-2026-0207", # incorrect incremental portable SHAKE on multiple squeezes
+    "RUSTSEC-2026-0208", # potential panic in AVX2 SHAKE-256
+    # libcrux-secrets 0.0.5 — fixed in >= 0.0.6. aarch64 is our dev box AND the DGX.
+    "RUSTSEC-2026-0212", # possibly non-constant-time swap/select on aarch64
+    # In the lockfile via hpke-rs's optional libcrux backend; NOT in the app's
+    # linked graph (`cargo tree -p citrate-quorum -i libcrux-aesgcm` is empty).
+    "RUSTSEC-2026-0209", # AES-GCM did not enforce AAD length limits (no fix published)
+    "RUSTSEC-2026-0211", # non-constant-time auth tag check in AES-GCM decryption (no fix)
+    "RUSTSEC-2026-0124", # potential panic on overlong ciphertext buffer
+]

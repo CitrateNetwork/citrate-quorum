@@ -65,6 +65,10 @@ run "frontmatter" "no markdown files" \
       exit $fail'
 
 # ---- rust -----------------------------------------------------------------
+# The python runner some checks need. Defined here because the rust section uses
+# it too (audit-ignore honesty); redefined identically further down where the
+# ratchets run, so neither section depends on the other's ordering.
+if command -v uv >/dev/null 2>&1; then PYRUN=(uv run python3); else PYRUN=(python3); fi
 echo
 echo "rust"
 HAS_CARGO='[ -f Cargo.toml ] && command -v cargo'
@@ -88,6 +92,13 @@ run "cargo clippy" "no Cargo.toml yet (WP-S1.3)" "$HAS_CARGO" cargo clippy --wor
 run "cargo test"   "no Cargo.toml yet (WP-S1.3)" "$HAS_CARGO" cargo test --workspace --locked
 run "cargo audit"  "no Cargo.toml yet, or cargo-audit not installed" \
     "$HAS_CARGO && command -v cargo-audit" cargo audit
+# `cargo audit` exits 0 once an advisory is in `.cargo/audit.toml`, so the ignore
+# file is exactly where a security finding goes to be forgotten. This fails when
+# the acceptance expires, when an ignore goes stale, or when the upstream blocker
+# it rests on lifts — see the file's own header.
+run "audit ignores are honest" "no cargo-audit, or no python runner" \
+    "command -v cargo-audit && command -v ${PYRUN[0]:-python3}" \
+    "${PYRUN[@]:-python3}" "$ROOT/scripts/check_audit_ignores.py"
 
 # ---- node -----------------------------------------------------------------
 echo
