@@ -54,6 +54,31 @@
 //! surface, and closing it is a citrate-comms protocol change (an EIP-191 binding
 //! attestation), not something to fake here.
 //!
+//! ## MR-4 — a room's classification bounds who may be in it
+//!
+//! A room carries a classification, and an agent seat may only be admitted when a
+//! LIVE capability grant clears it to at least that level ([`mr4_admits`]). This
+//! is not a preference the operator can wave through: the ceiling comes from the
+//! grants this tenant actually issued, and a revoked or expired grant stops
+//! clearing its agent immediately (CG-2). An agent with no grant at all is
+//! refused with a different sentence than one that is merely under-cleared,
+//! because those are different problems for the operator to fix.
+//!
+//! The monotonic half: a room's classification is fixed when it opens and there
+//! is no path that lowers it. Admitting somebody must never reclassify what has
+//! already been said in front of the people who were already there — the same
+//! rule `quorum-meetings` enforces for attendance, applied to a live room.
+//!
+//! **What is NOT bounded, and must be said:** the operator's own clearance. It
+//! would come from the least of their commercial tier, their on-chain clearance
+//! (`ClassificationRegistry`, deployed but not read by this app) and their
+//! tenant's `classification_max` (`TenantHierarchy`, deployed with no root). With
+//! neither source live, a strict reading of MR-4 makes every operator Public and
+//! every room Public with them. Rather than fake a clearance or quietly exempt
+//! the human, the room's classification is the operator's own declaration,
+//! recorded, and the surface says it is not verified. The agent half is real
+//! today and is the half that governs what an autonomous thing may hear.
+//!
 //! ## Agents hold nothing
 //!
 //! An agent's seat key is held by THIS app, exactly as the planset specifies
@@ -320,6 +345,80 @@ fn hex_gid(g: &GroupId) -> String {
     g.0.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+// ---- MR-4 ------------------------------------------------------------------
+
+/// Why a seat may not enter a room. Each case is a different thing to fix, so
+/// they are different values rather than one string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AdmissionRefusal {
+    /// The agent holds no live grant in this tenant at all.
+    NoGrant { agent: String },
+    /// It holds one, but not to this classification.
+    Undercleared {
+        agent: String,
+        cleared_to: String,
+        room: String,
+    },
+    /// The room's classification is not one this build knows.
+    UnknownClassification { room: String },
+}
+
+impl std::fmt::Display for AdmissionRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoGrant { agent } => write!(
+                f,
+                "{agent} holds no live capability grant in this tenant, so nothing \
+                 clears it for a classified room. Issue one on the Agents surface \
+                 (a revoked or expired grant stops clearing immediately)."
+            ),
+            Self::Undercleared {
+                agent,
+                cleared_to,
+                room,
+            } => write!(
+                f,
+                "{agent} is cleared to {cleared_to}; this room is {room}. Admitting it \
+                 would put a {room} conversation in front of something granted only \
+                 {cleared_to} — MR-4 refuses rather than silently downgrading the room."
+            ),
+            Self::UnknownClassification { room } => write!(
+                f,
+                "'{room}' is not a classification this build knows (Public, \
+                 Proprietary, CUI, ITAR). Refusing rather than guessing which."
+            ),
+        }
+    }
+}
+
+/// **MR-4.** May an agent cleared to `ceiling` enter a room classified `room`?
+///
+/// Pure, so the rule is testable without a relay, a vault or a chain. `None` for
+/// the ceiling means the agent holds no live grant — deliberately distinct from
+/// `Some(Public)`, which means it holds one and it clears Public only.
+pub fn mr4_admits(
+    agent: &str,
+    ceiling: Option<quorum_tenancy::Classification>,
+    room: &str,
+) -> Result<(), AdmissionRefusal> {
+    let Some(room_class) = crate::store::classification_from_str(room) else {
+        return Err(AdmissionRefusal::UnknownClassification {
+            room: room.to_string(),
+        });
+    };
+    match ceiling {
+        None => Err(AdmissionRefusal::NoGrant {
+            agent: agent.to_string(),
+        }),
+        Some(c) if c < room_class => Err(AdmissionRefusal::Undercleared {
+            agent: agent.to_string(),
+            cleared_to: crate::store::classification_str(c).to_string(),
+            room: room.to_string(),
+        }),
+        Some(_) => Ok(()),
+    }
+}
+
 // ---- commands ---------------------------------------------------------------
 
 /// **Phase 1 of connecting the operator's seat.** Opens the socket, takes the
@@ -478,6 +577,7 @@ pub async fn rooms_status(state: tauri::State<'_, RoomsState>) -> Result<RoomsSt
 pub async fn rooms_open(
     state: tauri::State<'_, RoomsState>,
     custody: tauri::State<'_, CustodyState>,
+    backend: tauri::State<'_, std::sync::Arc<std::sync::Mutex<crate::backend::QuorumBackend>>>,
     operator: String,
     name: String,
     classification: String,
@@ -485,6 +585,23 @@ pub async fn rooms_open(
 ) -> Result<RoomDto, String> {
     let url = relay_url();
     let domain = relay_domain(&url);
+
+    // MR-4 FIRST, before a single seat logs in. Checking after the seats exist
+    // would leave an agent authenticated to the relay for a room it was then
+    // refused from — a live session nobody accounted for. The lock is taken and
+    // released here so no relay I/O happens while the evidence mutex is held.
+    {
+        let b = backend
+            .lock()
+            .map_err(|_| "backend lock poisoned".to_string())?;
+        let tenant = b.require_tenant()?;
+        let now = now_ms();
+        for agent in &agents {
+            let ceiling = b.agent_classification_ceiling(tenant.as_str(), agent, now);
+            mr4_admits(agent, ceiling, &classification).map_err(|e| e.to_string())?;
+        }
+    }
+
     let mut rooms = state.0.lock().await;
     if !rooms.seats.contains_key(&operator) {
         return Err(format!(
@@ -788,6 +905,87 @@ mod tests {
         assert!(slot.starts_with("room-identity/"));
         assert_ne!(slot, "wallet");
         assert!(!slot.starts_with("wallet"));
+    }
+
+    use quorum_tenancy::Classification;
+
+    #[test]
+    fn mr4_admits_an_agent_cleared_to_the_room_or_above() {
+        // At the line and above it. A CUI grant is not spent by entering a
+        // Proprietary room — a ceiling is a maximum, not an exact match.
+        assert!(mr4_admits("codex", Some(Classification::Cui), "CUI").is_ok());
+        assert!(mr4_admits("codex", Some(Classification::Itar), "CUI").is_ok());
+        assert!(mr4_admits("codex", Some(Classification::Cui), "Proprietary").is_ok());
+        assert!(mr4_admits("codex", Some(Classification::Public), "Public").is_ok());
+    }
+
+    #[test]
+    fn mr4_refuses_an_undercleared_agent_and_says_both_levels() {
+        let e = mr4_admits("claude-code", Some(Classification::Proprietary), "CUI")
+            .expect_err("Proprietary must not enter a CUI room");
+        match &e {
+            AdmissionRefusal::Undercleared {
+                agent,
+                cleared_to,
+                room,
+            } => {
+                assert_eq!(agent, "claude-code");
+                assert_eq!(cleared_to, "Proprietary");
+                assert_eq!(room, "CUI");
+            }
+            other => panic!("expected Undercleared, got {other:?}"),
+        }
+        // The operator has to know which side to fix, so both levels are in the
+        // sentence, not just "denied".
+        let msg = e.to_string();
+        assert!(msg.contains("Proprietary") && msg.contains("CUI"), "{msg}");
+        assert!(msg.contains("MR-4"), "{msg}");
+    }
+
+    /// "No grant" and "cleared to Public" are DIFFERENT problems: one is an
+    /// operator who has not issued a capability, the other is a capability that
+    /// does not reach. Collapsing them sends someone to fix the wrong thing.
+    #[test]
+    fn mr4_distinguishes_no_grant_from_cleared_to_public() {
+        let none = mr4_admits("devin", None, "Proprietary").expect_err("no grant");
+        assert!(matches!(none, AdmissionRefusal::NoGrant { .. }));
+        assert!(none.to_string().contains("no live capability grant"));
+
+        let public = mr4_admits("devin", Some(Classification::Public), "Proprietary")
+            .expect_err("public grant");
+        assert!(matches!(public, AdmissionRefusal::Undercleared { .. }));
+        assert_ne!(none.to_string(), public.to_string());
+
+        // …and an agent with no grant is still refused from a PUBLIC room. A
+        // seat in a room is a capability, so "ungranted" never means "harmless".
+        assert!(mr4_admits("devin", None, "Public").is_err());
+    }
+
+    #[test]
+    fn mr4_refuses_a_classification_it_does_not_recognise() {
+        // Never guess which level an unknown NAME means. Guessing down admits an
+        // agent that should have been refused; guessing up locks out one that
+        // should not have been. Either way the operator is not told.
+        for bogus in ["Secret", "top-secret", "", "confidential", "CUI-2"] {
+            assert!(
+                matches!(
+                    mr4_admits("codex", Some(Classification::Itar), bogus),
+                    Err(AdmissionRefusal::UnknownClassification { .. })
+                ),
+                "{bogus} must not be interpreted"
+            );
+        }
+        // Case and surrounding whitespace ARE accepted, and that is not a guess:
+        // "cui" names exactly one level, unambiguously. The at-rest codec is
+        // deliberately lenient here so a stored record round-trips, and MR-4
+        // reuses it rather than keeping a second, stricter parser that could
+        // disagree with what was persisted. (This assertion was the other way
+        // round first — it was the test that was wrong.)
+        assert!(mr4_admits("codex", Some(Classification::Itar), "cui").is_ok());
+        assert!(mr4_admits("codex", Some(Classification::Itar), " Public ").is_ok());
+        // …and leniency must not become permissiveness: a lower-cased name still
+        // has to CLEAR.
+        assert!(mr4_admits("codex", Some(Classification::Public), "cui").is_err());
     }
 
     /// Rule 3, restated as a source scan for this module specifically. The

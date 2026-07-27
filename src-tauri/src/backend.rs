@@ -744,7 +744,11 @@ impl QuorumBackend {
 
     /// The active tenant, or an honest error. This is the fail-closed boundary:
     /// no tenant scope means no evidence is read or written, ever.
-    fn require_tenant(&self) -> Result<TenantId, String> {
+    ///
+    /// `pub(crate)` so the rooms subsystem can resolve the same scope before an
+    /// MR-4 check — it must read THIS tenant's grants and no other's (Rule 6),
+    /// and re-deriving the scope there would be a second place to get it wrong.
+    pub(crate) fn require_tenant(&self) -> Result<TenantId, String> {
         self.active_tenant.clone().ok_or_else(|| {
             "no active tenant scope — establish one before any governed action".into()
         })
@@ -1855,6 +1859,31 @@ impl QuorumBackend {
     /// Every agent this tenant has evidence about: one it has granted, or one
     /// that has acted. NOT the AgentSBT registry — that is a chain read which
     /// lands later — so it is named honestly at the surface.
+    /// The highest classification any LIVE grant lets this agent operate on, or
+    /// `None` when it holds none.
+    ///
+    /// `None` is not `Public`: "this agent has no grant at all" and "this agent is
+    /// cleared to Public" are different facts, and MR-4 must be able to refuse the
+    /// first with a different sentence than the second. An agent with several
+    /// grants gets the HIGHEST ceiling among them — a grant is permission, and
+    /// holding two does not reduce what either allows.
+    ///
+    /// Revoked and expired grants do not count (CG-2): a capability that has been
+    /// taken away must not keep a seat in a classified room.
+    pub fn agent_classification_ceiling(
+        &self,
+        tenant: &str,
+        agent: &str,
+        now_ms: i64,
+    ) -> Option<quorum_tenancy::Classification> {
+        self.grants
+            .get(&(tenant.to_string(), agent.to_string()))?
+            .iter()
+            .filter(|g| g.is_live(now_ms))
+            .map(|g| g.classification_ceiling)
+            .max()
+    }
+
     pub fn known_agents(&self, tenant: &str) -> Vec<AgentSummary> {
         let mut seen: std::collections::BTreeMap<String, AgentSummary> =
             std::collections::BTreeMap::new();
