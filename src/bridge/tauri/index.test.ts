@@ -367,3 +367,182 @@ describe("tauri adapter — journals + briefs (QRM-S5.7)", () => {
     expect(invoke).toHaveBeenCalledWith("journal_brief", { agent: "sbt-41", meeting: "m-1" });
   });
 });
+
+describe("tauri adapter — live chain reads (Phase 0)", () => {
+  beforeEach(() => {
+    invoke.mockReset();
+  });
+
+  it("maps node status, keeping a missing answer as null rather than zero", async () => {
+    // `peers: null` means the endpoint did not answer net_peerCount. Coercing
+    // that to 0 would render "no peers" — a claim the node never made.
+    invoke.mockResolvedValue({
+      rpc_url: "https://rpc.citrate.ai",
+      book: "vendored src/generated/addresses.json, chain 40204, 51 contracts",
+      chain_id: 40204,
+      height: 140363,
+      peers: null,
+      client: null,
+      syncing: false,
+      latency_ms: 41,
+      base_fee_wei: "1000000000",
+      blue_score: 140363,
+    });
+    const s = await createTauriBridge().node.status();
+    expect(s).toEqual({
+      rpcUrl: "https://rpc.citrate.ai",
+      book: "vendored src/generated/addresses.json, chain 40204, 51 contracts",
+      chainId: 40204,
+      height: 140363,
+      peers: null,
+      client: null,
+      syncing: false,
+      latencyMs: 41,
+      baseFeeWei: "1000000000",
+      blueScore: 140363,
+    });
+    expect(invoke).toHaveBeenCalledWith("node_status");
+  });
+
+  it("maps block rows onto the fields 40204 actually returns", async () => {
+    invoke.mockResolvedValue([
+      {
+        height: 140363,
+        hash: "0x531a",
+        txs: 0,
+        proposer: "0x25b7",
+        gas_used: 0,
+        gas_limit: 30000000,
+        timestamp: 1785076305,
+        blue_score: 140363,
+        merge_parents: 2,
+      },
+    ]);
+    const [b] = await createTauriBridge().node.blocks(12);
+    expect(b).toEqual({
+      height: 140363,
+      hash: "0x531a",
+      txs: 0,
+      proposer: "0x25b7",
+      gasUsed: 0,
+      gasLimit: 30000000,
+      timestamp: 1785076305,
+      blueScore: 140363,
+      mergeParents: 2,
+    });
+    expect(invoke).toHaveBeenCalledWith("node_blocks", { count: 12 });
+  });
+
+  it("carries the wallet's un-read tokens through as notes, not as zero balances", async () => {
+    invoke.mockResolvedValue({
+      address: "0x4fAB",
+      chain_id: 40204,
+      rpc_url: "https://rpc.citrate.ai",
+      key_store: "citrate-core-kit custody vault · OS keyring available",
+      source: "vendored book",
+      tokens: [{ symbol: "SALT", name: "Citrate native currency", balance: "9999464.745500887910960821", native: true, source: "eth_getBalance" }],
+      notes: ["WrappedSALT at 0xaa91 did not answer: execution reverted"],
+      activity_note: "No movement history: this app runs no transaction index.",
+    });
+    const w = await createTauriBridge().wallet.summary();
+    expect(w.tokens[0].balance).toBe("9999464.745500887910960821");
+    expect(w.notes).toEqual(["WrappedSALT at 0xaa91 did not answer: execution reverted"]);
+    expect(w.activityNote).toContain("no transaction index");
+    expect(w.chainId).toBe(40204);
+  });
+
+  it("keeps an uninitialised tenant tree's reason instead of an empty table", async () => {
+    invoke.mockResolvedValue({
+      rows: [],
+      source: "TenantHierarchy.getNode/getChildren at 0x2dc5…",
+      note: "TenantHierarchy is deployed at 0x2dc5… but holds no root node: root() is the zero word",
+    });
+    const t = await createTauriBridge().settings.tenancy();
+    expect(t.rows).toEqual([]);
+    expect(t.note).toContain("no root node");
+    expect(invoke).toHaveBeenCalledWith("tenancy_tree");
+  });
+
+  it("maps a decision document, proof result included", async () => {
+    invoke.mockResolvedValue({
+      id: "D-90001",
+      what: "repo.write",
+      when: "2026-07-26 14:33:02 UTC",
+      principal: "R. Ortiz",
+      agent: "sbt-41",
+      grant: "G-1",
+      protocol: "— none deployed",
+      verdict: "allow",
+      hic: "2",
+      reason: "allowed by grant G-1 at 2",
+      model: "— not stated by the caller",
+      params: "— no params committed to",
+      correlation: "X-7104",
+      chain_pos: "record 1 of 1",
+      entry_hash: "b3:aa",
+      content_hash: "b3:bb",
+      chain_head: "b3:aa",
+      merkle_root: "b3:cc",
+      proof_len: 0,
+      included: true,
+      source: "the tenant's BLAKE3 evidence chain, record 0",
+    });
+    const d = await createTauriBridge().ledger.decision("D-90001");
+    expect(d.entryHash).toBe("b3:aa");
+    expect(d.contentHash).toBe("b3:bb");
+    expect(d.merkleRoot).toBe("b3:cc");
+    expect(d.included).toBe(true);
+    expect(d.proofLen).toBe(0);
+    expect(invoke).toHaveBeenCalledWith("ledger_decision", { id: "D-90001" });
+  });
+
+  it("keeps the two verify checks separate", async () => {
+    // A chain that replays intact says nothing about whether THIS record is in
+    // it. Folding them into one boolean is how a verify button becomes theatre.
+    invoke.mockResolvedValue({
+      chain_intact: true,
+      included: false,
+      records: 12,
+      entry_hash: "b3:aa",
+      merkle_root: "b3:cc",
+      proof_len: 4,
+    });
+    const v = await createTauriBridge().ledger.verifyDecision("D-90003");
+    expect(v.chainIntact).toBe(true);
+    expect(v.included).toBe(false);
+    expect(v.records).toBe(12);
+    expect(invoke).toHaveBeenCalledWith("ledger_verify_decision", { id: "D-90003" });
+  });
+
+  it("maps the correlation timeline and keeps its source line", async () => {
+    invoke.mockResolvedValue({
+      events: [{ t: "14:33:02", kind: "action", text: "repo.write · allow · R. Ortiz", link: "D-90001" }],
+      source: "1 record(s) carrying correlation X-7104. Pull requests are not in this timeline",
+    });
+    const c = await createTauriBridge().ledger.correlation("X-7104");
+    expect(c.events[0].link).toBe("D-90001");
+    expect(c.source).toContain("not in this timeline");
+    expect(invoke).toHaveBeenCalledWith("ledger_correlation", { corr: "X-7104" });
+  });
+
+  it("reads the chain's five facts in one call so they describe one instant", async () => {
+    invoke.mockResolvedValue({
+      head: "b3:aa",
+      merkle_root: "b3:cc",
+      records: 12,
+      ungoverned: 2,
+      intact: true,
+      tenant: "bca",
+    });
+    const s = await createTauriBridge().ledger.state();
+    expect(s).toEqual({
+      head: "b3:aa",
+      merkleRoot: "b3:cc",
+      records: 12,
+      ungoverned: 2,
+      intact: true,
+      tenant: "bca",
+    });
+    expect(invoke).toHaveBeenCalledWith("ledger_state");
+  });
+});

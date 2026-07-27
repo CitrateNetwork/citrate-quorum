@@ -13,7 +13,6 @@ import type {
   Decision,
   GateDecision,
   GovernedAction,
-  LogLine,
   PendingApproval,
   Unsubscribe,
 } from "../types";
@@ -187,14 +186,10 @@ export function createSimBridge(): BridgeContract {
       importIdentity: () => Promise.reject(new Unavailable("wallet.importIdentity (the sim has no vault)")),
     },
     node: {
-      peers: () => delay(120, D.NODE_PEERS),
-      logs: (onEvent: (e: LogLine) => void): Unsubscribe => {
-        let i = 40;
-        const iv = setInterval(() => onEvent(D.mkLog((++i * 7919) % 1000)), 2600);
-        return () => clearInterval(iv);
-      },
-      blocks: (height: number) =>
-        Array.from({ length: 12 }, (_, i) => D.mkBlock(i, height)),
+      status: () => delay(120, D.NODE_STATUS),
+      blocks: (count: number) =>
+        delay(150, Array.from({ length: count }, (_, i) => D.mkBlock(i, D.NODE_STATUS.height))),
+      activity: () => delay(100, Array.from({ length: 12 }, (_, i) => D.mkActivity(i))),
     },
     agents: {
       list: () => delay(200, D.AGENTS),
@@ -212,12 +207,14 @@ export function createSimBridge(): BridgeContract {
     ledger: {
       query: () =>
         delay(250, Array.from({ length: 40 }, (_, i) => D.mkDecision(i))),
+      state: () => delay(80, D.LEDGER_STATE),
       stream: (onEvent: (e: Decision) => void): Unsubscribe => {
         let i = 1;
         const iv = setInterval(() => onEvent(D.mkDecision(++i)), 4200);
         return () => clearInterval(iv);
       },
       decision: () => delay(180, D.DECISION_DETAIL),
+      verifyDecision: () => delay(400, D.VERIFY_DECISION),
       correlation: () => delay(160, D.CORRELATION),
     },
     meetings: {

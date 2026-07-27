@@ -51,6 +51,20 @@ export function ledgerHead(): Promise<string> {
   return invoke<string>("ledger_head");
 }
 
+export interface LedgerStateDto {
+  head: string;
+  merkle_root: string;
+  records: number;
+  ungoverned: number;
+  intact: boolean;
+  tenant: string;
+}
+/** Head, root, counts and integrity in ONE read, so they describe the same
+ *  chain at the same instant. */
+export function ledgerState(): Promise<LedgerStateDto> {
+  return invoke<LedgerStateDto>("ledger_state");
+}
+
 /** The Merkle root that an `AnchorRegistry` anchor will commit to. */
 export function ledgerMerkleRoot(): Promise<string> {
   return invoke<string>("ledger_merkle_root");
@@ -64,6 +78,130 @@ export function ledgerVerify(): Promise<boolean> {
 /** The count of `ungoverned` actions — the honest headline gap (Rule 5). */
 export function ledgerUngovernedCount(): Promise<number> {
   return invoke<number>("ledger_ungoverned_count");
+}
+
+/** The Rust shape of one decision document (snake_case on the wire). */
+export interface DecisionDetailDto {
+  id: string;
+  what: string;
+  when: string;
+  principal: string;
+  agent: string;
+  grant: string;
+  protocol: string;
+  verdict: string;
+  hic: string;
+  reason: string;
+  model: string;
+  params: string;
+  correlation: string;
+  chain_pos: string;
+  entry_hash: string;
+  content_hash: string;
+  chain_head: string;
+  merkle_root: string;
+  proof_len: number;
+  included: boolean;
+  source: string;
+}
+export interface VerifyDecisionDto {
+  chain_intact: boolean;
+  included: boolean;
+  records: number;
+  entry_hash: string;
+  merkle_root: string;
+  proof_len: number;
+}
+export interface CorrelationViewDto {
+  events: { t: string; kind: string; text: string; link: string }[];
+  source: string;
+}
+
+/** One decision as a document — a local read of the tenant's evidence chain. */
+export function ledgerDecision(id: string): Promise<DecisionDetailDto> {
+  return invoke<DecisionDetailDto>("ledger_decision", { id });
+}
+/** Replay the chain and re-prove this record's inclusion. Real work, on click. */
+export function ledgerVerifyDecision(id: string): Promise<VerifyDecisionDto> {
+  return invoke<VerifyDecisionDto>("ledger_verify_decision", { id });
+}
+/** Everything recorded under one correlation id. */
+export function ledgerCorrelation(corr: string): Promise<CorrelationViewDto> {
+  return invoke<CorrelationViewDto>("ledger_correlation", { corr });
+}
+
+// ---- live chain reads (Phase 0) -------------------------------------
+//
+// `node_status` / `node_blocks` / `tenancy_tree` / `wallet_summary` all make
+// real RPC calls to the endpoint the address book names. They read; none of
+// them signs. `node_activity` returns this app's own record of those calls.
+
+export interface ChainStatusDto {
+  rpc_url: string;
+  book: string;
+  chain_id: number;
+  height: number;
+  peers: number | null;
+  client: string | null;
+  syncing: boolean | null;
+  latency_ms: number;
+  base_fee_wei: string | null;
+  blue_score: number | null;
+}
+export interface BlockRowDto {
+  height: number;
+  hash: string;
+  txs: number;
+  proposer: string;
+  gas_used: number;
+  gas_limit: number;
+  timestamp: number;
+  blue_score: number | null;
+  merge_parents: number;
+}
+export interface ActivityLineDto {
+  t: string;
+  lvl: string;
+  module: string;
+  msg: string;
+}
+export interface TenancyViewDto {
+  rows: {
+    depth: number;
+    name: string;
+    admins: string;
+    ceiling: string;
+    threshold: string;
+    id: string;
+  }[];
+  source: string;
+  note: string | null;
+}
+export interface WalletSummaryDto {
+  address: string;
+  chain_id: number;
+  rpc_url: string;
+  key_store: string;
+  source: string;
+  tokens: { symbol: string; name: string; balance: string; native: boolean; source: string }[];
+  notes: string[];
+  activity_note: string;
+}
+
+export function nodeStatus(): Promise<ChainStatusDto> {
+  return invoke<ChainStatusDto>("node_status");
+}
+export function nodeBlocks(count: number): Promise<BlockRowDto[]> {
+  return invoke<BlockRowDto[]>("node_blocks", { count });
+}
+export function nodeActivity(): Promise<ActivityLineDto[]> {
+  return invoke<ActivityLineDto[]>("node_activity");
+}
+export function tenancyTree(): Promise<TenancyViewDto> {
+  return invoke<TenancyViewDto>("tenancy_tree");
+}
+export function walletSummary(): Promise<WalletSummaryDto> {
+  return invoke<WalletSummaryDto>("wallet_summary");
 }
 
 // ---- the governed-action pipeline ----------------------------------

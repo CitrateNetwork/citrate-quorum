@@ -76,7 +76,14 @@ export function Rooms() {
   if (primary.state.status === "error") {
     return (
       <div style={{ padding: 18 }}>
-        <DomainErrorPlate source="rooms.list()" error={primary.state.error} onRetry={primary.retry} lands="It lands in QRM-S3 (rooms), which is gated on the G1 export-control legal opinion." />
+        {/* The G1 export-control gate was superseded for Rooms by the owner on
+            2026-07-26 — this plate said otherwise for as long as that was
+            stale, and a surface that misstates why it is empty is the same
+            defect class as one that fabricates data. What actually blocks
+            Rooms is the relay. (The compliance-claim half of G1 still
+            stands, and nothing in this product claims export-control
+            compliance.) */}
+        <DomainErrorPlate source="rooms.list()" error={primary.state.error} onRetry={primary.retry} lands="It lands in QRM-S3 (rooms), which needs the MLS comms relay at wss://comms.citrate.ai — it is not answering." />
       </div>
     );
   }

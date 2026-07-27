@@ -26,9 +26,70 @@ Known ordering trap, found by this script: `ceremony.request()` resolves when
 the operator DISMISSES the ceremony, not when the modal reaches "on record".
 Clicking Sign alone leaves the record untouched — the backend write happens
 after Close.
+
+Second trap, and the reason for `_isolate_keyring` below: wiping the app-data
+directory is NOT a clean install. The custody vault also keeps
+`custody-master-key` and `custody-generation` in the OS keyring under the SHARED
+`ai.citrate.core` service, and those survive. On the next run the vault sees a
+rolled-back envelope against a live high-water anchor and refuses with "custody
+envelope corrupt or tampered" — correctly, that is the anti-rollback guard doing
+its job — so the vault never unlocks, the chain leg fails, and the failure looks
+like a signing bug. The fix is not to delete a developer's keyring entries (that
+would destroy the citrate-core vault sealed under the same service). It is to
+run the whole thing against a private D-Bus session with its own empty keyring,
+which this script now does to itself.
 """
-import importlib.util, json, subprocess, sys, time
+import importlib.util, json, os, shlex, shutil, subprocess, sys, tempfile, time
 from pathlib import Path
+
+
+def _isolate_keyring() -> None:
+    """Re-exec under a private D-Bus session with a private, EMPTY OS keyring.
+
+    Without this the run is not repeatable: see the second trap above. With it,
+    every run starts from a genuinely clean custody state and nothing outside
+    the temporary home is touched — in particular the developer's real
+    `ai.citrate.core` vault is neither read nor written.
+    """
+    if os.environ.get("QUORUM_VERIFY_ISOLATED") == "1":
+        return
+    if not (shutil.which("dbus-run-session") and shutil.which("gnome-keyring-daemon")):
+        print(
+            "  NOTE  dbus-run-session/gnome-keyring-daemon not found — running against "
+            "the developer's real keyring. A second run may fail with 'custody envelope "
+            "corrupt or tampered'; that is the anti-rollback guard, not a signing bug."
+        )
+        return
+    home = Path(tempfile.mkdtemp(prefix="quorum-verify-home-"))
+    (home / ".local/share").mkdir(parents=True, exist_ok=True)
+    env = {
+        **os.environ,
+        "QUORUM_VERIFY_ISOLATED": "1",
+        "XDG_DATA_HOME": str(home / ".local/share"),
+    }
+    me = shlex.quote(os.path.abspath(__file__))
+    py = shlex.quote(sys.executable)
+    rest = " ".join(shlex.quote(a) for a in sys.argv[1:])
+    print(f"  isolated keyring + app data under {home}")
+    os.execvpe(
+        "dbus-run-session",
+        [
+            "dbus-run-session",
+            "--",
+            "bash",
+            "-c",
+            # The daemon must come up inside this session before the app asks
+            # it for anything. Its passphrase is irrelevant: the keyring is
+            # thrown away with the temp home.
+            "echo -n verify | gnome-keyring-daemon --unlock --components=secrets "
+            f">/dev/null 2>&1; exec {py} {me} {rest}",
+        ],
+        env,
+    )
+
+
+_isolate_keyring()
+
 spec = importlib.util.spec_from_file_location("smoke", "scripts/smoke_packaged.py")
 smoke = importlib.util.module_from_spec(spec); sys.modules["smoke"] = smoke
 spec.loader.exec_module(smoke)
@@ -91,7 +152,9 @@ def _verify_mnemonic() -> str:
 
 
 VERIFY_MNEMONIC = _verify_mnemonic()
-APP = Path.home() / ".local/share/ai.citrate.quorum"
+# Honours XDG_DATA_HOME so the isolated run above reads the app data the app
+# actually wrote, rather than a stale copy in the developer's real home.
+APP = smoke.app_data_dir()
 
 def rec():
     tdir = APP / "evidence/tenants"
@@ -134,16 +197,22 @@ try:
     # test of the signer.
     print("\nvault + signing identity")
     s.click(smoke.SIDEBAR_X, dict(smoke.SURFACES)["Settings"], settle=3)
-    s.click(*A(336, 311)); s.type_text("correct.horse.battery.staple")
-    s.click(*A(336, 356)); s.type_text("correct.horse.battery.staple")
-    s.click(*A(92, 399), settle=4)                  # Create the vault (inits + unlocks)
+    # The vault + identity panels live on the IDENTITY tab. They used to appear
+    # on the default tab too, but only because `settings.tenancy()` always
+    # failed and the error path rendered them underneath it. Now that tenancy
+    # is a live chain read, the default tab shows the tree — so this clicks
+    # through deliberately rather than relying on a failure to expose them.
+    s.click(*A(146, 32), settle=3)                  # Identity tab
+    s.click(*A(343, 197)); s.type_text("correct.horse.battery.staple")
+    s.click(*A(343, 242)); s.type_text("correct.horse.battery.staple")
+    s.click(*A(100, 285), settle=4)                 # Create the vault (inits + unlocks)
     # IMPORT a funded throwaway identity rather than creating a fresh one. A
     # newly created key has zero balance and cannot pay gas, so the chain leg
     # would fail for a reason that says nothing about the signer. Importing
     # also exercises the import path.
-    s.click(*A(260, 487), settle=3)                 # Import an existing one
-    s.click(*A(336, 462)); s.type_text(VERIFY_MNEMONIC)
-    s.click(*A(64, 523), settle=5)                  # Import
+    s.click(*A(268, 373), settle=3)                 # Import an existing one
+    s.click(*A(343, 347)); s.type_text(VERIFY_MNEMONIC)
+    s.click(*A(72, 409), settle=5)                  # Import
     s.shot("v_identity", smoke.CONTENT_CROP)
 
     s.click(smoke.SIDEBAR_X, dict(smoke.SURFACES)["Meetings"], settle=2)

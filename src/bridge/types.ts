@@ -360,6 +360,16 @@ export interface Decision {
   hic: string;
   corr: string;
 }
+/**
+ * One decision, as a document.
+ *
+ * Every field is read back out of the tenant's evidence chain. The three hashes
+ * are what make the document checkable by someone who does not trust the app
+ * rendering it: `contentHash` is the record's own hash (the Merkle leaf),
+ * `entryHash` is `BLAKE3(prev_head ++ record)` (its position in the chain), and
+ * `merkleRoot` is what an anchor commits to. `included` is the result of
+ * actually recomputing the root from the leaf and its proof — not a claim.
+ */
 export interface DecisionDetail {
   id: string;
   what: string;
@@ -369,18 +379,44 @@ export interface DecisionDetail {
   grant: string;
   protocol: string;
   verdict: string;
+  hic: string;
   reason: string;
   model: string;
   params: string;
+  correlation: string;
   chainPos: string;
-  anchor: string;
-  proof: string;
+  entryHash: string;
+  contentHash: string;
+  chainHead: string;
+  merkleRoot: string;
+  proofLen: number;
+  included: boolean;
+  /** Rule 11: where this document was read from. */
+  source: string;
 }
+
+/** What the Verify affordance actually checked, when it was clicked. */
+export interface VerifyDecision {
+  /** The whole chain replayed from genesis and every stored hash matched. */
+  chainIntact: boolean;
+  /** This record's content hash + its proof recomputed the Merkle root. */
+  included: boolean;
+  records: number;
+  entryHash: string;
+  merkleRoot: string;
+  proofLen: number;
+}
+
 export interface CorrelationEvent {
   t: string;
   kind: "meeting" | "grant" | "action" | "pr";
   text: string;
   link: string;
+}
+/** A correlation timeline plus what was searched — and what was not. */
+export interface CorrelationView {
+  events: CorrelationEvent[];
+  source: string;
 }
 
 // ---- journal --------------------------------------------------------
@@ -441,57 +477,79 @@ export interface Peek {
 }
 
 // ---- wallet ---------------------------------------------------------
-export type TxDir = "in" | "out" | "stake" | "gas";
+/**
+ * One balance. `balance` is a decimal string in whole units, computed exactly —
+ * a balance is money, and no float ever touches it.
+ */
 export interface Token {
-  sym: string;
+  symbol: string;
   name: string;
   balance: string;
-  fiat: string;
-  native?: boolean;
+  native: boolean;
+  /** Rule 11: the exact call this number came from. */
+  source: string;
 }
-export interface Tx {
-  hash: string;
-  dir: TxDir;
-  kind: string;
-  counterparty: string;
-  amount: string;
-  token: string;
-  time: string;
-  status: "settled" | "rejected" | "pending";
-  decision?: string;
-}
+/**
+ * The signing identity and what it holds on chain.
+ *
+ * There is deliberately no movement history: this app runs no transaction index
+ * and 40204's RPC cannot enumerate an address's past. `activityNote` says that
+ * out loud rather than letting an empty table imply "no activity".
+ */
 export interface Wallet {
   address: string;
+  chainId: number;
+  rpcUrl: string;
   keyStore: string;
+  source: string;
   tokens: Token[];
-  txs: Tx[];
-  staking: Record<string, string>;
-  contacts: { name: string; addr: string; sbt: string }[];
+  /** Reads that did NOT succeed, named. Never rendered as a zero balance. */
+  notes: string[];
+  activityNote: string;
 }
 
 // ---- node -----------------------------------------------------------
-export interface NodePeer {
-  id: string;
-  kind: string;
-  latency: string;
-  dir: string;
-  ok: boolean;
+/** Where the chain is, from the endpoint the address book names. */
+export interface NodeStatus {
+  rpcUrl: string;
+  book: string;
+  chainId: number;
+  height: number;
+  /** `net_peerCount` from the endpoint. `null` = it did not answer — not zero. */
+  peers: number | null;
+  client: string | null;
+  /** `false` = fully synced. `null` = the node did not answer. */
+  syncing: boolean | null;
+  latencyMs: number;
+  baseFeeWei: string | null;
+  blueScore: number | null;
 }
-export interface LogLine {
+/**
+ * One line of what this app did against the chain.
+ *
+ * NOT a node log: citrate-quorum supervises no node, so it has none to stream.
+ * This is its own RPC record — method, endpoint, outcome, measured round trip.
+ */
+export interface ActivityLine {
   t: string;
   lvl: "INFO" | "WARN" | "DEBUG" | "ERROR";
-  mod: string;
+  module: string;
   msg: string;
 }
+/** A block, carrying only fields chain 40204's RPC actually returns. */
 export interface Block {
   height: number;
   hash: string;
   txs: number;
-  blue: boolean;
   proposer: string;
-  gas: string;
-  age: string;
-  checkpoint: boolean;
+  gasUsed: number;
+  gasLimit: number;
+  /** Epoch seconds. */
+  timestamp: number;
+  /** GhostDAG blue score, when the node reports one. */
+  blueScore: number | null;
+  /** How many merge parents this block absorbed. */
+  mergeParents: number;
 }
 
 // ---- settings -------------------------------------------------------
@@ -499,8 +557,17 @@ export interface TenancyNode {
   depth: number;
   name: string;
   admins: string;
-  ceiling: Classification;
+  ceiling: Classification | string;
   threshold: string;
+  /** The node's on-chain id. */
+  id: string;
+}
+/** The tenant tree, plus where it came from — or why it is empty. */
+export interface TenancyView {
+  rows: TenancyNode[];
+  source: string;
+  /** Set when the tree is empty for a reason an operator must act on. */
+  note: string | null;
 }
 
 // ---- ceremony (the one signing component, design brief §3.3) --------

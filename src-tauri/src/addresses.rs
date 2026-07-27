@@ -14,6 +14,20 @@
 //! `QUORUM_ADDRESS_BOOK=/path/to/book.json`. The override is read from disk at
 //! call time, so a customer can repoint an installed app without a rebuild.
 //!
+//! ## Two books, never merged
+//!
+//! The federation keeps its governance/RBAC deployments in a SECOND file,
+//! `bfr-40204.json` — that is where `TenantHierarchy`, `ClassificationRegistry`
+//! and `AgentDecisionRegistryV2` live. It is vendored alongside as
+//! `src/generated/addresses-bfr.json` and loaded by [`AddressBook::load_bfr`].
+//!
+//! The two are deliberately NOT merged into one lookup. Three names
+//! (`ComputeVerifier`, `ComputeMarketplace`, `TEEAttestationRegistry`) appear in
+//! both at DIFFERENT addresses, so a merged table would silently pick a winner
+//! and the app would read a contract nobody pointed it at — the exact failure
+//! rule 8 exists to prevent. A caller names the book it means, and the book says
+//! which file answered.
+//!
 //! ## Absent is not zero
 //!
 //! [`AddressBook::get`] returns `None` for a name the book does not carry, and
@@ -28,8 +42,14 @@ use serde::Deserialize;
 /// The vendored canonical book. Regenerate with `scripts/sync-addresses.sh`.
 const VENDORED: &str = include_str!("generated/addresses.json");
 
+/// The vendored governance/RBAC (BFR) book — `TenantHierarchy` and friends.
+const VENDORED_BFR: &str = include_str!("generated/addresses-bfr.json");
+
 /// Environment override for a deployment running its own chain.
 pub const OVERRIDE_ENV: &str = "QUORUM_ADDRESS_BOOK";
+
+/// Environment override for the governance/RBAC book.
+pub const OVERRIDE_ENV_BFR: &str = "QUORUM_ADDRESS_BOOK_BFR";
 
 #[derive(Debug, Deserialize)]
 struct RawBook {
@@ -77,15 +97,30 @@ impl AddressBook {
     /// fall back to the vendored book — an operator who pointed the app at
     /// their chain and got ours would be reading someone else's addresses.
     pub fn load() -> Result<Self, BookError> {
-        match std::env::var(OVERRIDE_ENV) {
+        Self::load_one(OVERRIDE_ENV, VENDORED, "src/generated/addresses.json")
+    }
+
+    /// Load the governance/RBAC (BFR) book — the one that carries
+    /// `TenantHierarchy`. Same override discipline, its own env var, and its own
+    /// `source` string, so a surface reading tenancy names the file it read.
+    pub fn load_bfr() -> Result<Self, BookError> {
+        Self::load_one(
+            OVERRIDE_ENV_BFR,
+            VENDORED_BFR,
+            "src/generated/addresses-bfr.json",
+        )
+    }
+
+    fn load_one(env: &str, vendored: &str, vendored_path: &str) -> Result<Self, BookError> {
+        match std::env::var(env) {
             Ok(path) if !path.trim().is_empty() => {
                 let raw = std::fs::read_to_string(&path).map_err(|e| BookError::Io {
                     path: path.clone(),
                     detail: e.to_string(),
                 })?;
-                Self::parse(&raw, &format!("{OVERRIDE_ENV}={path}"))
+                Self::parse(&raw, &format!("{env}={path}"))
             }
-            _ => Self::parse(VENDORED, "vendored src/generated/addresses.json"),
+            _ => Self::parse(vendored, &format!("vendored {vendored_path}")),
         }
     }
 
@@ -162,6 +197,57 @@ mod tests {
             assert_eq!(a.len(), 42, "{name}: {a}");
             assert!(a[2..].chars().all(|c| c.is_ascii_hexdigit()), "{name}: {a}");
         }
+    }
+
+    #[test]
+    fn the_bfr_book_parses_and_carries_tenant_hierarchy() {
+        // If this fails, `scripts/sync-addresses.sh` has not been run since the
+        // RBAC set was deployed — and the tenancy read will correctly, but
+        // uselessly, report itself unavailable.
+        let b = AddressBook::load_bfr().expect("vendored BFR book must parse");
+        assert_eq!(b.chain_id, 40204);
+        assert!(b.get("TenantHierarchy").is_some());
+        assert!(b.get("ClassificationRegistry").is_some());
+    }
+
+    /// The two books MUST stay separate lookups. These three names are in both
+    /// at different addresses, so a merge would silently pick a winner — an
+    /// operator would be reading a contract they never pointed the app at.
+    #[test]
+    fn the_two_books_disagree_on_shared_names_which_is_why_they_are_not_merged() {
+        let main = AddressBook::load().unwrap();
+        let bfr = AddressBook::load_bfr().unwrap();
+        let mut collisions = 0;
+        for name in [
+            "ComputeVerifier",
+            "ComputeMarketplace",
+            "TEEAttestationRegistry",
+        ] {
+            if let (Some(a), Some(b)) = (main.get(name), bfr.get(name)) {
+                collisions += 1;
+                assert_ne!(
+                    a.to_lowercase(),
+                    b.to_lowercase(),
+                    "{name} now agrees across the books; if that is real, say so here \
+                     rather than leaving a stale justification for keeping them apart"
+                );
+            }
+        }
+        assert!(
+            collisions > 0,
+            "the collision this separation exists for has vanished from the books — \
+             re-check whether two books are still the right shape"
+        );
+    }
+
+    #[test]
+    fn the_books_name_which_file_answered() {
+        assert!(AddressBook::load()
+            .unwrap()
+            .source
+            .contains("addresses.json"));
+        let bfr = AddressBook::load_bfr().unwrap().source;
+        assert!(bfr.contains("addresses-bfr.json"), "{bfr}");
     }
 
     #[test]

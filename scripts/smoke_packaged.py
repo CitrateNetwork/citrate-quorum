@@ -84,6 +84,18 @@ SURFACES = [
     ("Wallet", 460), ("Node", 491), ("Settings", 521),
 ]
 SIDEBAR_X = 62
+
+
+def app_data_dir() -> Path:
+    """Where the packaged app keeps its data.
+
+    Honours `XDG_DATA_HOME` because Tauri's `app_data_dir()` does. A caller that
+    runs the app under a private home (see `verify_meetings.py`'s isolated
+    keyring) would otherwise assert against a stale directory in the real one
+    and read a previous run's evidence as if it were this run's.
+    """
+    base = os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local/share")
+    return Path(base) / APP_ID
 # The window is 1200x780 at +0+0 inside a 1600x1000 root; inside it the shell
 # is sidebar (~222px) | topbar 52px / surface / status rail 30px.
 #
@@ -105,7 +117,7 @@ class Smoke:
         self.binary = binary
         self.display = display
         self.keep = keep
-        self.app_data = Path.home() / ".local/share" / APP_ID
+        self.app_data = app_data_dir()
         self.work = Path("/tmp") / f"quorum-smoke-{os.getpid()}"
         self.xvfb: subprocess.Popen | None = None
         self.app: subprocess.Popen | None = None

@@ -7,19 +7,21 @@
 // states everywhere. Nothing here is real — it is scripted for the demo.
 // =====================================================================
 import type {
+  ActivityLine,
   Agent,
+  Block,
   CalAccount,
   CalEvent,
-  CorrelationEvent,
+  CorrelationView,
   Decision,
   DecisionDetail,
   Grant,
   IngestFile,
   InterviewTurn,
   JournalEntry,
-  LogLine,
   Meeting,
   MeetingDetail,
+  NodeStatus,
   Protocol,
   Peek,
   Pr,
@@ -31,9 +33,11 @@ import type {
   Simulation,
   SpecClause,
   StandupBrief,
-  TenancyNode,
+  TenancyView,
+  VerifyDecision,
   Wallet,
 } from "../types";
+import type { LedgerState } from "../domains";
 
 export const SESSION: Session = {
   user: { name: "Rachel Ortiz", initials: "RO", role: "Chief AI Officer", sbt: "HumanSBT #12", clearance: "CUI", did: "did:citrate:h:0x9f2e…c771" },
@@ -190,18 +194,32 @@ export function mkDecision(i: number): Decision {
   };
 }
 export const DECISION_DETAIL: DecisionDetail = {
-  id: "D-88412", what: "Vote cast — PRT-004 amendment A2 adopted", when: "2026-07-23 09:14:22 UTC", principal: "Rachel Ortiz (HumanSBT #12)",
+  id: "D-88412", what: "vote.cast", when: "2026-07-23 09:14:22 UTC", principal: "Rachel Ortiz (HumanSBT #12)",
   agent: "claude-code (AgentSBT #41)", grant: "G-2118 · vote.cast (delegated) · allowance 4/5", protocol: "PRT-004 v3 · 0x7a41c2…90fe",
-  verdict: "allow", reason: "RC-102 · delegated allowance valid, within cap", model: "claude-sonnet-4-5 + gov-lora v2.3",
-  params: "b3:7d20…41ce", chainPos: "local chain #48,201 · prev b3:0fa1…d208", anchor: "block 1,284,051 · root 0x7c1fa2…90de", proof: "merkle depth 14 · verified inclusion",
+  verdict: "allow", hic: "2", reason: "RC-102 · delegated allowance valid, within cap", model: "claude-sonnet-4-5 + gov-lora v2.3",
+  params: "b3:7d20…41ce", correlation: "X-7104", chainPos: "record 201 of 48,201",
+  entryHash: "b3:0fa1…d208", contentHash: "b3:7d20…41ce", chainHead: "b3:22e0…91cf",
+  merkleRoot: "b3:7c1f…90de", proofLen: 14, included: true,
+  source: "sim — scripted prototype data, not an evidence chain",
 };
-export const CORRELATION: CorrelationEvent[] = [
-  { t: "07-16 09:12", kind: "meeting", text: "CCB #12 — migration decided", link: "m-ccb12" },
-  { t: "07-16 09:19", kind: "grant", text: "G-2203 issued to codex (ceremony settled)", link: "D-88104" },
-  { t: "07-18 14:02", kind: "action", text: "codex · ci.rerun × 12 under G-2203", link: "D-88240" },
-  { t: "07-21 10:44", kind: "action", text: "claude-code · repo.write fix/fixtures", link: "D-88301" },
-  { t: "07-21 16:20", kind: "pr", text: "PR #412 opened — line4-controls", link: "pr-412" },
-];
+export const LEDGER_STATE: LedgerState = {
+  head: "b3:22e0…91cf", merkleRoot: "b3:7c1f…90de", records: 48201, ungoverned: 3,
+  intact: true, tenant: "sim",
+};
+export const VERIFY_DECISION: VerifyDecision = {
+  chainIntact: true, included: true, records: 48201, entryHash: "b3:0fa1…d208",
+  merkleRoot: "b3:7c1f…90de", proofLen: 14,
+};
+export const CORRELATION: CorrelationView = {
+  events: [
+    { t: "07-16 09:12", kind: "meeting", text: "CCB #12 — migration decided", link: "m-ccb12" },
+    { t: "07-16 09:19", kind: "grant", text: "G-2203 issued to codex (ceremony settled)", link: "D-88104" },
+    { t: "07-18 14:02", kind: "action", text: "codex · ci.rerun × 12 under G-2203", link: "D-88240" },
+    { t: "07-21 10:44", kind: "action", text: "claude-code · repo.write fix/fixtures", link: "D-88301" },
+    { t: "07-21 16:20", kind: "pr", text: "PR #412 opened — line4-controls", link: "pr-412" },
+  ],
+  source: "sim — scripted prototype timeline",
+};
 
 export const JOURNAL: JournalEntry[] = [
   { id: "j1", date: "2026-07-23", who: "Rachel Ortiz", human: true, kind: "note", text: "Standup: watch the codex budget burn — 90% with 8 days left in the cycle. If A2 passes, revisit." },
@@ -265,67 +283,64 @@ export const PEEK: Peek = {
 
 export const WALLET: Wallet = {
   address: "0x9f2E4a17c33B8e2f1a6C90dD24b7E80f15c771aa",
-  keyStore: "OS keyring · never exported",
+  chainId: 40204,
+  rpcUrl: "sim — no endpoint is contacted in this mode",
+  keyStore: "sim — no vault; the packaged app holds the key in the OS keyring",
+  source: "sim — scripted prototype data",
   tokens: [
-    { sym: "SALT", name: "Citrate SALT", balance: "2,410.00", fiat: "—", native: true },
-    { sym: "stSALT", name: "Staked SALT (validator bond)", balance: "1,000.00", fiat: "—" },
-    { sym: "L4-CRED", name: "Line-4 work credits (tenant token)", balance: "18,200", fiat: "internal" },
+    { symbol: "SALT", name: "Citrate native currency", balance: "2410", native: true, source: "sim" },
+    { symbol: "wSALT", name: "WrappedSALT", balance: "1000", native: false, source: "sim" },
   ],
-  txs: [
-    { hash: "0x71ac…09fe", dir: "out", kind: "grant budget draw", counterparty: "claude-code · G-2201", amount: "-12.00", token: "SALT", time: "09:14", status: "settled", decision: "D-88412" },
-    { hash: "0x6e02…b1d4", dir: "gas", kind: "paymaster sponsorship", counterparty: "codex · ci.rerun ×12", amount: "-0.84", token: "SALT", time: "08:52", status: "settled", decision: "D-88240" },
-    { hash: "0x5590…2c11", dir: "in", kind: "validator reward", counterparty: "checkpoint 25,681", amount: "+4.20", token: "SALT", time: "08:40", status: "settled" },
-    { hash: "0x4f18…77aa", dir: "out", kind: "transfer", counterparty: "M. Okonkwo · 0x22d0…44ac", amount: "-150.00", token: "SALT", time: "07-22", status: "settled", decision: "D-88301" },
-    { hash: "0x3b77…e0c8", dir: "stake", kind: "bond top-up", counterparty: "MembershipStakeVault", amount: "-100.00", token: "SALT", time: "07-21", status: "settled" },
-    { hash: "0x2a41…90d2", dir: "in", kind: "tier-2 inference revenue", counterparty: "substrate settlement", amount: "+62.50", token: "SALT", time: "07-20", status: "settled" },
-    { hash: "0x1cc0…4b19", dir: "out", kind: "transfer", counterparty: "unknown 0x3f91…77de", amount: "-100.00", token: "SALT", time: "07-20", status: "rejected", decision: "ceremony rejected — raw calldata" },
-  ],
-  staking: { bonded: "1,000", apr: "6.2%", unbonding: "0", period: "7 days", rewards30d: "+126.4", slashable: "yes — double-sign or checkpoint equivocation" },
-  contacts: [
-    { name: "M. Okonkwo", addr: "0x22d0e1…44ac", sbt: "HumanSBT #9" },
-    { name: "Line-4 treasury", addr: "0x8840c2…1f77", sbt: "tenant vault" },
-    { name: "MembershipStakeVault", addr: "0x7a41c2…90fe", sbt: "contract" },
-  ],
+  notes: [],
+  activityNote:
+    "sim — the packaged app reads live balances and states plainly that it keeps no movement history.",
 };
 
-export const NODE_PEERS = [
-  { id: "relay-wichita-2", kind: "relay", latency: "8ms", dir: "inbound+outbound", ok: true },
-  { id: "val-meridian-01", kind: "validator", latency: "11ms", dir: "outbound", ok: true },
-  { id: "val-meridian-02", kind: "validator", latency: "14ms", dir: "outbound", ok: true },
-  { id: "boot-testnet-a", kind: "bootstrap", latency: "96ms", dir: "outbound", ok: true },
-  { id: "val-aero-tulsa", kind: "validator", latency: "—", dir: "outbound", ok: false },
+export const NODE_STATUS: NodeStatus = {
+  rpcUrl: "sim — no endpoint is contacted in this mode",
+  book: "sim — no address book is read",
+  chainId: 40204,
+  height: 140_363,
+  peers: 9,
+  client: "sim",
+  syncing: false,
+  latencyMs: 0,
+  baseFeeWei: "1000000000",
+  blueScore: 140_363,
+};
+const ACTIVITY_LINES: [ActivityLine["lvl"], string, string][] = [
+  ["INFO", "eth_blockNumber", "sim — answered in 0ms"],
+  ["INFO", "eth_getBlockByNumber", "sim — answered in 0ms"],
+  ["INFO", "net_peerCount", "sim — answered in 0ms"],
+  ["INFO", "eth_call", "sim — answered in 0ms"],
 ];
-const LOG_LINES: [LogLine["lvl"], string, string][] = [
-  ["INFO", "consensus", "block accepted · blue score +1 · anticone 3/18"],
-  ["INFO", "mempool", "tx admitted 0x71ac…09fe · grant budget draw"],
-  ["INFO", "lvm", "precompile ai.grade invoked · 412ms · ok"],
-  ["INFO", "checkpoint", "BFT round settled · 72/100 signatures · root 0x7c1f…90de"],
-  ["WARN", "p2p", "peer val-aero-tulsa unresponsive · retry 3/5 backoff 8s"],
-  ["INFO", "anchor", "local hash chain #48,2XX anchored to checkpoint"],
-  ["INFO", "mentor", "LoRA delta received · rank 16 · applied to gov-lora v2.3"],
-  ["DEBUG", "relay", "ciphertext frame relayed · room r-std4 · 2.1KB"],
-  ["INFO", "registry", "AgentDecisionRegistryV2 event · decision recorded"],
-  ["WARN", "paymaster", "codex sponsorship at 90% of weekly envelope"],
-];
-export function mkLog(i: number): LogLine {
-  const [lvl, mod, msg] = LOG_LINES[i % LOG_LINES.length];
+export function mkActivity(i: number): ActivityLine {
+  const [lvl, module, msg] = ACTIVITY_LINES[i % ACTIVITY_LINES.length];
   const d = new Date(Date.now() - i * 3100);
-  return { t: d.toISOString().slice(11, 19), lvl, mod, msg: msg.replace("XX", String(10 + (i % 80))) };
+  return { t: d.toISOString().slice(11, 19), lvl, module, msg };
 }
-export function mkBlock(i: number, height: number) {
+export function mkBlock(i: number, height: number): Block {
   const h = height - i;
   return {
     height: h,
-    hash: "0x" + ((h * 2654435761) % 0xffffff).toString(16).padStart(6, "0") + "…" + ((h * 40503) % 0xffff).toString(16).padStart(4, "0"),
-    txs: 1 + (h % 7), blue: h % 19 !== 0, proposer: "val-meridian-0" + (1 + (h % 2)),
-    gas: (12000 + (h % 9) * 3400).toLocaleString("en-US"), age: i === 0 ? "now" : i * 5 + "s ago",
-    checkpoint: h % 50 === 0,
+    hash: "0x" + ((h * 2654435761) % 0xffffff).toString(16).padStart(6, "0").repeat(10).slice(0, 64),
+    txs: 1 + (h % 7),
+    proposer: "0x" + ((h * 40503) % 0xffff).toString(16).padStart(4, "0").repeat(10).slice(0, 40),
+    gasUsed: 12000 + (h % 9) * 3400,
+    gasLimit: 30_000_000,
+    timestamp: Math.floor(Date.now() / 1000) - i * 5,
+    blueScore: h,
+    mergeParents: h % 19 === 0 ? 1 : 0,
   };
 }
 
-export const TENANCY: TenancyNode[] = [
-  { depth: 0, name: "Meridian Aero", admins: "CIO office", ceiling: "ITAR", threshold: "3-of-5" },
-  { depth: 1, name: "Aerostructures", admins: "R. Ortiz", ceiling: "ITAR", threshold: "2-of-3" },
-  { depth: 2, name: "Wichita", admins: "R. Ortiz · M. Okonkwo", ceiling: "CUI", threshold: "2-of-3" },
-  { depth: 3, name: "Line-4 Automation", admins: "M. Okonkwo", ceiling: "CUI", threshold: "1-of-2" },
-];
+export const TENANCY: TenancyView = {
+  rows: [
+    { depth: 0, name: "Meridian Aero", admins: "CIO office", ceiling: "ITAR", threshold: "3-of-5", id: "0x01" },
+    { depth: 1, name: "Aerostructures", admins: "R. Ortiz", ceiling: "ITAR", threshold: "2-of-3", id: "0x02" },
+    { depth: 2, name: "Wichita", admins: "R. Ortiz · M. Okonkwo", ceiling: "CUI", threshold: "2-of-3", id: "0x03" },
+    { depth: 3, name: "Line-4 Automation", admins: "M. Okonkwo", ceiling: "CUI", threshold: "1-of-2", id: "0x04" },
+  ],
+  source: "sim — scripted prototype tree, not TenantHierarchy on chain",
+  note: null,
+};
