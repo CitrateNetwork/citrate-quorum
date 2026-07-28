@@ -35,6 +35,7 @@ mod compile;
 mod ingest;
 mod interview;
 mod rooms;
+mod simulate;
 mod spec;
 mod store;
 mod wallet_setup;
@@ -157,6 +158,7 @@ pub fn run() {
             interview::governance_interview,
             spec::governance_spec,
             compile::governance_compile,
+            simulate::governance_simulate,
             // config — persisted app config (shared kit surface).
             config::config_read,
             config::config_write,

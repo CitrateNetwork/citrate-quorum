@@ -42,6 +42,7 @@ import {
   type InterviewState,
   type GovernanceSpec,
   type CompileResult,
+  type Simulation,
   type Agent,
   type GovernedAction,
   type Grant,
@@ -70,6 +71,7 @@ import {
   governanceInterview,
   governanceSpec,
   governanceCompile,
+  governanceSimulate,
   actionApprove,
   agentsKnown,
   grantIssue,
@@ -597,7 +599,26 @@ export function createTauriBridge(): BridgeContract {
           unmapped: r.unmapped.map((u) => ({ clause: u.clause, why: u.why })),
         };
       },
-      simulate: na("governance.simulate"),
+      // LIVE (QRM-S7.5): replays the tenant's real recorded decisions. Reports
+      // `unchanged` beside `blocked` — a replay that showed only what it would
+      // have stopped is a demo, not evidence (S7 risk R-B) — and names every
+      // clause it could NOT exercise, because a number produced by half a
+      // policy is not a number about that policy.
+      simulate: async (specId): Promise<Simulation> => {
+        const r = await governanceSimulate(specId);
+        return {
+          range: r.corpus_note ?? r.range,
+          blocked: r.blocked,
+          approvals: r.approvals,
+          allowed: r.allowed,
+          unchanged: r.unchanged,
+          byClass: [],
+          byTeam: [],
+          samples: r.samples,
+          inconvenienced: [],
+          create2: "",
+        };
+      },
       // LIVE (QRM-S7.1): reads the operator's chosen files from disk, detects
       // each one's classification marking, and returns the refusals alongside
       // the accepted files. A file whose marking cannot be determined comes

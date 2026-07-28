@@ -730,3 +730,19 @@ export const governanceCompile = (specId: string) =>
     unmapped: { clause: string; why: string }[];
     structural: { clause: string; kind: string; value: string }[];
   }>("governance_compile", { specId });
+
+/** QRM-S7.5 — stage 5. Replays the tenant's REAL decisions; never a synthetic corpus. */
+export const governanceSimulate = (specId: string) =>
+  invoke<{
+    range: string;
+    total: number;
+    blocked: number;
+    approvals: number;
+    allowed: number;
+    unchanged: number;
+    samples: { id: string; agent: string; action: string; was: string; would: string; why: string }[];
+    simulated: string[];
+    not_simulated: { clause: string; why: string }[];
+    complete: boolean;
+    corpus_note: string | null;
+  }>("governance_simulate", { specId });
