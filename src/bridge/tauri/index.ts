@@ -38,6 +38,7 @@ import {
   type Decision,
   type DecisionDetail,
   type GateDecision,
+  type IngestResult,
   type Agent,
   type GovernedAction,
   type Grant,
@@ -62,6 +63,7 @@ import {
   type Wallet,
 } from "../types";
 import {
+  governanceIngest,
   actionApprove,
   agentsKnown,
   grantIssue,
@@ -554,7 +556,26 @@ export function createTauriBridge(): BridgeContract {
       spec: na("governance.spec"),
       compile: na("governance.compile"),
       simulate: na("governance.simulate"),
-      ingest: na("governance.ingest"),
+      // LIVE (QRM-S7.1): reads the operator's chosen files from disk, detects
+      // each one's classification marking, and returns the refusals alongside
+      // the accepted files. A file whose marking cannot be determined comes
+      // back in `refused` — never accepted with an assumed classification,
+      // because the marking is what decides which model may read it.
+      ingest: async (input): Promise<IngestResult> => {
+        const r = await governanceIngest(input.paths, input.specId);
+        return {
+          specId: r.spec_id,
+          files: r.files.map((f) => ({
+            name: f.name,
+            size: f.size,
+            status: f.status,
+            class: f.class as Classification,
+            note: f.note,
+            prov: f.prov,
+          })),
+          refused: r.refused.map((x) => ({ name: x.name, why: x.why })),
+        };
+      },
       interview: na("governance.interview"),
       deployIntent: na("governance.deployIntent"),
       deployComplete: na("governance.deployComplete"),

@@ -691,3 +691,11 @@ export function roomsEvents(since: number): Promise<RoomEventDto[]> {
 export function roomsLeave(room: string): Promise<void> {
   return invoke<void>("rooms_leave", { room });
 }
+
+/** QRM-S7.1 — stage 1 of the authoring pipeline. Reads local files; uploads nothing. */
+export const governanceIngest = (paths: string[], specId?: string) =>
+  invoke<{
+    spec_id: string;
+    files: { name: string; size: string; status: string; class: string; note: string; prov: string }[];
+    refused: { name: string; why: string }[];
+  }>("governance_ingest", { paths, specId });

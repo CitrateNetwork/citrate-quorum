@@ -31,6 +31,7 @@ mod agent_bridge;
 mod anchor;
 mod backend;
 mod chain;
+mod ingest;
 mod rooms;
 mod store;
 mod wallet_setup;
@@ -148,6 +149,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // The quorum skeleton's own honest status probe.
             quorum_skeleton_status,
+            // governance authoring pipeline (QRM-S7).
+            ingest::governance_ingest,
             // config — persisted app config (shared kit surface).
             config::config_read,
             config::config_write,
