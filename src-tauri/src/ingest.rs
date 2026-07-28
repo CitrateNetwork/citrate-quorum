@@ -553,19 +553,38 @@ fn human_size(bytes: usize) -> String {
 /// next, which is why a file that cannot be classified is returned in `refused`
 /// rather than accepted with a guess.
 #[tauri::command]
-pub fn governance_ingest(paths: Vec<String>, spec_id: Option<String>) -> IngestResultDto {
+pub fn governance_ingest(
+    app: tauri::AppHandle,
+    paths: Vec<String>,
+    spec_id: Option<String>,
+) -> Result<IngestResultDto, String> {
+    use tauri::Manager;
+    let root = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("no app data dir: {e}"))?;
     let batch = ingest_paths(&paths);
-    IngestResultDto {
+    let resolved_id = spec_id.clone().unwrap_or_else(|| {
+        let mut h = blake3::Hasher::new();
+        for f in &batch.accepted {
+            h.update(f.digest.as_bytes());
+        }
+        format!("spec-{}", &h.finalize().to_hex()[..12])
+    });
+
+    // Attach candidate values from the documents to this spec's interview, as
+    // PROPOSALS (S7.2/S7.3). Ingest is the moment new information arrives, so it
+    // is the moment to surface what the documents appear to say — and a proposal
+    // never answers a topic, so doing it here cannot skip a question.
+    let mut interview = crate::interview::load(&root, &resolved_id);
+    crate::spec::propose_from_documents(&mut interview, &batch.accepted);
+    crate::interview::save(&root, &interview)?;
+
+    Ok(IngestResultDto {
         // A spec id is minted per ingest when the caller did not name one. It is
         // derived from the accepted digests so re-ingesting the same documents
         // lands on the same draft instead of silently forking one.
-        spec_id: spec_id.unwrap_or_else(|| {
-            let mut h = blake3::Hasher::new();
-            for f in &batch.accepted {
-                h.update(f.digest.as_bytes());
-            }
-            format!("spec-{}", &h.finalize().to_hex()[..12])
-        }),
+        spec_id: resolved_id,
         files: batch
             .accepted
             .iter()
@@ -586,5 +605,5 @@ pub fn governance_ingest(paths: Vec<String>, spec_id: Option<String>) -> IngestR
                 why: r.why(),
             })
             .collect(),
-    }
+    })
 }

@@ -34,6 +34,7 @@ mod chain;
 mod ingest;
 mod interview;
 mod rooms;
+mod spec;
 mod store;
 mod wallet_setup;
 
@@ -153,6 +154,7 @@ pub fn run() {
             // governance authoring pipeline (QRM-S7).
             ingest::governance_ingest,
             interview::governance_interview,
+            spec::governance_spec,
             // config — persisted app config (shared kit surface).
             config::config_read,
             config::config_write,

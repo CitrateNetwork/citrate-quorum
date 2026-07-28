@@ -710,3 +710,13 @@ export const governanceInterview = (specId: string, answer: string | undefined) 
     complete: boolean;
     proposal: { text: string; from: string } | null;
   }>("governance_interview", { specId, answer });
+
+/** QRM-S7.3 — stage 3. Drafts from the interview; never answers on its behalf. */
+export const governanceSpec = (specId: string, title?: string, classification?: string) =>
+  invoke<{
+    id: string;
+    title: string;
+    classification: string;
+    clauses: { n: string; en: string; gh: string; tpl: string | null; ok: boolean; why: string | null }[];
+    provenance: { clause: string; source: string }[];
+  }>("governance_spec", { specId, title, classification });

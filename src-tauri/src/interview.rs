@@ -195,11 +195,9 @@ impl Interview {
 
     /// Attach a value read from a document. Does NOT answer the topic.
     ///
-    /// Called by the drafter in S7.3, which is what reads the ingested chunks;
-    /// S7.2 owns the rule that a proposal is not an answer, and the tests here
-    /// are what hold that rule. Annotated rather than hidden so the gap is
-    /// legible: if S7.3 lands without calling this, that is a bug, not tidiness.
-    #[allow(dead_code)]
+    /// Called by `spec::propose_from_documents` (S7.3), which reads the
+    /// ingested chunks. S7.2 owns the rule that a proposal is not an answer;
+    /// the tests in both modules are what hold it.
     pub fn propose(&mut self, topic: Topic, text: &str, from: &str) {
         self.proposals.retain(|p| p.topic != topic);
         self.proposals.push(Proposal {

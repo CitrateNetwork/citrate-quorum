@@ -40,6 +40,7 @@ import {
   type GateDecision,
   type IngestResult,
   type InterviewState,
+  type GovernanceSpec,
   type Agent,
   type GovernedAction,
   type Grant,
@@ -66,6 +67,7 @@ import {
 import {
   governanceIngest,
   governanceInterview,
+  governanceSpec,
   actionApprove,
   agentsKnown,
   grantIssue,
@@ -555,7 +557,27 @@ export function createTauriBridge(): BridgeContract {
     governance: {
       specs: na("governance.specs"),
       protocols: na("governance.protocols"),
-      spec: na("governance.spec"),
+      // LIVE (QRM-S7.3): clauses drafted from the interview, each citing the
+      // human who answered or the document a human confirmed. `tpl` is null
+      // here and that means "not yet mapped" — S7.4 owns "maps to nothing".
+      spec: async (specId): Promise<GovernanceSpec> => {
+        const r = await governanceSpec(specId);
+        return {
+          id: r.id,
+          title: r.title,
+          classification: r.classification as Classification,
+          files: [],
+          clauses: r.clauses.map((c) => ({
+            n: c.n,
+            en: c.en,
+            gh: c.gh,
+            tpl: c.tpl,
+            ok: c.ok,
+            ...(c.why ? { why: c.why } : {}),
+          })),
+          provenance: r.provenance,
+        };
+      },
       compile: na("governance.compile"),
       simulate: na("governance.simulate"),
       // LIVE (QRM-S7.1): reads the operator's chosen files from disk, detects
