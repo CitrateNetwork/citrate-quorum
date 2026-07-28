@@ -544,12 +544,21 @@ export function createTauriBridge(): BridgeContract {
         await meetingRatify(id, by, expectHash);
       },
     },
+    // QRM-S7 reshaped this domain to the authoring pipeline. Every method is
+    // still Unavailable — the shape landed before the implementation, on
+    // purpose, so the surface can be written against the real contract instead
+    // of against a placeholder that would have to be unpicked later.
     governance: {
+      specs: na("governance.specs"),
       protocols: na("governance.protocols"),
-      clauses: na("governance.clauses"),
+      spec: na("governance.spec"),
+      compile: na("governance.compile"),
       simulate: na("governance.simulate"),
       ingest: na("governance.ingest"),
       interview: na("governance.interview"),
+      deployIntent: na("governance.deployIntent"),
+      deployComplete: na("governance.deployComplete"),
+      bind: na("governance.bind"),
     },
     // LIVE (QRM-S5.7): journals and retros read from the tenant's workspace
     // `.agentile` files; the brief adds the live governance state (what this

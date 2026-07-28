@@ -319,6 +319,15 @@ export interface Simulation {
   blocked: number;
   approvals: number;
   allowed: number;
+  /**
+   * Decisions the proposed policy would NOT have touched.
+   *
+   * Mandatory (QRM-S7 risk R-B). A simulation that reports only blocked cases
+   * flatters the policy and proves nothing; the honest claim needs the null
+   * result next to the hits. Zero here means the replay corpus is too narrow,
+   * not that the policy is powerful.
+   */
+  unchanged: number;
   byClass: [string, number, number][];
   byTeam: [string, number][];
   samples: {
@@ -748,3 +757,97 @@ export interface SignatureIntent {
 /** A stream subscription: register a listener, get an unsubscribe fn (§6.4). */
 export type Unsubscribe = () => void;
 export type Subscribe<E> = (onEvent: (e: E) => void) => Unsubscribe;
+
+
+// ---- governance authoring pipeline (QRM-S7) --------------------------
+
+/** A draft in flight. */
+export interface SpecSummary {
+  id: string;
+  title: string;
+  /** Which pipeline stage it is waiting on. */
+  stage: "ingested" | "interviewing" | "drafted" | "compiled" | "simulated" | "deployed" | "bound";
+  updated: string;
+  classification: Classification;
+}
+
+export interface IngestRequest {
+  /** Absolute paths the operator chose. Content is read locally, never uploaded. */
+  paths: string[];
+  /** Attach to an existing draft, or omit to start one. */
+  specId?: string;
+}
+
+export interface IngestResult {
+  specId: string;
+  files: IngestFile[];
+  /**
+   * Files refused because their classification could not be determined. Refused,
+   * not defaulted — see `GovernanceDomain.ingest`.
+   */
+  refused: { name: string; why: string }[];
+}
+
+export interface InterviewState {
+  specId: string;
+  /** The turns so far, oldest first. */
+  turns: InterviewTurn[];
+  /** The question awaiting an answer, or null when the interview is complete. */
+  pending: string | null;
+  /** What still has no answer — scope, principals, thresholds, expiry, … */
+  outstanding: string[];
+}
+
+export interface GovernanceSpec {
+  id: string;
+  title: string;
+  classification: Classification;
+  /** The documents this spec was built from. */
+  files: IngestFile[];
+  clauses: SpecClause[];
+  /** Where each clause came from, so a reader can check it against the source. */
+  provenance: { clause: string; source: string }[];
+}
+
+export interface CompileResult {
+  specId: string;
+  /**
+   * False whenever `unmapped` is non-empty. Not overridable: a spec with a
+   * clause that maps to no audited template must not deploy (QRM-S7 R-A).
+   */
+  deployable: boolean;
+  /** Clauses that mapped, with the template and typed params they compiled to. */
+  mapped: { clause: string; templateId: string; params: Record<string, string> }[];
+  /** Clauses that mapped to nothing. Surfaced, never improvised. */
+  unmapped: { clause: string; why: string }[];
+}
+
+export interface DateRange {
+  from: string;
+  to: string;
+}
+
+export interface DeployIntent {
+  ceremonyId: string;
+  specId: string;
+  /**
+   * The address the protocol WILL have, from `GovernanceProtocolFactory.predict`.
+   * Shown to the human BEFORE they approve (GF-1).
+   */
+  predictedAddress: string;
+  templateId: string;
+  tenantId: string;
+  /** The spec hash and CID that will be bound to the bytecode (GF-3). */
+  specHash: string;
+  specCID: string;
+  /** What the ceremony's own display will say, verbatim, so the two agree. */
+  ceremonyAction: string;
+}
+
+export interface DeployResult {
+  protocolAddr: string;
+  txHash: string;
+  block: number;
+  /** True when the deployed address matched `DeployIntent.predictedAddress`. */
+  matchedPrediction: boolean;
+}

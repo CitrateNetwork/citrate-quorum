@@ -222,11 +222,21 @@ export function createSimBridge(): BridgeContract {
       close: () => Promise.reject(new Unavailable("meetings.close (sim has no meeting store)")),
     },
     governance: {
+      specs: () => delay(150, D.SPEC_SUMMARIES),
       protocols: () => delay(150, D.PROTOCOLS),
-      clauses: () => delay(150, D.SPEC_CLAUSES),
+      spec: (id: string) =>
+        delay(150, { id, title: "Procurement authority", classification: "CUI" as const,
+                     files: D.INGEST_FILES, clauses: D.SPEC_CLAUSES, provenance: D.SPEC_PROVENANCE }),
+      compile: (id: string) => delay(400, { specId: id, ...D.COMPILE }),
       simulate: () => delay(1400, D.SIMULATION),
-      ingest: () => delay(150, D.INGEST_FILES),
-      interview: () => delay(150, D.INTERVIEW),
+      ingest: (input) => delay(150, { specId: input.specId ?? "spec-sim-1", files: D.INGEST_FILES, refused: [] }),
+      interview: (id: string) =>
+        delay(150, { specId: id, turns: D.INTERVIEW, pending: D.INTERVIEW_PENDING, outstanding: D.INTERVIEW_OUTSTANDING }),
+      // The sim signs nothing and deploys nothing: these are the two calls that
+      // would touch a key and a chain, so they stay Unavailable even here.
+      deployIntent: () => Promise.reject(new Unavailable("governance.deployIntent (sim never signs)")),
+      deployComplete: () => Promise.reject(new Unavailable("governance.deployComplete (sim never signs)")),
+      bind: () => Promise.reject(new Unavailable("governance.bind (sim has no chain)")),
     },
     journal: {
       list: () => delay(150, D.JOURNAL),

@@ -12,6 +12,15 @@
 // =====================================================================
 import type {
   ActivityLine,
+  CompileResult,
+  DateRange,
+  DeployIntent,
+  DeployResult,
+  GovernanceSpec,
+  IngestRequest,
+  IngestResult,
+  InterviewState,
+  SpecSummary,
   Agent,
   Block,
   CalAccount,
@@ -25,8 +34,6 @@ import type {
   Grant,
   GrantTerms,
   PendingApproval,
-  IngestFile,
-  InterviewTurn,
   JournalEntry,
   Meeting,
   MeetingAdmit,
@@ -42,7 +49,6 @@ import type {
   RosterMember,
   Session,
   Simulation,
-  SpecClause,
   StandupBrief,
   Subscribe,
   TenancyView,
@@ -246,13 +252,96 @@ export interface MeetingsDomain {
   close(id: string): Promise<string>;
 }
 
+/**
+ * The authoring pipeline (QRM-S7):
+ * `ingest → interview → spec → compile → simulate → deploy → bind`.
+ *
+ * Reshaped from five no-argument reads, which were shaped for the sim adapter
+ * and could not express a pipeline. Owner-approved 2026-07-27 (G-S7-1); the
+ * S2D.3 freeze is lifted for this domain only.
+ *
+ * Two removals are deliberate. `clauses()` is gone — a spec HAS clauses, and an
+ * orphan read of them could disagree with the spec it came from. `ingest()` and
+ * `interview()` were reads of a transcript; the pipeline needs them to be acts,
+ * so they take arguments and return the resulting state.
+ */
 export interface GovernanceDomain {
+  /** Drafts in flight, newest first — the pipeline's worklist. */
+  specs(): Promise<SpecSummary[]>;
+
+  /**
+   * Stage 1. Submit documents.
+   *
+   * Classification is DETECTED per file and routes both the model and the
+   * storage, so a file whose classification cannot be determined is reported
+   * `unclassified` and refused — never guessed. Guessing here would send
+   * controlled material to a model that is not cleared for it, which is the one
+   * mistake in this pipeline that cannot be walked back.
+   */
+  ingest(input: IngestRequest): Promise<IngestResult>;
+
+  /**
+   * Stage 2. One turn of the interview.
+   *
+   * Omit `answer` to read the current question (start or resume); supply it to
+   * record the answer and advance. One call for both because a resumed
+   * interview and a fresh one differ only in how much has been answered.
+   */
+  interview(specId: string, answer?: string): Promise<InterviewState>;
+
+  /** Stage 3. The spec: plain-English clauses, Gherkin, and typed params. */
+  spec(specId: string): Promise<GovernanceSpec>;
+
+  /**
+   * Stage 4. Map the spec onto registered, audited templates.
+   *
+   * `unmapped` is a FIRST-CLASS RESULT, not an error string: a clause that does
+   * not map to an audited template must be surfaced, never improvised into one
+   * that type-checks and is wrong. `deployable` is false whenever `unmapped` is
+   * non-empty, and no caller may override that.
+   */
+  compile(specId: string): Promise<CompileResult>;
+
+  /**
+   * Stage 5. Replay real historical decisions through the proposed policy.
+   *
+   * `unchanged` is mandatory and is not decorative. A simulation reporting only
+   * what would have been blocked is a demo; the executive needs to see what the
+   * policy would have ALLOWED and what it would not have touched at all. A run
+   * with no unchanged cases is a signal the replay corpus is too narrow, not a
+   * sign the policy is powerful.
+   */
+  simulate(specId: string, range: DateRange): Promise<Simulation>;
+
+  /**
+   * Stages 6–7, phase one. Build the deploy intent. **Signs nothing, sends
+   * nothing.**
+   *
+   * Returns the CREATE2 address the protocol WILL have. GF-1 exists precisely
+   * so a human approves a known address rather than "a protocol, somewhere" —
+   * and it has to be surfaced here because the ceremony's own display can only
+   * honestly say "call 0x… with N bytes calldata". It does not ABI-decode, and
+   * it is right not to invent a friendlier summary. Everything a human needs to
+   * judge this deploy therefore travels in this result.
+   *
+   * Two-phase, matching `rooms.connectIntent` / `connectComplete`.
+   */
+  deployIntent(specId: string): Promise<DeployIntent>;
+
+  /** Phase two: record what the ceremony broadcast. Signs nothing. */
+  deployComplete(ceremonyId: string): Promise<DeployResult>;
+
+  /**
+   * Stage 8. Bind a deployed protocol to an action class in its tenant.
+   *
+   * Until this is called the protocol governs nothing: `PolicyBinding` returns
+   * `PB_UNGOVERNED` for an unbound action class, which quorum records as
+   * `ungoverned` and alerts on rather than treating as approval.
+   */
+  bind(protocolAddr: string, actionClass: string): Promise<void>;
+
+  /** Live protocols for the tenant. */
   protocols(): Promise<Protocol[]>;
-  clauses(): Promise<SpecClause[]>;
-  simulate(): Promise<Simulation>;
-  ingest(): Promise<IngestFile[]>;
-  interview(): Promise<InterviewTurn[]>;
-  // TODO(wire): deploy(specId) routes through the ceremony; interview streaming.
 }
 
 export interface JournalDomain {

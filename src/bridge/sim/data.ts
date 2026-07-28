@@ -7,6 +7,8 @@
 // states everywhere. Nothing here is real — it is scripted for the demo.
 // =====================================================================
 import type {
+  CompileResult,
+  SpecSummary,
   ActivityLine,
   Agent,
   Block,
@@ -149,6 +151,7 @@ export const SPEC_CLAUSES: SpecClause[] = [
 
 export const SIMULATION: Simulation = {
   range: "last 90 days · 14,208 recorded decisions",
+  unchanged: 41,
   blocked: 96, approvals: 311, allowed: 13801,
   byClass: [["repo.write", 41, 122], ["net.egress", 28, 9], ["calendar.write", 12, 88], ["spend > 150", 9, 74], ["model.select", 6, 18]],
   byTeam: [["Line-4 Automation", 61], ["Wichita QA", 22], ["Aerostructures Tooling", 13]],
@@ -340,3 +343,36 @@ export const TENANCY: TenancyView = {
   source: "sim — scripted prototype tree, not TenantHierarchy on chain",
   note: null,
 };
+
+// ---- governance authoring pipeline (QRM-S7) --------------------------
+// Sim fixtures. These exist ONLY in the sim adapter; the tauri adapter reports
+// every one of these calls as Unavailable until S7 wires them (rule 1).
+
+export const SPEC_SUMMARIES: SpecSummary[] = [
+  { id: "spec-sim-1", title: "Procurement authority", stage: "compiled", updated: "2026-07-26", classification: "CUI" },
+  { id: "spec-sim-2", title: "Model release sign-off", stage: "interviewing", updated: "2026-07-25", classification: "Proprietary" },
+];
+
+export const SPEC_PROVENANCE: { clause: string; source: string }[] = [
+  { clause: "1", source: "Board resolution 2026-04-11 §3(a)" },
+  { clause: "2", source: "Delegation of Authority matrix, row 14" },
+];
+
+/**
+ * Note the unmapped clause. The fixture carries one ON PURPOSE: a compile
+ * result that always maps everything would let the surface be built without
+ * ever rendering the case QRM-S7 R-A exists for.
+ */
+export const COMPILE: Omit<CompileResult, "specId"> = {
+  deployable: false,
+  mapped: [
+    { clause: "1", templateId: "ThresholdApproval", params: { threshold: "2", approvers: "3" } },
+    { clause: "2", templateId: "ClassificationGate", params: { ceiling: "CUI" } },
+  ],
+  unmapped: [
+    { clause: "3", why: "no audited template expresses 'escalate to the audit committee after two rejections'" },
+  ],
+};
+
+export const INTERVIEW_PENDING = "Who may approve a spend above the unattended ceiling?";
+export const INTERVIEW_OUTSTANDING = ["expiry", "exceptions"];

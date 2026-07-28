@@ -26,12 +26,26 @@ export function Governance() {
   const [sim, setSim] = useState<Simulation | null>(null);
   const [simState, setSimState] = useState<"idle" | "running" | "done">("idle");
   const [deployed, setDeployed] = useState(false);
+  const [specId, setSpecId] = useState<string | null>(null);
   const ceremony = useCeremony();
 
   useEffect(() => {
-    bridge.governance.ingest().then(setIngest).catch(() => {});
-    bridge.governance.interview().then(setInterview).catch(() => {});
-    bridge.governance.clauses().then(setClauses).catch(() => {});
+    // QRM-S7: the pipeline is per-spec, so the surface picks up the newest
+    // draft and reads that. With no drafts these stay empty and each step
+    // renders its own empty state rather than a half-populated wizard.
+    bridge.governance
+      .specs()
+      .then((list) => {
+        const first = list[0];
+        if (!first) return;
+        setSpecId(first.id);
+        bridge.governance.spec(first.id).then((sp) => {
+          setIngest(sp.files);
+          setClauses(sp.clauses);
+        }).catch(() => {});
+        bridge.governance.interview(first.id).then((iv) => setInterview(iv.turns)).catch(() => {});
+      })
+      .catch(() => {});
     
   }, []);
 
@@ -44,7 +58,10 @@ export function Governance() {
 
   const runSim = () => {
     setSimState("running");
-    bridge.governance.simulate().then((s) => { setSim(s); setSimState("done"); });
+    bridge.governance
+      .simulate(specId ?? "", { from: "", to: "" })
+      .then((s) => { setSim(s); setSimState("done"); })
+      .catch(() => setSimState("idle"));
   };
 
   const openDeploy = async () => {
@@ -234,7 +251,7 @@ export function Governance() {
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10 }}>
                     <div className="surface" style={{ padding: 14, borderTop: "2px solid var(--danger)" }}><div className="eyebrow">Would have blocked</div><div className="tabular" style={{ fontFamily: "var(--font-display)", fontSize: 34, fontWeight: 460, color: "var(--danger)" }}>{sim.blocked}</div><div className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)" }}>0.7% of all decisions</div></div>
                     <div className="surface" style={{ padding: 14, borderTop: "2px solid var(--warn)" }}><div className="eyebrow">Would have paused for a human</div><div className="tabular" style={{ fontFamily: "var(--font-display)", fontSize: 34, fontWeight: 460, color: "var(--warn)" }}>{sim.approvals}</div><div className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)" }}>2.2% — median wait modeled 4m</div></div>
-                    <div className="surface" style={{ padding: 14, borderTop: "2px solid var(--accent)" }}><div className="eyebrow">Unchanged</div><div className="tabular" style={{ fontFamily: "var(--font-display)", fontSize: 34, fontWeight: 460 }}>{sim.allowed.toLocaleString("en-US")}</div><div className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)" }}>97.1% — the envelope fits the work</div></div>
+                    <div className="surface" style={{ padding: 14, borderTop: "2px solid var(--accent)" }}><div className="eyebrow">Unchanged</div><div className="tabular" style={{ fontFamily: "var(--font-display)", fontSize: 34, fontWeight: 460 }}>{sim.unchanged.toLocaleString("en-US")}</div><div className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)" }}>the policy would not have applied</div></div>
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <div className="surface" style={{ padding: 14, display: "flex", flexDirection: "column", gap: 8 }}>
