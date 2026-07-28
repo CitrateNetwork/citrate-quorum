@@ -149,6 +149,18 @@ export function CeremonyProvider({ children }: { children: ReactNode }) {
   /** A commit the backend refused. Shown instead of an "On record" stamp. */
   const [commitError, setCommitError] = useState<string>("");
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  /**
+   * The chain transaction this ceremony broadcast, carried from the signing
+   * handler to `finish`.
+   *
+   * A ref rather than state: `finish` runs when the operator dismisses the
+   * dialog, which is a different render from the one that broadcast, and a
+   * state value read there would be the one captured when `finish` was defined.
+   * Cleared on every finish so the next ceremony cannot inherit it — a stale
+   * hash here would have a surface verify the PREVIOUS transaction and report
+   * its success.
+   */
+  const chainTxResult = useRef<CeremonyResult["chain"]>(undefined);
 
   const head = queue[0] ?? null;
 
@@ -226,7 +238,8 @@ export function CeremonyProvider({ children }: { children: ReactNode }) {
         setCommitError(e instanceof Error ? e.message : String(e));
       });
     }
-    head.resolve({ outcome, note, gate: head.gate });
+    head.resolve({ outcome, note, gate: head.gate, chain: chainTxResult.current });
+    chainTxResult.current = undefined;
     clearTimers();
     setQueue((q) => q.slice(1));
     setPhase("review");
@@ -308,10 +321,20 @@ export function CeremonyProvider({ children }: { children: ReactNode }) {
     // which would be false — so it settles with the truth on the note, and the
     // anchor row independently shows the same gap.
     let chainNote: string | undefined;
+    let chainResult: CeremonyResult["chain"];
     if (head.intent.chainTx) {
       try {
         const pending = await head.intent.chainTx.prepare();
         const res = await signAndBroadcast(pending.id, Boolean(pending.rawUnverified));
+        // Kept, not just rendered: a caller that has to check what the chain
+        // did with this transaction needs the hash, and this is the only place
+        // in the app that knows it (see CeremonyResult.chain).
+        chainResult = {
+          txHash: res.txHash,
+          blockNumber: res.blockNumber ?? null,
+          label: head.intent.chainTx.label,
+        };
+        chainTxResult.current = chainResult;
         chainNote = `${head.intent.chainTx.label} · tx ${shortHead(res.txHash)}${
           res.blockNumber ? ` · block ${res.blockNumber}` : ""
         }`;

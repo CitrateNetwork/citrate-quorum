@@ -83,6 +83,23 @@ pub enum DeployError {
     NothingToDeploy,
     /// This app does not carry the audited creation code for that template.
     NoCreationCode { template: String },
+    /// The tenant this app is scoped to has no node in `TenantHierarchy`.
+    ///
+    /// GF-4 makes `getNode` revert for an unknown tenant, so a deploy against
+    /// one fails on chain after a human has approved it. Catching it here turns
+    /// an opaque mid-ceremony revert into a sentence naming the tenant and the
+    /// id it hashes to.
+    NoSuchTenant { tenant: String, id: String },
+    /// The operator's wallet is not an admin of that tenant.
+    NotTenantAdmin {
+        tenant: String,
+        operator: String,
+        admins: Vec<String>,
+    },
+    /// The spec's classification is above what the tenant may hold.
+    CeilingExceedsTenant { spec: String, tenant: String },
+    /// The spec has no ingested sources, so its classification is unknown.
+    NoClassification { spec_id: String },
 }
 
 impl DeployError {
@@ -103,6 +120,37 @@ impl DeployError {
                  it cannot be deployed from here. GF-2 requires supplying bytecode that \
                  hashes to the registered initCodeHash and this app will not invent it \
                  — re-run scripts/vendor-template-artifacts.sh"
+            ),
+            DeployError::NoSuchTenant { tenant, id } => format!(
+                "TenantHierarchy holds no node for \"{tenant}\" ({id}). A protocol is \
+                 deployed INTO a tenant and GF-4 reverts for one that does not exist, \
+                 so this cannot proceed — the node has to be created by an admin of its \
+                 parent first"
+            ),
+            DeployError::NotTenantAdmin {
+                tenant,
+                operator,
+                admins,
+            } => format!(
+                "{operator} is not an admin of \"{tenant}\" (admins: {}). GF-4 gates \
+                 deployProtocol on tenant admin membership, so the factory would revert \
+                 this after a human had already approved it",
+                if admins.is_empty() {
+                    "none".to_string()
+                } else {
+                    admins.join(", ")
+                }
+            ),
+            DeployError::CeilingExceedsTenant { spec, tenant } => format!(
+                "this spec is {spec} but the tenant's ceiling is {tenant}. GF-4 refuses a \
+                 protocol whose classificationCeiling exceeds its tenant's, and lowering \
+                 the spec's ceiling to fit would deploy a control that does not cover the \
+                 documents it was drawn from"
+            ),
+            DeployError::NoClassification { spec_id } => format!(
+                "{spec_id} has no ingested sources, so there is nothing that says what \
+                 classification it governs at. A deployment ceiling that had to be \
+                 assumed is not a ceiling anyone set — ingest the source documents first"
             ),
         }
     }
@@ -231,7 +279,7 @@ pub fn target(compiled: &Compiled) -> Result<(&str, &str, &BTreeMap<String, Stri
 
 use serde::Serialize;
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Serialize, serde::Deserialize, Debug, Clone)]
 pub struct DeployIntentDto {
     pub ceremony_id: String,
     pub spec_id: String,
@@ -239,10 +287,56 @@ pub struct DeployIntentDto {
     pub template_id: String,
     pub template_name: String,
     pub tenant_id: String,
+    /// The tenant's display name, as `TenantHierarchy` holds it — the id alone
+    /// is a hash, and a human approving a deploy needs the name.
+    pub tenant_name: String,
     pub spec_hash: String,
     pub spec_cid: String,
     pub salt: String,
     pub ceremony_action: String,
+    /// The classification this protocol is deployed at, from the spec's sources.
+    pub classification: String,
+    /// The principals whose approval the protocol will require, by name.
+    pub approvers: Vec<String>,
+    /// The action class the spec says this governs — what S7.7 binds it to.
+    /// `None` when the spec has no scope clause, which BIND then refuses.
+    pub action_class: Option<String>,
+    /// Rule 11: the contracts, chain and book behind everything above.
+    pub source: String,
+}
+
+/// The classification a protocol is deployed at, as the factory's `uint8`.
+fn ceiling_of(spec_classification: &str) -> Option<u8> {
+    Some(match crate::store::classification_from_str(spec_classification)? {
+        quorum_tenancy::Classification::Public => 0,
+        quorum_tenancy::Classification::Proprietary => 1,
+        quorum_tenancy::Classification::Cui => 2,
+        quorum_tenancy::Classification::Itar => 3,
+    })
+}
+
+/// The action class a spec's structural scope clause names.
+///
+/// `PolicyBinding` keys on `keccak256(action class)`, and the class itself is a
+/// string an operator wrote ("repo.write"). Returned as written so the surface
+/// can show it; the hashing happens at bind time.
+pub fn action_class_of(compiled: &Compiled) -> Option<String> {
+    compiled
+        .structural
+        .iter()
+        .find(|s| s.kind == "scope")
+        .map(|s| s.value.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+/// The principals a spec's structural clause names.
+pub fn principals_of(compiled: &Compiled) -> Vec<String> {
+    compiled
+        .structural
+        .iter()
+        .filter(|s| s.kind == "principals")
+        .flat_map(|s| crate::ctor::principals_of(&s.value))
+        .collect()
 }
 
 /// `governance.deployIntent` — stages 6/7, phase one.
@@ -250,6 +344,15 @@ pub struct DeployIntentDto {
 /// **Signs nothing. Sends nothing.** Builds the transaction, asks the FACTORY
 /// for the address it will produce, and enqueues a ceremony the human approves
 /// separately.
+///
+/// # Every gate the chain enforces is checked here first
+///
+/// GF-2 (audited bytecode), GF-4 (the tenant exists, the sender administers it,
+/// the ceiling fits) and the constructor's own requires all fail on chain, and
+/// on chain they fail AFTER a human has approved. A ceremony that ends in a
+/// revert teaches an operator that approving is a gamble, so each of those is
+/// answered before the ceremony is enqueued, and the whole call is finally
+/// dry-run against the node as the operator's own address.
 #[tauri::command]
 pub fn governance_deploy_intent(
     app: tauri::AppHandle,
@@ -265,6 +368,7 @@ pub fn governance_deploy_intent(
         .app_data_dir()
         .map_err(|e| format!("no app data dir: {e}"))?;
     let book = crate::addresses::AddressBook::load().map_err(|e| e.to_string())?;
+    let bfr = crate::addresses::AddressBook::load_bfr().map_err(|e| e.to_string())?;
     let factory = book
         .get("GovernanceProtocolFactory")
         .ok_or("GovernanceProtocolFactory is not in the address book")?
@@ -276,31 +380,106 @@ pub fn governance_deploy_intent(
 
     let store = crate::store::EvidenceStore::open(root.clone())
         .map_err(|e| format!("evidence store: {e}"))?;
-    let tenant = store
-        .load_scope()
-        .ok_or("no tenant scope is established")?;
+    let tenant = store.load_scope().ok_or("no tenant scope is established")?;
+
+    // ── Who, and where ──────────────────────────────────────────────
+    //
+    // The tenant id is keccak256 of the name, because that is what
+    // TenantHierarchy keys on. It was blake3 of the scope string until now,
+    // which is the evidence store's hash for its own directories — a perfectly
+    // good 32 bytes naming a tenant that has never existed on any chain.
+    let tenant_id_bytes = crate::chain::tenant_id_of(&tenant);
+    let tenant_id = format!("0x{}", hex::encode(tenant_id_bytes));
+    let node = crate::chain::tenant_node(&bfr, tenant_id_bytes)?.ok_or_else(|| {
+        DeployError::NoSuchTenant {
+            tenant: tenant.clone(),
+            id: tenant_id.clone(),
+        }
+        .why()
+    })?;
+
+    let from = citrate_core_kit::wallet::address(&custody.0).map_err(|e| e.to_string())?;
+    if !node.is_admin(&from.address) {
+        return Err(DeployError::NotTenantAdmin {
+            tenant: tenant.clone(),
+            operator: from.address.clone(),
+            admins: node.admins.clone(),
+        }
+        .why());
+    }
+
+    // ── What, and at what classification ────────────────────────────
+    let meta = crate::ingest::load_meta(&root, &spec_id).ok_or_else(|| {
+        DeployError::NoClassification {
+            spec_id: spec_id.clone(),
+        }
+        .why()
+    })?;
+    let ceiling = ceiling_of(&meta.classification)
+        .ok_or_else(|| format!("{spec_id} carries an unreadable classification: {}", meta.classification))?;
+    if ceiling > node.classification_max {
+        return Err(DeployError::CeilingExceedsTenant {
+            spec: meta.classification.clone(),
+            tenant: crate::store::classification_str(
+                crate::store::classification_from_str(
+                    match node.classification_max {
+                        0 => "public",
+                        1 => "proprietary",
+                        2 => "cui",
+                        _ => "itar",
+                    },
+                )
+                .unwrap_or(quorum_tenancy::Classification::Public),
+            )
+            .to_string(),
+        }
+        .why());
+    }
 
     let catalog = crate::compile::catalog_from_chain(&rpc, registry)?;
     let interview = crate::interview::load(&root, &spec_id);
     let spec = crate::spec::draft(&spec_id, "Untitled policy", &interview);
     let compiled = crate::compile::compile(&spec, &catalog);
 
-    let (template_name, template_id, _params) = target(&compiled).map_err(|e| e.why())?;
+    let (template_name, template_id, params) = target(&compiled).map_err(|e| e.why())?;
     let code = creation_code(template_name).map_err(|e| e.why())?;
 
-    let tenant_id = format!("0x{}", hex::encode(blake3::hash(tenant.as_bytes()).as_bytes()));
-    let salt = salt_for(&tenant_id, &spec_id, template_id);
     let spec_hash = format!(
         "0x{}",
         hex::encode(blake3::hash(spec_id.as_bytes()).as_bytes())
     );
     let spec_cid = format!("spec://{spec_id}");
+    let salt = salt_for(&tenant_id, &spec_id, template_id);
+
+    // ── The constructor arguments, for real ─────────────────────────
+    //
+    // These are hashed into the predicted address. Passing `&[]` (as this did
+    // until now) predicts, and shows a human, the address of a contract whose
+    // constructor reverts on its first require.
+    let approver_names = principals_of(&compiled);
+    let approver_ids: Vec<[u8; 32]> = approver_names
+        .iter()
+        .map(|n| crate::ctor::approver_id(n))
+        .collect();
+    let ctor_params = crate::ctor::encode(
+        template_name,
+        &crate::ctor::DeployContext {
+            tenant_id: tenant_id_bytes,
+            template_id: word_bytes(template_id)?,
+            version: 1,
+            spec_hash: word_bytes(&spec_hash)?,
+            spec_cid: &spec_cid,
+            params,
+            approvers: &approver_ids,
+            bfr: &bfr,
+        },
+    )
+    .map_err(|e| e.why())?;
 
     // The address is the FACTORY's answer, not a local CREATE2. S6.2 proved by
     // negative control that `predict` and the real deployment are the same
     // computation; asking the contract inherits that rather than re-earning it.
-    let mut call = String::from("0x");
-    call.push_str(&encode_predict(&code, &[], &salt)[2..]);
+    let call = encode_predict(&code, &ctor_params, &salt);
     let ret = rpc.eth_call(&factory, &call)?;
     if ret.len() < 32 {
         return Err("the factory did not return an address for this deployment".to_string());
@@ -311,14 +490,41 @@ pub fn governance_deploy_intent(
         &tenant_id,
         template_id,
         &code,
-        &[],
+        &ctor_params,
         &spec_hash,
         &spec_cid,
-        2,
+        ceiling,
         &salt,
         &spec_hash,
     );
-    let from = citrate_core_kit::wallet::address(&custody.0).map_err(|e| e.to_string())?;
+
+    // ── The dry run ─────────────────────────────────────────────────
+    //
+    // As the operator, so GF-4's msg.sender check is real: a `from`-less
+    // eth_call runs as the zero address and passes nothing. The factory returns
+    // the deployed address, so a successful dry run also proves the prediction
+    // — two answers from the same node, one of which is what a human is about
+    // to approve.
+    let dry = rpc
+        .eth_call_from(&from.address, &factory, &data)
+        .map_err(|e| {
+            format!(
+                "the factory refuses this deployment, so no ceremony was raised: {e}. \
+                 Nothing was signed and nothing was sent"
+            )
+        })?;
+    if dry.len() >= 32 {
+        let would_be = format!("0x{}", hex::encode(&dry[12..32]));
+        if !would_be.eq_ignore_ascii_case(&predicted) {
+            return Err(format!(
+                "predict() says {predicted} but a dry run of the real call deploys to \
+                 {would_be}. These are the same computation on chain, so they \
+                 disagreeing means this app built two different transactions — \
+                 refusing rather than showing a human either one"
+            ));
+        }
+    }
+
     let tx = format!(
         r#"{{"from":"{}","to":"{}","value":"0x0","data":"{}"}}"#,
         from.address, factory, data
@@ -336,22 +542,332 @@ pub fn governance_deploy_intent(
     let view = ceremony.0.request(SignatureIntent {
         origin: format!("governance · deploy {template_name}"),
         kind: IntentKind::Transaction,
-        chain_id: 40204,
+        chain_id: book.chain_id,
         raw: tx,
     });
 
-    Ok(DeployIntentDto {
+    let dto = DeployIntentDto {
         ceremony_id: view.id,
         spec_id,
         predicted_address: predicted,
         template_id: template_id.to_string(),
         template_name: template_name.to_string(),
         tenant_id,
+        tenant_name: node.display_name.clone(),
         spec_hash,
         spec_cid,
         salt,
         ceremony_action,
-    })
+        classification: meta.classification.clone(),
+        approvers: approver_names,
+        action_class: action_class_of(&compiled),
+        source: format!(
+            "GovernanceProtocolFactory.predict/deployProtocol at {factory} · {} · chain {} · {}",
+            node.source,
+            book.chain_id,
+            rpc.url()
+        ),
+    };
+
+    // Persisted BEFORE the human is asked, so phase two compares against what
+    // was actually shown rather than against a re-derivation. A re-derivation
+    // would agree with itself no matter what changed in between, which is the
+    // one thing the address check must not do.
+    save_intent(&root, &dto)?;
+    Ok(dto)
+}
+
+/// Parse a `0x`-prefixed 32-byte word.
+fn word_bytes(s: &str) -> Result<[u8; 32], String> {
+    let body = s.strip_prefix("0x").unwrap_or(s);
+    let raw = hex::decode(body).map_err(|_| format!("not hex: {s}"))?;
+    if raw.len() != 32 {
+        return Err(format!("not a 32-byte word: {s}"));
+    }
+    let mut w = [0u8; 32];
+    w.copy_from_slice(&raw);
+    Ok(w)
+}
+
+fn intent_path(root: &std::path::Path, ceremony_id: &str) -> std::path::PathBuf {
+    // The ceremony id is minted by the kit, but it reaches here as a string from
+    // a command argument in phase two, so it is not allowed to shape a path.
+    let safe: String = ceremony_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+    root.join("deploy-intents").join(format!("{safe}.json"))
+}
+
+pub fn save_intent(root: &std::path::Path, dto: &DeployIntentDto) -> Result<(), String> {
+    let path = intent_path(root, &dto.ceremony_id);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let body = serde_json::to_vec_pretty(dto).map_err(|e| e.to_string())?;
+    std::fs::write(&path, body).map_err(|e| e.to_string())
+}
+
+pub fn load_intent(root: &std::path::Path, ceremony_id: &str) -> Option<DeployIntentDto> {
+    let raw = std::fs::read_to_string(intent_path(root, ceremony_id)).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+// ── Phase two: broadcast, and check what the chain actually built ───────
+
+/// `topic0` of
+/// `ProtocolDeployed(bytes32,address,bytes32,bytes32,string,address,bytes32)`.
+///
+/// Pinned as a literal and asserted against a keccak of the signature below, so
+/// a change to the event signature in citrate-chain breaks a test here rather
+/// than silently making every receipt look like it deployed nothing.
+pub const PROTOCOL_DEPLOYED_TOPIC: &str =
+    "0x3123b75b509b06f006e35cf452775f74eabbbca622ae2f10b3a6f57269878e45";
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum CompleteError {
+    /// Phase two was called for a ceremony phase one never recorded.
+    NoIntent { ceremony_id: String },
+    /// The transaction was mined and reverted.
+    Reverted { tx_hash: String },
+    /// Mined, but the factory logged no deployment.
+    NoDeploymentLogged { tx_hash: String },
+    /// **The check this whole phase exists for.**
+    AddressMismatch {
+        predicted: String,
+        actual: String,
+        tx_hash: String,
+    },
+    /// The chain agrees on the address but there is no code at it.
+    NoCodeAtAddress { address: String },
+}
+
+impl CompleteError {
+    pub fn why(&self) -> String {
+        match self {
+            CompleteError::NoIntent { ceremony_id } => format!(
+                "no deploy intent was recorded for ceremony {ceremony_id}, so there is \
+                 nothing to check the deployed address against. Refusing to broadcast: \
+                 a deploy whose predicted address cannot be compared is a deploy nobody \
+                 approved the address of"
+            ),
+            CompleteError::Reverted { tx_hash } => format!(
+                "the deploy transaction {tx_hash} was mined and REVERTED. Nothing was \
+                 deployed. The dry run in phase one should have caught this, so treat a \
+                 revert here as chain state having changed underneath the ceremony"
+            ),
+            CompleteError::NoDeploymentLogged { tx_hash } => format!(
+                "{tx_hash} succeeded but the factory logged no ProtocolDeployed event. \
+                 Something was executed and it was not the deployment this ceremony \
+                 described"
+            ),
+            CompleteError::AddressMismatch {
+                predicted,
+                actual,
+                tx_hash,
+            } => format!(
+                "THE DEPLOYED ADDRESS DOES NOT MATCH WHAT WAS APPROVED. A human approved \
+                 {predicted}; {tx_hash} deployed {actual}. The protocol at {actual} is \
+                 not the one anyone signed for and must not be bound, cited, or \
+                 recorded as governing anything"
+            ),
+            CompleteError::NoCodeAtAddress { address } => format!(
+                "the chain reports a deployment at {address} but there is no code there. \
+                 Nothing usable exists at that address"
+            ),
+        }
+    }
+}
+
+/// What the chain says was deployed, having been asked independently.
+#[derive(Serialize, Debug, Clone)]
+pub struct DeployResultDto {
+    pub tx_hash: String,
+    pub block_number: Option<u64>,
+    /// The address the FACTORY logged — the chain's own answer, taken from the
+    /// receipt rather than recomputed here.
+    pub address: String,
+    /// The address the human was shown before signing.
+    pub predicted_address: String,
+    pub spec_id: String,
+    pub template_name: String,
+    pub tenant_id: String,
+    pub tenant_name: String,
+    pub classification: String,
+    /// What S7.7 will bind this to. `None` when the spec named no scope.
+    pub action_class: Option<String>,
+    /// Bytes of deployed code, read back from the chain.
+    pub code_size: usize,
+    pub source: String,
+}
+
+/// The protocol address in a receipt's `ProtocolDeployed` log.
+///
+/// The address is the SECOND indexed parameter, so it is `topics[2]` — read
+/// from the log rather than from anything this app computed. That independence
+/// is the point: comparing a prediction against a re-derivation of itself would
+/// agree no matter what went wrong in between.
+pub fn deployed_address_in(receipt: &serde_json::Value, factory: &str) -> Option<String> {
+    let logs = receipt.get("logs")?.as_array()?;
+    for log in logs {
+        let addr = log.get("address")?.as_str()?;
+        if !addr.eq_ignore_ascii_case(factory) {
+            continue;
+        }
+        let topics = log.get("topics")?.as_array()?;
+        let t0 = topics.first()?.as_str()?;
+        if !t0.eq_ignore_ascii_case(PROTOCOL_DEPLOYED_TOPIC) {
+            continue;
+        }
+        let t2 = topics.get(2)?.as_str()?;
+        let body = t2.strip_prefix("0x").unwrap_or(t2);
+        if body.len() != 64 {
+            return None;
+        }
+        return Some(format!("0x{}", &body[24..]));
+    }
+    None
+}
+
+/// Whether a receipt reports success. Absent status is treated as FAILURE:
+/// pre-Byzantium receipts have no status field, and this chain is not one, so an
+/// absent status means a receipt shape we do not understand.
+fn receipt_succeeded(receipt: &serde_json::Value) -> bool {
+    matches!(
+        receipt.get("status").and_then(|s| s.as_str()),
+        Some("0x1") | Some("0x01")
+    )
+}
+
+/// `governance.deployComplete` — stages 6/7, phase two.
+///
+/// **Signs nothing and broadcasts nothing.** The ceremony's own
+/// `sign_and_broadcast` is the single path that signs (rule 3), and adding a
+/// second one here would be a second signing path in the app whose whole claim
+/// is that there is one. This takes the hash that path produced and asks the
+/// chain what it actually built.
+///
+/// **A mismatch is a hard error.** There is no field on the success type for
+/// "the address differed"; the only way to learn the address matched is to get
+/// an `Ok` back. A warning would be worse than nothing — it would put the
+/// wrong protocol's address into the ledger with a note beside it.
+#[tauri::command]
+pub fn governance_deploy_complete(
+    app: tauri::AppHandle,
+    ceremony_id: String,
+    tx_hash: String,
+) -> Result<DeployResultDto, String> {
+    use tauri::Manager;
+
+    let root = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("no app data dir: {e}"))?;
+
+    // Loaded FIRST. A ceremony with no recorded intent has no approved address
+    // to check against, so there is nothing this call could honestly report.
+    let intent = load_intent(&root, &ceremony_id).ok_or_else(|| {
+        CompleteError::NoIntent {
+            ceremony_id: ceremony_id.clone(),
+        }
+        .why()
+    })?;
+
+    let book = crate::addresses::AddressBook::load().map_err(|e| e.to_string())?;
+    let factory = book
+        .get("GovernanceProtocolFactory")
+        .ok_or("GovernanceProtocolFactory is not in the address book")?
+        .to_string();
+    let rpc = crate::chain::Rpc::from_book(&book)?;
+
+    // ── What the chain built ────────────────────────────────────────
+    let receipt = rpc
+        .receipt(&tx_hash)?
+        .ok_or_else(|| format!(
+            "no receipt for {tx_hash}. It may still be mined — check the hash rather \
+             than re-running this"
+        ))?;
+    if !receipt_succeeded(&receipt) {
+        return Err(CompleteError::Reverted {
+            tx_hash: tx_hash.clone(),
+        }
+        .why());
+    }
+    // The hash arrives as an argument, so it is not allowed to name just any
+    // transaction: this one has to be a call to the factory. Without this a
+    // caller could point phase two at some unrelated successful tx.
+    if !receipt
+        .get("to")
+        .and_then(|t| t.as_str())
+        .is_some_and(|t| t.eq_ignore_ascii_case(&factory))
+    {
+        return Err(format!(
+            "{tx_hash} is not a call to GovernanceProtocolFactory ({factory}), so it \
+             cannot be the deployment this ceremony described"
+        ));
+    }
+
+    let actual = deployed_address_in(&receipt, &factory).ok_or_else(|| {
+        CompleteError::NoDeploymentLogged {
+            tx_hash: tx_hash.clone(),
+        }
+        .why()
+    })?;
+
+    if !actual.eq_ignore_ascii_case(&intent.predicted_address) {
+        return Err(CompleteError::AddressMismatch {
+            predicted: intent.predicted_address.clone(),
+            actual,
+            tx_hash: tx_hash.clone(),
+        }
+        .why());
+    }
+
+    let block_number = receipt
+        .get("blockNumber")
+        .and_then(|b| b.as_str())
+        .and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).ok());
+
+    // And there is really code there. The factory logging an address and the
+    // address holding a contract are two different claims.
+    let code = rpc.call(
+        "eth_getCode",
+        serde_json::json!([actual, "latest"]),
+    )?;
+    let code_size = code
+        .as_str()
+        .map(|s| s.trim_start_matches("0x").len() / 2)
+        .unwrap_or(0);
+    if code_size == 0 {
+        return Err(CompleteError::NoCodeAtAddress { address: actual }.why());
+    }
+
+    let dto = DeployResultDto {
+        tx_hash,
+        block_number,
+        address: actual,
+        predicted_address: intent.predicted_address,
+        spec_id: intent.spec_id,
+        template_name: intent.template_name,
+        tenant_id: intent.tenant_id,
+        tenant_name: intent.tenant_name,
+        classification: intent.classification,
+        action_class: intent.action_class,
+        code_size,
+        source: format!(
+            "GovernanceProtocolFactory.ProtocolDeployed log at {factory} · \
+             eth_getTransactionReceipt · eth_getCode · chain {} · {}",
+            book.chain_id,
+            rpc.url()
+        ),
+    };
+
+    // Recorded only NOW — after the chain confirmed the deployment and the
+    // address matched. Writing this when the ceremony was raised would mark a
+    // spec `deployed` on the strength of a human having been asked.
+    let body = serde_json::to_string_pretty(&dto).map_err(|e| e.to_string())?;
+    crate::protocols::record_stage(&root, "deployed", &dto.spec_id, &body)?;
+    Ok(dto)
 }
 
 /// `predict(bytes,bytes,bytes32)` calldata.
@@ -377,7 +893,7 @@ fn encode_predict(creation_code: &[u8], params: &[u8], salt: &str) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use crate::compile::{Mapped, Unmapped};
+    use crate::compile::{Mapped, Structural, Unmapped};
 
     fn mapped(name: &str) -> Mapped {
         Mapped {
@@ -581,5 +1097,231 @@ mod tests {
         };
         let (name, _, _) = target(&c).expect("target");
         assert_eq!(name, "ThresholdApproval");
+    }
+
+    // ── Phase two: what the chain actually built ────────────────────
+
+    const FACTORY: &str = "0x260ffedd17cd05a2e4daa41e1339c19a083f9e57";
+
+    /// A receipt shaped like the node's, with one `ProtocolDeployed` log.
+    fn receipt_with(protocol: &str, status: &str, from_addr: &str) -> serde_json::Value {
+        serde_json::json!({
+            "status": status,
+            "blockNumber": "0x1234",
+            "logs": [
+                // An unrelated log first, so "find the right one" is load-bearing
+                // rather than "take the first log there is".
+                {
+                    "address": "0x00000000000000000000000000000000000000ff",
+                    "topics": ["0xdeadbeef00000000000000000000000000000000000000000000000000000000"],
+                },
+                {
+                    "address": from_addr,
+                    "topics": [
+                        PROTOCOL_DEPLOYED_TOPIC,
+                        "0x1111111111111111111111111111111111111111111111111111111111111111",
+                        format!("0x000000000000000000000000{}", protocol.trim_start_matches("0x")),
+                        "0x2222222222222222222222222222222222222222222222222222222222222222",
+                    ],
+                }
+            ]
+        })
+    }
+
+    /// The topic literal must be the keccak of the event signature it claims to
+    /// be. Pinning a wrong constant would make every receipt look as though it
+    /// deployed nothing — `NoDeploymentLogged` for a perfectly good deploy.
+    #[test]
+    fn the_event_topic_is_the_keccak_of_the_signature() {
+        let want = format!(
+            "0x{}",
+            hex::encode(crate::anchor::keccak256(
+                b"ProtocolDeployed(bytes32,address,bytes32,bytes32,string,address,bytes32)"
+            ))
+        );
+        assert_eq!(PROTOCOL_DEPLOYED_TOPIC, want);
+    }
+
+    /// The address comes from `topics[2]` — the event's SECOND indexed
+    /// parameter. Reading `topics[1]` instead yields the tenant id, which
+    /// truncates to a plausible-looking address and would fail the comparison
+    /// for a reason that has nothing to do with the deployment.
+    #[test]
+    fn the_deployed_address_is_read_from_the_log() {
+        let r = receipt_with("0xabababababababababababababababababababab", "0x1", FACTORY);
+        assert_eq!(
+            deployed_address_in(&r, FACTORY).as_deref(),
+            Some("0xabababababababababababababababababababab")
+        );
+    }
+
+    /// A `ProtocolDeployed` log emitted by something that is not the factory is
+    /// not this factory's deployment. Anyone may emit an event with that
+    /// signature, so the log's `address` has to be checked.
+    #[test]
+    fn a_log_from_another_contract_is_not_our_deployment() {
+        let r = receipt_with(
+            "0xabababababababababababababababababababab",
+            "0x1",
+            "0x00000000000000000000000000000000000000aa",
+        );
+        assert_eq!(deployed_address_in(&r, FACTORY), None);
+    }
+
+    /// A receipt with no matching log yields nothing rather than a guess.
+    #[test]
+    fn a_receipt_without_the_event_deploys_nothing() {
+        let r = serde_json::json!({ "status": "0x1", "logs": [] });
+        assert_eq!(deployed_address_in(&r, FACTORY), None);
+    }
+
+    /// **Fail closed on an unfamiliar receipt.** A missing `status` is not
+    /// success — it means a receipt shape this app does not understand, and
+    /// treating it as success would report a deployment for a transaction whose
+    /// outcome is unknown.
+    #[test]
+    fn a_receipt_without_a_status_is_not_a_success() {
+        assert!(receipt_succeeded(&serde_json::json!({ "status": "0x1" })));
+        assert!(receipt_succeeded(&serde_json::json!({ "status": "0x01" })));
+        assert!(!receipt_succeeded(&serde_json::json!({ "status": "0x0" })));
+        assert!(!receipt_succeeded(&serde_json::json!({})));
+        assert!(!receipt_succeeded(&serde_json::json!({ "status": 1 })));
+    }
+
+    /// **The check phase two exists for.** A mismatch is an error with no
+    /// success value attached — there is no way for a caller to receive an
+    /// address and a warning, because a warning beside a wrong address is how
+    /// the wrong address ends up in the ledger.
+    #[test]
+    fn an_address_mismatch_is_an_error_that_names_both() {
+        let e = CompleteError::AddressMismatch {
+            predicted: "0xaaaa000000000000000000000000000000000000".into(),
+            actual: "0xbbbb000000000000000000000000000000000000".into(),
+            tx_hash: "0xfeed".into(),
+        };
+        let why = e.why();
+        assert!(why.contains("0xaaaa000000000000000000000000000000000000"), "{why}");
+        assert!(why.contains("0xbbbb000000000000000000000000000000000000"), "{why}");
+        assert!(why.contains("must not be bound"), "{why}");
+    }
+
+    /// Case is not identity. A checksummed prediction and a lowercase log entry
+    /// are the same address, and reporting them as a mismatch would refuse a
+    /// correct deployment — the failure mode that makes people disable a check.
+    #[test]
+    fn address_comparison_ignores_checksum_case() {
+        let predicted = "0xABababABababABababABababABababABababABab";
+        let actual = "0xabababababababababababababababababababab";
+        assert!(actual.eq_ignore_ascii_case(predicted));
+    }
+
+    // ── The intent, persisted ───────────────────────────────────────
+
+    fn dto(ceremony_id: &str, predicted: &str) -> DeployIntentDto {
+        DeployIntentDto {
+            ceremony_id: ceremony_id.into(),
+            spec_id: "spec-1".into(),
+            predicted_address: predicted.into(),
+            template_id: "0x22".into(),
+            template_name: "ThresholdApproval".into(),
+            tenant_id: "0x11".into(),
+            tenant_name: "Citrate".into(),
+            spec_hash: "0x33".into(),
+            spec_cid: "spec://spec-1".into(),
+            salt: "0x44".into(),
+            ceremony_action: "Call … with N bytes calldata".into(),
+            classification: "CUI".into(),
+            approvers: vec!["R. Ortiz".into()],
+            action_class: Some("repo.write".into()),
+            source: "test".into(),
+        }
+    }
+
+    /// Phase two compares against what phase one WROTE DOWN, not against a
+    /// fresh derivation. A re-derivation would agree with itself however the
+    /// inputs changed in between, which is exactly the failure the comparison
+    /// is supposed to catch.
+    #[test]
+    fn the_intent_round_trips_through_disk() {
+        let dir = std::env::temp_dir().join(format!("qrm-deploy-{}", std::process::id()));
+        let d = dto("cer-1", "0xaaaa000000000000000000000000000000000000");
+        save_intent(&dir, &d).expect("save");
+        let back = load_intent(&dir, "cer-1").expect("load");
+        assert_eq!(back.predicted_address, d.predicted_address);
+        assert_eq!(back.action_class.as_deref(), Some("repo.write"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A ceremony id arriving as a command argument must not shape a path. It
+    /// is filtered, not trusted — the alternative is a caller reading or
+    /// writing outside the intents directory.
+    #[test]
+    fn a_ceremony_id_cannot_escape_its_directory() {
+        let p = intent_path(std::path::Path::new("/root"), "../../etc/passwd");
+        assert_eq!(p, std::path::Path::new("/root/deploy-intents/etcpasswd.json"));
+    }
+
+    /// Phase two on a ceremony phase one never recorded refuses BEFORE
+    /// broadcasting. Broadcasting first and discovering afterwards that there
+    /// is nothing to compare against would deploy a contract nobody approved
+    /// the address of.
+    #[test]
+    fn a_ceremony_with_no_recorded_intent_is_refused() {
+        let dir = std::env::temp_dir().join(format!("qrm-nointent-{}", std::process::id()));
+        assert!(load_intent(&dir, "cer-missing").is_none());
+        let e = CompleteError::NoIntent {
+            ceremony_id: "cer-missing".into(),
+        };
+        assert!(e.why().contains("nothing to check"), "{}", e.why());
+    }
+
+    // ── The classification ceiling ──────────────────────────────────
+
+    /// The ceiling is the spec's own, not a constant. It was hardcoded to 2
+    /// (CUI) for every deployment, which silently inflates a Public policy and
+    /// understates an ITAR one — invisible, because the ceiling is a
+    /// constructor argument and no surface renders it.
+    #[test]
+    fn the_ceiling_comes_from_the_classification() {
+        assert_eq!(ceiling_of("Public"), Some(0));
+        assert_eq!(ceiling_of("Proprietary"), Some(1));
+        assert_eq!(ceiling_of("CUI"), Some(2));
+        assert_eq!(ceiling_of("ITAR"), Some(3));
+        assert_eq!(ceiling_of("Secret"), None);
+    }
+
+    // ── The structural clauses the deploy reads ─────────────────────
+
+    #[test]
+    fn the_action_class_comes_from_the_scope_clause() {
+        let c = Compiled {
+            spec_id: "s".into(),
+            structural: vec![
+                Structural { clause: "1".into(), kind: "principals".into(), value: "R. Ortiz".into() },
+                Structural { clause: "2".into(), kind: "scope".into(), value: " repo.write ".into() },
+            ],
+            ..Default::default()
+        };
+        assert_eq!(action_class_of(&c).as_deref(), Some("repo.write"));
+        assert_eq!(principals_of(&c), vec!["R. Ortiz"]);
+    }
+
+    /// A spec with no scope clause yields no action class, rather than a
+    /// plausible default. BIND then refuses — binding to a guessed action class
+    /// would govern something nobody named.
+    #[test]
+    fn a_spec_without_a_scope_clause_names_no_action_class() {
+        let c = Compiled { spec_id: "s".into(), ..Default::default() };
+        assert_eq!(action_class_of(&c), None);
+        let blank = Compiled {
+            spec_id: "s".into(),
+            structural: vec![Structural {
+                clause: "1".into(),
+                kind: "scope".into(),
+                value: "   ".into(),
+            }],
+            ..Default::default()
+        };
+        assert_eq!(action_class_of(&blank), None);
     }
 }

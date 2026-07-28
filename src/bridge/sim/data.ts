@@ -136,8 +136,8 @@ export const MEETING_DETAIL: MeetingDetail = {
 };
 
 export const PROTOCOLS: Protocol[] = [
-  { id: "PRT-004", name: "Line-4 Agent Operating Envelope", version: "v3 (A1 applied)", template: "BoundedAutonomy v2.1", audit: "audited · CID bafy…70e1", addr: "0x7a41c2…90fe", state: "live", governs: "repo.write · pr.open · ci.* · doc.draft", deployed: "2026-06-30" },
-  { id: "PRT-002", name: "Wichita Data Egress Policy", version: "v1", template: "EgressControl v1.4", audit: "audited · CID bafy…22a8", addr: "0x22d0e1…44ac", state: "live", governs: "net.egress · model.select", deployed: "2026-05-12" },
+  { id: "PRT-004", name: "Line-4 Agent Operating Envelope", version: "v3 (A1 applied)", template: "BoundedAutonomy v2.1", audit: "audited · CID bafy…70e1", addr: "0x7a41c2…90fe", state: "bound", governs: "repo.write · pr.open · ci.* · doc.draft", deployed: "2026-06-30" },
+  { id: "PRT-002", name: "Wichita Data Egress Policy", version: "v1", template: "EgressControl v1.4", audit: "audited · CID bafy…22a8", addr: "0x22d0e1…44ac", state: "bound", governs: "net.egress · model.select", deployed: "2026-05-12" },
   { id: "PRT-001", name: "Pilot Envelope (superseded)", version: "v2", template: "BoundedAutonomy v1.9", audit: "template deprecated", addr: "0x09fa77…d031", state: "deprecated", governs: "—", deployed: "2026-03-02" },
 ];
 
@@ -161,7 +161,6 @@ export const SIMULATION: Simulation = {
     { id: "D-86114", agent: "hermes", action: "spend 220 SALT (doc pipeline)", was: "allowed", would: "require approval", why: "C2 — single action over 150 SALT" },
   ],
   inconvenienced: [["codex", 44, "mostly net.egress retries"], ["hermes", 29, "calendar and spend asks"], ["claude-code", 18, "scope edges"], ["devin", 5, "—"]],
-  create2: "0x9E44d0A17c33B8e2f1a6C90dD24b7E80f1532Aa7",
 };
 
 export const INGEST_FILES: IngestFile[] = [

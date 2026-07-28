@@ -44,6 +44,13 @@ import {
   type CompileResult,
   type Simulation,
   type DeployIntent,
+  type DeployResult,
+  type Protocol,
+  type ProtocolState,
+  type SpecSummary,
+  type BindIntent,
+  type BindResult,
+  type CheckAnswer,
   type Agent,
   type GovernedAction,
   type Grant,
@@ -74,6 +81,11 @@ import {
   governanceCompile,
   governanceSimulate,
   governanceDeployIntent,
+  governanceDeployComplete,
+  governanceBindIntent,
+  governanceBindComplete,
+  governanceSpecs,
+  governanceProtocols,
   actionApprove,
   agentsKnown,
   grantIssue,
@@ -122,6 +134,26 @@ import {
   walletStatus,
   type DecisionResult,
 } from "./commands";
+
+/**
+ * `PolicyBinding.check`'s answer, snake_case → camelCase.
+ *
+ * `ungoverned` is carried through rather than recomputed from the verdict:
+ * `Allow` alone cannot distinguish "nobody has bound anything" from "a protocol
+ * considered this and agreed", and the Rust side is where that distinction is
+ * made against the real reason code.
+ */
+const toCheckAnswer = (a: {
+  verdict: string;
+  reason: string;
+  required_signers: number;
+  ungoverned: boolean;
+}): CheckAnswer => ({
+  verdict: a.verdict as CheckAnswer["verdict"],
+  reason: a.reason,
+  requiredSigners: a.required_signers,
+  ungoverned: a.ungoverned,
+});
 
 /** The Rust DTO is snake_case; the bridge contract is camelCase. */
 const toRoomsStatus = (s: import("./commands").RoomsStatusDto): RoomsStatus => ({
@@ -561,8 +593,33 @@ export function createTauriBridge(): BridgeContract {
     // purpose, so the surface can be written against the real contract instead
     // of against a placeholder that would have to be unpicked later.
     governance: {
-      specs: na("governance.specs"),
-      protocols: na("governance.protocols"),
+      // LIVE (QRM-S7.8): the drafts on this machine, from the interview and
+      // spec-meta files on disk. A spec with no ingested sources reports
+      // `unclassified` rather than `Public` — the classification is unknown,
+      // and guessing would guess the most permissive value.
+      specs: async (): Promise<SpecSummary[]> =>
+        (await governanceSpecs()).map((s) => ({
+          id: s.id,
+          title: s.title,
+          stage: s.stage as SpecSummary["stage"],
+          updated: s.updated,
+          classification: s.classification as Classification,
+        })),
+      // LIVE (QRM-S7.8): enumerated through the FACTORY's own
+      // protocolCount/protocolAt index, so this is the chain's list of what the
+      // tenant has — not a local one that could have drifted from it.
+      protocols: async (): Promise<Protocol[]> =>
+        (await governanceProtocols()).map((p) => ({
+          id: p.id,
+          name: p.name,
+          version: p.version,
+          template: p.template,
+          audit: p.audit,
+          addr: p.addr,
+          state: p.state as ProtocolState,
+          governs: p.governs,
+          deployed: p.deployed,
+        })),
       // LIVE (QRM-S7.3): clauses drafted from the interview, each citing the
       // human who answered or the document a human confirmed. `tpl` is null
       // here and that means "not yet mapped" — S7.4 owns "maps to nothing".
@@ -618,7 +675,6 @@ export function createTauriBridge(): BridgeContract {
           byTeam: [],
           samples: r.samples,
           inconvenienced: [],
-          create2: "",
         };
       },
       // LIVE (QRM-S7.1): reads the operator's chosen files from disk, detects
@@ -666,14 +722,73 @@ export function createTauriBridge(): BridgeContract {
           specId: r.spec_id,
           predictedAddress: r.predicted_address,
           templateId: r.template_id,
+          templateName: r.template_name,
           tenantId: r.tenant_id,
+          tenantName: r.tenant_name,
           specHash: r.spec_hash,
           specCID: r.spec_cid,
+          salt: r.salt,
           ceremonyAction: r.ceremony_action,
+          classification: r.classification as Classification,
+          approvers: r.approvers,
+          actionClass: r.action_class,
+          source: r.source,
         };
       },
-      deployComplete: na("governance.deployComplete"),
-      bind: na("governance.bind"),
+      // LIVE (QRM-S7.6 phase two): broadcasts through the ceremony, then reads
+      // the address the FACTORY logged and compares it against the one the
+      // human approved. The Rust side rejects on a mismatch, so a resolved
+      // promise here IS the proof the addresses agreed — there is no flag to
+      // check and no way to render a mismatch as a badge.
+      deployComplete: async (ceremonyId, txHash): Promise<DeployResult> => {
+        const r = await governanceDeployComplete(ceremonyId, txHash);
+        return {
+          txHash: r.tx_hash,
+          block: r.block_number,
+          address: r.address,
+          predictedAddress: r.predicted_address,
+          specId: r.spec_id,
+          templateName: r.template_name,
+          tenantId: r.tenant_id,
+          tenantName: r.tenant_name,
+          classification: r.classification as Classification,
+          actionClass: r.action_class,
+          codeSize: r.code_size,
+          source: r.source,
+        };
+      },
+      // LIVE (QRM-S7.7): the binding, and the evidence that it took effect.
+      // `before` is read from `PolicyBinding.check` at intent time — an unbound
+      // action class answers Allow/PB_UNGOVERNED, which is NOT approval.
+      bindIntent: async (protocolAddr, actionClass): Promise<BindIntent> => {
+        const r = await governanceBindIntent(protocolAddr, actionClass);
+        return {
+          ceremonyId: r.ceremony_id,
+          protocol: r.protocol,
+          actionClass: r.action_class,
+          actionClassId: r.action_class_id,
+          tenantId: r.tenant_id,
+          tenantName: r.tenant_name,
+          before: toCheckAnswer(r.before),
+          ceremonyAction: r.ceremony_action,
+          source: r.source,
+        };
+      },
+      bindComplete: async (ceremonyId, txHash): Promise<BindResult> => {
+        const r = await governanceBindComplete(ceremonyId, txHash);
+        return {
+          txHash: r.tx_hash,
+          block: r.block_number,
+          protocol: r.protocol,
+          actionClass: r.action_class,
+          tenantId: r.tenant_id,
+          before: toCheckAnswer(r.before),
+          after: toCheckAnswer(r.after),
+          changed: r.changed,
+          protocolCount: r.protocol_count,
+          source: r.source,
+        };
+      },
     },
     // LIVE (QRM-S5.7): journals and retros read from the tenant's workspace
     // `.agentile` files; the brief adds the live governance state (what this

@@ -236,7 +236,8 @@ export function createSimBridge(): BridgeContract {
       // would touch a key and a chain, so they stay Unavailable even here.
       deployIntent: () => Promise.reject(new Unavailable("governance.deployIntent (sim never signs)")),
       deployComplete: () => Promise.reject(new Unavailable("governance.deployComplete (sim never signs)")),
-      bind: () => Promise.reject(new Unavailable("governance.bind (sim has no chain)")),
+      bindIntent: () => Promise.reject(new Unavailable("governance.bindIntent (sim has no chain)")),
+      bindComplete: () => Promise.reject(new Unavailable("governance.bindComplete (sim never signs)")),
     },
     journal: {
       list: () => delay(150, D.JOURNAL),

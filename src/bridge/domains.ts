@@ -12,6 +12,8 @@
 // =====================================================================
 import type {
   ActivityLine,
+  BindIntent,
+  BindResult,
   CompileResult,
   DateRange,
   DeployIntent,
@@ -328,17 +330,35 @@ export interface GovernanceDomain {
    */
   deployIntent(specId: string): Promise<DeployIntent>;
 
-  /** Phase two: record what the ceremony broadcast. Signs nothing. */
-  deployComplete(ceremonyId: string): Promise<DeployResult>;
+  /**
+   * Phase two: broadcast the approved ceremony, then ask the chain what it
+   * actually built.
+   *
+   * **Rejects on an address mismatch.** The deployed address is read from the
+   * factory's own `ProtocolDeployed` log and compared to the one the human
+   * approved; if they differ this rejects rather than resolving with a flag,
+   * because a protocol nobody approved the address of must not reach the
+   * ledger with a warning beside it.
+   */
+  deployComplete(ceremonyId: string, txHash: string): Promise<DeployResult>;
 
   /**
-   * Stage 8. Bind a deployed protocol to an action class in its tenant.
+   * Stage 8, phase one. Build the binding, and read what `check` says today.
+   * **Signs nothing, sends nothing.**
    *
-   * Until this is called the protocol governs nothing: `PolicyBinding` returns
-   * `PB_UNGOVERNED` for an unbound action class, which quorum records as
-   * `ungoverned` and alerts on rather than treating as approval.
+   * Until a binding exists the protocol governs nothing: `PolicyBinding`
+   * returns `Allow` / `PB_UNGOVERNED` for an unbound action class, which quorum
+   * records as `ungoverned` and alerts on rather than treating as approval.
+   * That answer is captured in `before` so phase two can show the diff.
+   *
+   * Two-phase for the same reason deploy is: binding is a transaction, so it
+   * goes through the ceremony, and a `Promise<void>` would report success for
+   * something that had only been enqueued.
    */
-  bind(protocolAddr: string, actionClass: string): Promise<void>;
+  bindIntent(protocolAddr: string, actionClass: string): Promise<BindIntent>;
+
+  /** Phase two: broadcast, then re-read `check` and report both answers. */
+  bindComplete(ceremonyId: string, txHash: string): Promise<BindResult>;
 
   /** Live protocols for the tenant. */
   protocols(): Promise<Protocol[]>;

@@ -222,6 +222,36 @@ impl Rpc {
             .ok_or_else(|| format!("eth_call: result missing 0x prefix ({s})"))?;
         hex::decode(stripped).map_err(|_| format!("eth_call: result was not hex ({s})"))
     }
+
+    /// An `eth_call` made AS a given sender.
+    ///
+    /// Every `msg.sender` check in the governance contracts — GF-4's tenant
+    /// admin gate, `PolicyBinding`'s the same — is invisible to a `from`-less
+    /// call, which the node runs as the zero address. A preflight that omits
+    /// `from` therefore passes for a transaction that will revert the moment a
+    /// human signs it, which is the one place this app must not be optimistic.
+    pub fn eth_call_from(&self, from: &str, to: &str, data: &str) -> Result<Vec<u8>, String> {
+        let result = self.call(
+            "eth_call",
+            json!([{ "from": from, "to": to, "data": data }, "latest"]),
+        )?;
+        let s = result
+            .as_str()
+            .ok_or_else(|| "eth_call: result was not a string".to_string())?;
+        let stripped = s
+            .strip_prefix("0x")
+            .ok_or_else(|| format!("eth_call: result missing 0x prefix ({s})"))?;
+        hex::decode(stripped).map_err(|_| format!("eth_call: result was not hex ({s})"))
+    }
+
+    /// A transaction receipt, or `None` while it is still pending.
+    pub fn receipt(&self, tx_hash: &str) -> Result<Option<Value>, String> {
+        let r = self.call("eth_getTransactionReceipt", json!([tx_hash]))?;
+        if r.is_null() {
+            return Ok(None);
+        }
+        Ok(Some(r))
+    }
 }
 
 // ---- hex helpers -----------------------------------------------------------
@@ -864,6 +894,101 @@ fn walk(
         walk(rpc, addr, kid, depth + 1, out)?;
     }
     Ok(())
+}
+
+/// The tenant id `TenantHierarchy` keys a node under.
+///
+/// `keccak256(display_name)`, and the name is taken EXACTLY as given — the root
+/// was seeded as `keccak256("Citrate")` and `init-tenant-root.sh` calls that id
+/// permanent. Case-folding or trimming here would compute a different id for a
+/// name a human would call the same, and the failure would arrive on chain as
+/// "that tenant does not exist" rather than "you typed it differently".
+///
+/// This is deliberately NOT the blake3 hash the evidence store uses for its own
+/// scoping. Two hashes of the same string that mean different things is exactly
+/// how a deploy ends up addressed to a tenant nobody created.
+pub fn tenant_id_of(name: &str) -> [u8; 32] {
+    keccak256(name.as_bytes())
+}
+
+/// What a caller needs to know before acting inside a tenant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TenantFacts {
+    pub id: String,
+    pub display_name: String,
+    pub level: u8,
+    pub admins: Vec<String>,
+    pub threshold: u8,
+    pub classification_max: u8,
+    /// Rule 11: the contract, chain and book this came from.
+    pub source: String,
+}
+
+impl TenantFacts {
+    /// Membership, not M-of-N — matching `TenantHierarchy::_isAdmin` and the
+    /// factory's GF-4. `admin_threshold` on that contract is DATA, recorded
+    /// intent for an off-chain orchestrator; anyone quoting "2-of-3 tenant
+    /// governance" has to quote that with it, so this must not pretend
+    /// otherwise by checking a count.
+    pub fn is_admin(&self, address: &str) -> bool {
+        let a = address.to_ascii_lowercase();
+        self.admins.iter().any(|x| x.to_ascii_lowercase() == a)
+    }
+}
+
+/// Read ONE tenant node by id, or `None` when the tree has no such node.
+///
+/// `getNode` reverts for an unknown tenant, which the RPC returns as an error.
+/// That is the contract being fail-closed and it is the answer we want, so it
+/// is translated to `Ok(None)` — "no such tenant" — rather than propagated as
+/// though the chain were unreachable. The two are different: one means the
+/// operator must create the node, the other means nobody can tell.
+pub fn tenant_node(book: &AddressBook, id: [u8; 32]) -> Result<Option<TenantFacts>, String> {
+    let Some(addr) = book.get(TENANT_HIERARCHY) else {
+        return Err(format!(
+            "{TENANT_HIERARCHY} is not in the address book ({})",
+            book.describe()
+        ));
+    };
+    let rpc = Rpc::from_book(book)?;
+    let source = format!(
+        "{TENANT_HIERARCHY}.getNode at {addr} · chain {} · {} · {}",
+        book.chain_id,
+        rpc.url(),
+        book.describe()
+    );
+
+    let ret = match rpc.eth_call(addr, &encode_word_call("getNode(bytes32)", id)) {
+        Ok(r) => r,
+        // A revert here is `NodeDoesNotExist`. Anything else — transport,
+        // timeout, a book pointing at a non-contract — must NOT be flattened
+        // into "no such tenant", because that would send an operator off to
+        // create a node that already exists.
+        Err(e) if is_revert(&e) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let node = decode_tenant_node(&ret)?;
+    if !node.exists {
+        return Ok(None);
+    }
+    Ok(Some(TenantFacts {
+        id: hex_of(&id),
+        display_name: node.display_name,
+        level: node.level,
+        admins: node.admins,
+        threshold: node.threshold,
+        classification_max: node.classification_max,
+        source,
+    }))
+}
+
+/// Whether an RPC error is the node reverting, rather than the node being
+/// unreachable. Geth-family nodes report a revert as JSON-RPC -32000 with
+/// "execution reverted" in the message; 40204 does the same (verified against
+/// the live chain, see the ignored test below).
+fn is_revert(err: &str) -> bool {
+    let e = err.to_ascii_lowercase();
+    e.contains("execution reverted") || e.contains("revert")
 }
 
 // ---- clearance -------------------------------------------------------------

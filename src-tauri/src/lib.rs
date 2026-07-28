@@ -30,11 +30,14 @@ mod addresses;
 mod agent_bridge;
 mod anchor;
 mod backend;
+mod bind;
 mod chain;
 mod compile;
+mod ctor;
 mod deploy;
 mod ingest;
 mod interview;
+mod protocols;
 mod rooms;
 mod simulate;
 mod spec;
@@ -163,6 +166,11 @@ pub fn run() {
             compile::governance_compile,
             simulate::governance_simulate,
             deploy::governance_deploy_intent,
+            deploy::governance_deploy_complete,
+            bind::governance_bind_intent,
+            bind::governance_bind_complete,
+            protocols::governance_specs,
+            protocols::governance_protocols,
             // config — persisted app config (shared kit surface).
             config::config_read,
             config::config_write,

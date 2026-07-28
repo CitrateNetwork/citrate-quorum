@@ -198,10 +198,11 @@ describe("tauri adapter — tenant scope + ledger", () => {
   });
 
   it("reports an unwired domain as unavailable rather than empty", async () => {
-    // `rooms` used to be the example here; it is live as of QRM-S3. Governance is
-    // the honest stand-in now — and when it lands, this must move again rather
-    // than be deleted: the property under test is that an unwired domain SAYS so.
-    await expect(createTauriBridge().governance.protocols()).rejects.toThrow(/governance\.protocols/);
+    // `rooms` was the example, then `governance`; both are live now (S3, S7.8).
+    // `calendar` is the honest stand-in — it needs OAuth consent that does not
+    // exist. When it lands this must MOVE AGAIN rather than be deleted: the
+    // property under test is that an unwired domain SAYS so.
+    await expect(createTauriBridge().calendar.accounts()).rejects.toThrow(/calendar\.accounts/);
   });
 
   it("REJECTS unwired async domains instead of throwing synchronously", async () => {
@@ -215,6 +216,10 @@ describe("tauri adapter — tenant scope + ledger", () => {
       () => b.agents.list(),
       () => b.rooms.list(),
       () => b.meetings.list(),
+      // Live domains belong here too: the property is "rejects rather than
+      // throwing synchronously", which a wired domain can violate just as
+      // easily — a `.map` over an undefined result throws out of the promise
+      // chain exactly like a synchronous stub did.
       () => b.governance.protocols(),
       () => b.journal.list(),
       () => b.calendar.accounts(),

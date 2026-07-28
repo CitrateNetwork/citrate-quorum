@@ -152,15 +152,30 @@ run "no sim data outside bridge" "no src/surfaces yet (design prototype)" "$HAS_
 # every invented value (a bare "4" is indistinguishable from a real one), so it
 # is a tripwire for the common case, not a proof of honesty. The proof is
 # running the packaged app against an empty tenant and reading what it claims.
+#
+# WIDENED, QRM-S7.8. The previous patterns anchored a quote on BOTH sides of the
+# number, so they matched `"14208"` and missed everything a fabricated stat
+# actually looks like. Both of these sat in Governance.tsx while this check
+# reported PASS:
+#
+#     ["Block", "1,284,067 · anchored"]      <- text after the digits
+#     <div>0.7% of all decisions</div>       <- JSX text, never quoted
+#
+# So the number is now matched wherever it appears, quoted or not. A control
+# that only catches the form nobody writes is not a control.
 run "no fabricated stats in surfaces" "no src/surfaces yet (design prototype)" "$HAS_SRC" \
     bash -c '
-      # Thousands-separated literals have no CSS analogue, so they are scanned
+      # Thousands-separated numbers have no CSS analogue, so they are scanned
       # everywhere. Percentages are scanned only outside style/geometry context,
       # where "100%" is a layout value rather than a claim about the world.
-      seps=$(grep -rnE "\"[0-9]{1,3}(,[0-9]{3})+\"" src/surfaces src/components 2>/dev/null || true)
-      pcts=$(grep -rnE "\"[0-9]+(\.[0-9]+)?%\"" src/surfaces src/components 2>/dev/null \
-             | grep -vE "style=|width:|height:|inset:|translate|gradient" || true)
-      hits=$(printf "%s\n%s" "$seps" "$pcts" | grep -v "^$" | grep -v "^\S*:[0-9]*: *//" || true)
+      seps=$(grep -rnE "[^0-9a-zA-Z_.][0-9]{1,3}(,[0-9]{3})+" src/surfaces src/components 2>/dev/null || true)
+      pcts=$(grep -rnE "[0-9]+(\.[0-9]+)?%" src/surfaces src/components 2>/dev/null \
+             | grep -vE "style=|width:|height:|inset:|translate|gradient|%\)" || true)
+      # Drop whole-line comments and JSX comment bodies: a comment QUOTING the
+      # fabricated value it removed is documentation, not a claim on screen.
+      hits=$(printf "%s\n%s" "$seps" "$pcts" \
+             | grep -v "^$" \
+             | grep -vE "^\S*:[0-9]*: *(//|\*|/\*)" || true)
       if [ -n "$hits" ]; then
         echo "stat-shaped literals in a surface — is this read from the bridge?"
         echo "$hits"

@@ -536,6 +536,67 @@ pub struct IngestResultDto {
     pub refused: Vec<RefusedDto>,
 }
 
+// ── What ingest is the only place to learn ──────────────────────────────
+
+/// The durable facts about a spec that only ingest can establish.
+///
+/// A protocol is deployed with a `classificationCeiling`, and a policy drafted
+/// from a CUI document governs at CUI. Ingest is where that is known — after it,
+/// the spec is clauses and answers, and nothing in them remembers what the
+/// source documents were marked.
+///
+/// Before this existed, `deploy_intent` passed a hardcoded `2` (CUI) for every
+/// deployment. That is a silent privilege inflation for a Public policy and a
+/// silent under-statement for an ITAR one, and it would have been invisible
+/// forever: the ceiling is a number in a constructor, not a surface anyone reads.
+#[derive(Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SpecMeta {
+    pub spec_id: String,
+    /// The HIGHEST classification among the documents this spec was built from.
+    /// Highest, not lowest: a policy drawn from one CUI memo and four public
+    /// ones is a CUI policy.
+    pub classification: String,
+    /// Which document and which literal marking produced it — a reader checking
+    /// our work needs to see what we matched on, not just what we concluded.
+    pub evidence: String,
+    /// `name · blake3:digest` per accepted source.
+    pub sources: Vec<String>,
+}
+
+fn meta_path(root: &std::path::Path, spec_id: &str) -> std::path::PathBuf {
+    root.join("specs").join(format!("{spec_id}.meta.json"))
+}
+
+pub fn load_meta(root: &std::path::Path, spec_id: &str) -> Option<SpecMeta> {
+    let raw = std::fs::read_to_string(meta_path(root, spec_id)).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+pub fn save_meta(root: &std::path::Path, meta: &SpecMeta) -> Result<(), String> {
+    let path = meta_path(root, &meta.spec_id);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let body = serde_json::to_vec_pretty(meta).map_err(|e| e.to_string())?;
+    std::fs::write(&path, body).map_err(|e| e.to_string())
+}
+
+/// Build the spec's meta from an accepted batch, or `None` when nothing was
+/// accepted — a spec with no sources has no classification, and inventing
+/// `Public` for it is the one mistake this must never make.
+pub fn meta_of(spec_id: &str, accepted: &[Ingested]) -> Option<SpecMeta> {
+    let top = accepted.iter().max_by_key(|f| f.classification)?;
+    Some(SpecMeta {
+        spec_id: spec_id.to_string(),
+        classification: crate::store::classification_str(top.classification).to_string(),
+        evidence: format!("{} marked \"{}\"", top.name, top.marking),
+        sources: accepted
+            .iter()
+            .map(|f| format!("{} · blake3:{}", f.name, &f.digest[..12]))
+            .collect(),
+    })
+}
+
 fn human_size(bytes: usize) -> String {
     if bytes >= 1_048_576 {
         format!("{:.1} MB", bytes as f64 / 1_048_576.0)
@@ -579,6 +640,13 @@ pub fn governance_ingest(
     let mut interview = crate::interview::load(&root, &resolved_id);
     crate::spec::propose_from_documents(&mut interview, &batch.accepted);
     crate::interview::save(&root, &interview)?;
+
+    // The classification of the documents is durable state: the deploy ceiling
+    // is read from it, and after this moment nothing else in the pipeline
+    // remembers what the sources were marked.
+    if let Some(meta) = meta_of(&resolved_id, &batch.accepted) {
+        save_meta(&root, &meta)?;
+    }
 
     Ok(IngestResultDto {
         // A spec id is minted per ingest when the caller did not name one. It is

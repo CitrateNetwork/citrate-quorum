@@ -294,7 +294,15 @@ export interface MeetingDetail {
 }
 
 // ---- governance -----------------------------------------------------
-export type ProtocolState = "live" | "deprecated";
+/**
+ * A protocol's governing state.
+ *
+ * `"live"` is deliberately not one of these. A deployed protocol that nothing
+ * has bound governs NOTHING — `PolicyBinding.check` answers `PB_UNGOVERNED` for
+ * its action classes — and calling that state "live" is the single most
+ * flattering word available for it. `unbound` says what is true.
+ */
+export type ProtocolState = "bound" | "unbound" | "deprecated";
 export interface Protocol {
   id: string;
   name: string;
@@ -339,7 +347,6 @@ export interface Simulation {
     why: string;
   }[];
   inconvenienced: [string, number, string][];
-  create2: string;
 }
 export interface IngestFile {
   name: string;
@@ -836,18 +843,97 @@ export interface DeployIntent {
    */
   predictedAddress: string;
   templateId: string;
+  templateName: string;
   tenantId: string;
+  /** The tenant's display name. `tenantId` alone is a hash. */
+  tenantName: string;
   /** The spec hash and CID that will be bound to the bytecode (GF-3). */
   specHash: string;
   specCID: string;
+  salt: string;
   /** What the ceremony's own display will say, verbatim, so the two agree. */
   ceremonyAction: string;
+  /** The classification this deploys at, from the spec's ingested sources. */
+  classification: Classification;
+  /** The principals whose approval the protocol will require, by name. */
+  approvers: string[];
+  /** The action class BIND will attach this to; null when the spec named none. */
+  actionClass: string | null;
+  /** Rule 11: the contracts, chain and book behind the above. */
+  source: string;
 }
 
+/**
+ * What the chain actually built.
+ *
+ * There is deliberately **no `matchedPrediction` field**. A mismatch between
+ * the deployed address and the one a human approved is a rejected promise, not
+ * a boolean on a success value: a caller holding a `DeployResult` is holding
+ * proof the addresses agreed. The earlier shape invited a surface to render
+ * "matched: false" as a badge beside an address nobody approved.
+ */
 export interface DeployResult {
-  protocolAddr: string;
   txHash: string;
-  block: number;
-  /** True when the deployed address matched `DeployIntent.predictedAddress`. */
-  matchedPrediction: boolean;
+  block: number | null;
+  /** Read from the factory's `ProtocolDeployed` log, not recomputed locally. */
+  address: string;
+  /** The address that was shown before signing. Equal to `address`, always. */
+  predictedAddress: string;
+  specId: string;
+  templateName: string;
+  tenantId: string;
+  tenantName: string;
+  classification: Classification;
+  actionClass: string | null;
+  /** Bytes of code read back from the deployed address. */
+  codeSize: number;
+  source: string;
+}
+
+/**
+ * What `PolicyBinding.check` answers for one action class.
+ *
+ * `verdict` and `ungoverned` are separate on purpose. `Allow` + `PB_UNGOVERNED`
+ * and `Allow` + `PB_ALLOWED` are the same verdict and opposite facts: the first
+ * means nobody has bound anything, the second means a protocol considered the
+ * action and agreed. Rule 5 records the first as `ungoverned` and alerts on it.
+ */
+export interface CheckAnswer {
+  verdict: "Allow" | "Deny" | "RequireApproval" | "RequireVote";
+  reason: string;
+  requiredSigners: number;
+  ungoverned: boolean;
+}
+
+export interface BindIntent {
+  ceremonyId: string;
+  protocol: string;
+  actionClass: string;
+  actionClassId: string;
+  tenantId: string;
+  tenantName: string;
+  /** What `check` says now, before the binding — read from the chain. */
+  before: CheckAnswer;
+  ceremonyAction: string;
+  source: string;
+}
+
+export interface BindResult {
+  txHash: string;
+  block: number | null;
+  protocol: string;
+  actionClass: string;
+  tenantId: string;
+  before: CheckAnswer;
+  after: CheckAnswer;
+  /**
+   * Whether `check` actually answers differently now. A bind transaction that
+   * succeeds while leaving the verdict unchanged has not started governing
+   * anything, and this is what keeps "the transaction succeeded" from being
+   * read as "the policy took effect".
+   */
+  changed: boolean;
+  /** How many protocols the tenant now has bound to this action class. */
+  protocolCount: number;
+  source: string;
 }

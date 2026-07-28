@@ -756,8 +756,96 @@ export const governanceDeployIntent = (specId: string) =>
     template_id: string;
     template_name: string;
     tenant_id: string;
+    tenant_name: string;
     spec_hash: string;
     spec_cid: string;
     salt: string;
     ceremony_action: string;
+    classification: string;
+    approvers: string[];
+    action_class: string | null;
+    source: string;
   }>("governance_deploy_intent", { specId });
+
+/**
+ * QRM-S7.6 — stages 6/7 phase two. Broadcasts the approved ceremony and
+ * compares the deployed address against the one the human was shown.
+ *
+ * Rejects on a mismatch — there is no success shape carrying "did not match".
+ */
+export const governanceDeployComplete = (ceremonyId: string, txHash: string) =>
+  invoke<{
+    tx_hash: string;
+    block_number: number | null;
+    address: string;
+    predicted_address: string;
+    spec_id: string;
+    template_name: string;
+    tenant_id: string;
+    tenant_name: string;
+    classification: string;
+    action_class: string | null;
+    code_size: number;
+    source: string;
+  }>("governance_deploy_complete", { ceremonyId, txHash });
+
+type CheckAnswerDto = {
+  verdict: string;
+  reason: string;
+  required_signers: number;
+  ungoverned: boolean;
+};
+
+/** QRM-S7.7 — stage 8 phase one. Signs nothing, sends nothing. */
+export const governanceBindIntent = (protocol: string, actionClass: string) =>
+  invoke<{
+    ceremony_id: string;
+    protocol: string;
+    action_class: string;
+    action_class_id: string;
+    tenant_id: string;
+    tenant_name: string;
+    before: CheckAnswerDto;
+    ceremony_action: string;
+    source: string;
+  }>("governance_bind_intent", { protocol, actionClass });
+
+/** QRM-S7.7 — stage 8 phase two. Broadcasts, then re-reads `check`. */
+export const governanceBindComplete = (ceremonyId: string, txHash: string) =>
+  invoke<{
+    tx_hash: string;
+    block_number: number | null;
+    protocol: string;
+    action_class: string;
+    tenant_id: string;
+    before: CheckAnswerDto;
+    after: CheckAnswerDto;
+    changed: boolean;
+    protocol_count: number;
+    source: string;
+  }>("governance_bind_complete", { ceremonyId, txHash });
+
+/** QRM-S7.8 — the drafts on this machine. Local disk, not the chain. */
+export const governanceSpecs = () =>
+  invoke<{
+    id: string;
+    title: string;
+    stage: string;
+    updated: string;
+    classification: string;
+  }[]>("governance_specs");
+
+/** QRM-S7.8 — what the tenant actually has on chain, via the factory's index. */
+export const governanceProtocols = () =>
+  invoke<{
+    id: string;
+    name: string;
+    version: string;
+    template: string;
+    audit: string;
+    addr: string;
+    state: string;
+    governs: string;
+    deployed: string;
+    source: string;
+  }[]>("governance_protocols");

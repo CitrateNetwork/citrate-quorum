@@ -23,6 +23,21 @@ export interface CeremonyResult {
   note?: string;
   /** What the policy gate recorded. Absent only if the gate was unreachable. */
   gate?: GateDecision;
+  /**
+   * The chain transaction this approval authorised, if it had one and it was
+   * broadcast.
+   *
+   * Present so a caller can VERIFY what the chain did with it. The ceremony is
+   * the only thing in the app that signs and broadcasts (rule 3), so a surface
+   * that needs to check a receipt has no other way to learn the hash — and the
+   * alternative, letting the surface broadcast for itself, would be a second
+   * signing path.
+   *
+   * Absent when the intent had no `chainTx`, or when the broadcast failed. A
+   * failed broadcast still settles: the local governance act happened, and
+   * `note` says the chain write did not.
+   */
+  chain?: { txHash: string; blockNumber: number | null; label: string };
 }
 
 export type GateOutcome =
