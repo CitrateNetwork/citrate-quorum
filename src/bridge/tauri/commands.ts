@@ -746,3 +746,18 @@ export const governanceSimulate = (specId: string) =>
     complete: boolean;
     corpus_note: string | null;
   }>("governance_simulate", { specId });
+
+/** QRM-S7.6 — stages 6/7 phase one. Signs nothing, sends nothing. */
+export const governanceDeployIntent = (specId: string) =>
+  invoke<{
+    ceremony_id: string;
+    spec_id: string;
+    predicted_address: string;
+    template_id: string;
+    template_name: string;
+    tenant_id: string;
+    spec_hash: string;
+    spec_cid: string;
+    salt: string;
+    ceremony_action: string;
+  }>("governance_deploy_intent", { specId });

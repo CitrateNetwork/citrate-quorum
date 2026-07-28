@@ -32,6 +32,7 @@ mod anchor;
 mod backend;
 mod chain;
 mod compile;
+mod deploy;
 mod ingest;
 mod interview;
 mod rooms;
@@ -159,6 +160,7 @@ pub fn run() {
             spec::governance_spec,
             compile::governance_compile,
             simulate::governance_simulate,
+            deploy::governance_deploy_intent,
             // config — persisted app config (shared kit surface).
             config::config_read,
             config::config_write,

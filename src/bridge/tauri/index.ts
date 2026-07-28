@@ -43,6 +43,7 @@ import {
   type GovernanceSpec,
   type CompileResult,
   type Simulation,
+  type DeployIntent,
   type Agent,
   type GovernedAction,
   type Grant,
@@ -72,6 +73,7 @@ import {
   governanceSpec,
   governanceCompile,
   governanceSimulate,
+  governanceDeployIntent,
   actionApprove,
   agentsKnown,
   grantIssue,
@@ -652,7 +654,24 @@ export function createTauriBridge(): BridgeContract {
           outstanding: r.outstanding,
         };
       },
-      deployIntent: na("governance.deployIntent"),
+      // LIVE (QRM-S7.6): builds the deploy transaction and asks the FACTORY
+      // for the address it will produce. Signs nothing, sends nothing. The
+      // predicted address comes from `predict()` rather than a local CREATE2
+      // so the address shown to the human is produced by the same code that
+      // deploys (GF-1). Refuses outright for a spec with unmapped clauses.
+      deployIntent: async (specId): Promise<DeployIntent> => {
+        const r = await governanceDeployIntent(specId);
+        return {
+          ceremonyId: r.ceremony_id,
+          specId: r.spec_id,
+          predictedAddress: r.predicted_address,
+          templateId: r.template_id,
+          tenantId: r.tenant_id,
+          specHash: r.spec_hash,
+          specCID: r.spec_cid,
+          ceremonyAction: r.ceremony_action,
+        };
+      },
       deployComplete: na("governance.deployComplete"),
       bind: na("governance.bind"),
     },
