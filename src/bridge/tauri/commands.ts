@@ -720,3 +720,13 @@ export const governanceSpec = (specId: string, title?: string, classification?: 
     clauses: { n: string; en: string; gh: string; tpl: string | null; ok: boolean; why: string | null }[];
     provenance: { clause: string; source: string }[];
   }>("governance_spec", { specId, title, classification });
+
+/** QRM-S7.4 — stage 4. Maps clauses onto the LIVE audited template set, or refuses. */
+export const governanceCompile = (specId: string) =>
+  invoke<{
+    spec_id: string;
+    deployable: boolean;
+    mapped: { clause: string; template_id: string; params: Record<string, string> }[];
+    unmapped: { clause: string; why: string }[];
+    structural: { clause: string; kind: string; value: string }[];
+  }>("governance_compile", { specId });

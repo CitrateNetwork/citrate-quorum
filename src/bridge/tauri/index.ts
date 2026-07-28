@@ -41,6 +41,7 @@ import {
   type IngestResult,
   type InterviewState,
   type GovernanceSpec,
+  type CompileResult,
   type Agent,
   type GovernedAction,
   type Grant,
@@ -68,6 +69,7 @@ import {
   governanceIngest,
   governanceInterview,
   governanceSpec,
+  governanceCompile,
   actionApprove,
   agentsKnown,
   grantIssue,
@@ -578,7 +580,23 @@ export function createTauriBridge(): BridgeContract {
           provenance: r.provenance,
         };
       },
-      compile: na("governance.compile"),
+      // LIVE (QRM-S7.4): maps each clause onto the audited template set read
+      // from the on-chain registry. A clause whose parameters cannot be TYPED
+      // comes back in `unmapped` with a reason — never improvised into a
+      // mapping that type-checks and is wrong (S7 risk R-A).
+      compile: async (specId): Promise<CompileResult> => {
+        const r = await governanceCompile(specId);
+        return {
+          specId: r.spec_id,
+          deployable: r.deployable,
+          mapped: r.mapped.map((m) => ({
+            clause: m.clause,
+            templateId: m.template_id,
+            params: m.params,
+          })),
+          unmapped: r.unmapped.map((u) => ({ clause: u.clause, why: u.why })),
+        };
+      },
       simulate: na("governance.simulate"),
       // LIVE (QRM-S7.1): reads the operator's chosen files from disk, detects
       // each one's classification marking, and returns the refusals alongside

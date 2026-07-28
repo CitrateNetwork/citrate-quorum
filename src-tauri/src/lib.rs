@@ -31,6 +31,7 @@ mod agent_bridge;
 mod anchor;
 mod backend;
 mod chain;
+mod compile;
 mod ingest;
 mod interview;
 mod rooms;
@@ -155,6 +156,7 @@ pub fn run() {
             ingest::governance_ingest,
             interview::governance_interview,
             spec::governance_spec,
+            compile::governance_compile,
             // config — persisted app config (shared kit surface).
             config::config_read,
             config::config_write,
