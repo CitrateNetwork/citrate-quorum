@@ -45,13 +45,35 @@ use std::collections::BTreeMap;
 
 use crate::compile::Compiled;
 
-/// Where the audited creation code is vendored.
+/// The audited creation code, EMBEDDED.
 ///
-/// Set `QUORUM_TEMPLATE_ARTIFACTS` to a directory of `<Name>.hex` files, each
-/// the creation code of one audited template. This is deliberately explicit
-/// rather than defaulted: bytecode that governs actions should be something an
-/// operator placed on purpose.
-pub const ARTIFACTS_ENV: &str = "QUORUM_TEMPLATE_ARTIFACTS";
+/// These are the exact bytes `GovernanceProtocolFactory` will hash against the
+/// registry's pinned `initCodeHash` (GF-2). They are compiled into the binary
+/// rather than read from a path, for two reasons:
+///
+/// * **A path is a substitution point.** Anyone able to set an environment
+///   variable could point the app at different bytecode. GF-2 would still refuse
+///   it on chain, so this is not a hole — but the failure would arrive at the
+///   ceremony, after a human had already been asked to approve, and would read
+///   as "the chain rejected your deploy" rather than "someone swapped your
+///   templates".
+/// * **A missing artifact stops being a runtime state.** The app either has the
+///   audited bytes or does not build.
+///
+/// Vendored and verified by `scripts/vendor-template-artifacts.sh`, which
+/// refuses to write a file whose hash does not match the value read from the
+/// LIVE registry. `template_hashes.rs` records those values, and a test below
+/// asserts each embedded artifact still hashes to its own.
+const EMBEDDED: &[(&str, &str)] = &[
+    ("ThresholdApproval", include_str!("../artifacts/templates/ThresholdApproval.hex")),
+    ("ClassificationGate", include_str!("../artifacts/templates/ClassificationGate.hex")),
+    ("BudgetedAutonomy", include_str!("../artifacts/templates/BudgetedAutonomy.hex")),
+    ("SegregationOfDuties", include_str!("../artifacts/templates/SegregationOfDuties.hex")),
+    ("TimeBoundedElevation", include_str!("../artifacts/templates/TimeBoundedElevation.hex")),
+    ("ChangeControlBoard", include_str!("../artifacts/templates/ChangeControlBoard.hex")),
+    ("SupplierAdmission", include_str!("../artifacts/templates/SupplierAdmission.hex")),
+    ("IncidentEscalation", include_str!("../artifacts/templates/IncidentEscalation.hex")),
+];
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum DeployError {
@@ -59,8 +81,8 @@ pub enum DeployError {
     NotDeployable { unmapped: usize },
     /// No template was mapped, so there is nothing to deploy.
     NothingToDeploy,
-    /// The audited creation code is not available to this installation.
-    NoCreationCode { template: String, looked_in: String },
+    /// This app does not carry the audited creation code for that template.
+    NoCreationCode { template: String },
 }
 
 impl DeployError {
@@ -76,11 +98,11 @@ impl DeployError {
                 "no clause mapped to a template, so there is no protocol to deploy"
                     .to_string()
             }
-            DeployError::NoCreationCode { template, looked_in } => format!(
-                "the audited creation code for {template} is not available (looked in \
-                 {looked_in}). GF-2 requires supplying bytecode that hashes to the \
-                 registered initCodeHash, and this app will not invent it — vendor the \
-                 audited artifact and set {ARTIFACTS_ENV}"
+            DeployError::NoCreationCode { template } => format!(
+                "this app does not carry the audited creation code for {template}, so \
+                 it cannot be deployed from here. GF-2 requires supplying bytecode that \
+                 hashes to the registered initCodeHash and this app will not invent it \
+                 — re-run scripts/vendor-template-artifacts.sh"
             ),
         }
     }
@@ -171,23 +193,22 @@ fn pad_bytes(bytes: &[u8]) -> String {
 }
 
 /// Load the audited creation code for a template.
+///
+/// A template this app does not carry is refused by name. It cannot be
+/// deployed from here, and saying so is better than handing the factory bytes
+/// that will fail GF-2 in front of a human mid-ceremony.
 pub fn creation_code(template: &str) -> Result<Vec<u8>, DeployError> {
-    let dir = std::env::var(ARTIFACTS_ENV).unwrap_or_default();
-    if dir.is_empty() {
-        return Err(DeployError::NoCreationCode {
+    let hex_str = EMBEDDED
+        .iter()
+        .find(|(n, _)| *n == template)
+        .map(|(_, h)| *h)
+        .ok_or_else(|| DeployError::NoCreationCode {
             template: template.to_string(),
-            looked_in: format!("<{ARTIFACTS_ENV} is not set>"),
-        });
-    }
-    let path = std::path::Path::new(&dir).join(format!("{template}.hex"));
-    let raw = std::fs::read_to_string(&path).map_err(|_| DeployError::NoCreationCode {
-        template: template.to_string(),
-        looked_in: path.display().to_string(),
-    })?;
-    let trimmed = raw.trim().trim_start_matches("0x");
-    hex::decode(trimmed).map_err(|e| DeployError::NoCreationCode {
-        template: template.to_string(),
-        looked_in: format!("{} (not hex: {e})", path.display()),
+        })?;
+    hex::decode(hex_str.trim().trim_start_matches("0x")).map_err(|_| {
+        DeployError::NoCreationCode {
+            template: template.to_string(),
+        }
     })
 }
 
@@ -466,39 +487,66 @@ mod tests {
         assert_eq!(target(&c).expect_err("refuse"), DeployError::NothingToDeploy);
     }
 
-    /// Absent creation code is refused with the path it looked in — GF-2
-    /// requires bytecode that hashes to the registered value, and this app will
-    /// not invent it.
+    /// **The property the whole vendoring step exists for.** Every embedded
+    /// artifact must still hash to the `initCodeHash` registered on chain.
+    ///
+    /// If this fails, the app is carrying bytecode that the factory will refuse
+    /// — and it would refuse it mid-ceremony, after a human had already been
+    /// asked to approve a deploy. Catching it here costs a test run; catching it
+    /// there costs the operator's trust in the ceremony.
     #[test]
-    fn absent_creation_code_is_refused_with_the_path() {
-        std::env::remove_var(ARTIFACTS_ENV);
-        let e = creation_code("ThresholdApproval").expect_err("refuse");
+    fn every_embedded_artifact_hashes_to_what_the_registry_pinned() {
+        use crate::template_hashes::REGISTERED_INIT_CODE_HASHES;
+        assert_eq!(
+            REGISTERED_INIT_CODE_HASHES.len(),
+            EMBEDDED.len(),
+            "the pinned table and the embedded set disagree about how many templates exist"
+        );
+        for (name, expected) in REGISTERED_INIT_CODE_HASHES {
+            let code = creation_code(name)
+                .unwrap_or_else(|e| panic!("{name} is pinned but not embedded: {}", e.why()));
+            // keccak over the RAW BYTES, which is what
+            // `keccak256(type(T).creationCode)` hashes in Solidity and what
+            // `cast keccak 0x…` computes (it decodes the hex first). Hashing the
+            // ASCII hex instead produces a plausible 32 bytes that match
+            // nothing — this test was written that way first and caught it.
+            let got = format!("0x{}", hex::encode(crate::anchor::keccak256(&code)));
+            assert_eq!(
+                &got.as_str(),
+                expected,
+                "{name}: embedded bytecode does not match the registered initCodeHash"
+            );
+        }
+    }
+
+    /// A template this app does not carry is refused BY NAME, rather than
+    /// handed to the factory as bytes that will fail GF-2 in front of a human.
+    #[test]
+    fn an_uncarried_template_is_refused_by_name() {
+        let e = creation_code("NotATemplate").expect_err("refuse");
         match &e {
-            DeployError::NoCreationCode { template, looked_in } => {
-                assert_eq!(template, "ThresholdApproval");
-                assert!(looked_in.contains(ARTIFACTS_ENV), "{looked_in}");
-            }
+            DeployError::NoCreationCode { template } => assert_eq!(template, "NotATemplate"),
             other => panic!("expected NoCreationCode, got {other:?}"),
         }
         assert!(e.why().contains("will not invent it"), "{}", e.why());
     }
 
+    /// The artifacts are real bytecode, not placeholders — every one decodes and
+    /// starts with a constructor preamble.
     #[test]
-    fn creation_code_is_read_from_the_artifacts_dir() {
-        let dir = std::env::temp_dir().join(format!("qrm-s76-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        std::fs::write(dir.join("ThresholdApproval.hex"), "0xaabbcc\n").expect("write");
-        std::env::set_var(ARTIFACTS_ENV, &dir);
-
-        let code = creation_code("ThresholdApproval").expect("loaded");
-        assert_eq!(code, vec![0xaa, 0xbb, 0xcc]);
-
-        // A template with no artifact is still refused, by name.
-        let e = creation_code("Missing").expect_err("refuse");
-        assert!(matches!(e, DeployError::NoCreationCode { .. }));
-
-        std::env::remove_var(ARTIFACTS_ENV);
-        std::fs::remove_dir_all(&dir).ok();
+    fn the_embedded_artifacts_are_real_bytecode() {
+        for (name, _) in EMBEDDED {
+            let code = creation_code(name).expect("embedded");
+            assert!(code.len() > 1_000, "{name} is suspiciously small: {}", code.len());
+            // `via_ir` output begins with PUSH2 (0x61), not PUSH1. Accept the
+            // whole PUSH family rather than pinning one opcode a compiler
+            // setting can change.
+            assert!(
+                (0x60..=0x7f).contains(&code[0]),
+                "{name} does not start with a PUSH opcode: 0x{:02x}",
+                code[0]
+            );
+        }
     }
 
     // ── The salt ────────────────────────────────────────────────────

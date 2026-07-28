@@ -39,6 +39,8 @@ mod rooms;
 mod simulate;
 mod spec;
 mod store;
+#[cfg(test)]
+mod template_hashes;
 mod wallet_setup;
 
 /// A tiny, honest status command the placeholder shell can call to prove the
