@@ -331,46 +331,94 @@ fn parse_classification(s: &str) -> Option<&'static str> {
 
 /// Read the registered templates from the on-chain registry.
 ///
-/// An unreachable chain is an ERROR, not an empty catalog: an empty catalog
-/// means "nothing is audited yet" and would make every clause unmapped for a
-/// stated reason, which is a different claim from "we could not ask".
+/// Asks the registry for `templateId(name, version)` for each template this
+/// compiler knows how to map, then whether that row `exists`. Two reasons for
+/// that shape rather than enumerating rows:
+///
+/// * **It cannot drift from the contract's own id derivation.** `templateId` is
+///   `public pure` precisely so callers compute ids the same way the registry
+///   does instead of reimplementing `abi.encode`; asking it is taking that offer.
+/// * **It needs no dynamic ABI decode.** Enumerating rows means decoding a
+///   struct with two `string` members, and a hand-rolled decoder that is subtly
+///   wrong returns plausible garbage rather than failing.
+///
+/// The catalog is therefore "the templates this compiler can map, that are
+/// registered" — which is exactly the question `compile` asks of it. A template
+/// registered under a name this compiler does not know is invisible here, and
+/// that is correct: it could not be mapped to anyway.
+///
+/// An unreachable chain is an ERROR, not an empty catalog. "Nothing is audited
+/// yet" and "we could not ask" are different claims and only the first is a
+/// reason to tell an operator their clause does not map.
 pub fn catalog_from_chain(rpc: &crate::chain::Rpc, registry: &str) -> Result<Catalog, String> {
-    // count() -> uint256
-    let count_ret = rpc.eth_call(registry, "0x06661abd")?;
-    let count = be_u64(&count_ret);
+    const KNOWN: &[&str] = &[
+        "ThresholdApproval",
+        "ClassificationGate",
+        "BudgetedAutonomy",
+        "SegregationOfDuties",
+        "TimeBoundedElevation",
+        "ChangeControlBoard",
+        "SupplierAdmission",
+        "IncidentEscalation",
+    ];
+    const VERSION: u32 = 1;
 
     let mut templates = Vec::new();
-    for i in 0..count {
-        // idAt(uint256) -> bytes32
-        let mut data = String::from("0x2e1a7d4d");
-        data.push_str(&format!("{i:064x}"));
-        let id_ret = rpc.eth_call(registry, &data)?;
+    for name in KNOWN {
+        let id_ret = rpc.eth_call(registry, &encode_template_id(name, VERSION))?;
         if id_ret.len() < 32 {
             continue;
         }
-        let id = format!("0x{}", crate::store::hex_encode(&id_ret[..32]));
-        templates.push(TemplateRow {
-            // The registry stores the name as a string in the row; reading it
-            // needs a dynamic decode. Until that lands, the id IS the identity —
-            // and a name we could not read is left blank rather than invented.
-            name: String::new(),
-            id,
-            version: 0,
-        });
+        let id_bytes = &id_ret[..32];
+        let id = format!("0x{}", hex_raw(id_bytes));
+
+        // exists(bytes32) -> bool
+        let mut data = String::from("0x38a699a4");
+        data.push_str(&hex_raw(id_bytes));
+        let ex = rpc.eth_call(registry, &data)?;
+        if ex.last().copied().unwrap_or(0) == 1 {
+            templates.push(TemplateRow {
+                name: (*name).to_string(),
+                id,
+                version: VERSION,
+            });
+        }
     }
     Ok(Catalog { templates })
 }
 
-fn be_u64(bytes: &[u8]) -> u64 {
-    let n = bytes.len();
-    if n < 8 {
-        return 0;
+/// Hex WITHOUT the `0x` prefix.
+///
+/// `store::hex_encode` prefixes `0x`, which is right for display and wrong
+/// inside calldata — using it here embedded a literal "0x" mid-word, producing
+/// a well-formed-looking call that asked about a template nobody registered.
+/// Every row would then read as unregistered, and the operator would be told
+/// their clause does not map for a reason that was not the real one.
+fn hex_raw(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push_str(&format!("{b:02x}"));
     }
-    let mut v = 0u64;
-    for b in &bytes[n - 8..] {
-        v = (v << 8) | *b as u64;
+    s
+}
+
+/// `templateId(string,uint32)` calldata.
+///
+/// Selector `0x2c4d2d89`, then the standard head/tail layout: an offset to the
+/// string, the `uint32` right-aligned, then the string's length and its bytes
+/// padded to a 32-byte boundary.
+fn encode_template_id(name: &str, version: u32) -> String {
+    let bytes = name.as_bytes();
+    let mut out = String::from("0x2c4d2d89");
+    out.push_str(&format!("{:064x}", 0x40));          // offset to the string
+    out.push_str(&format!("{version:064x}"));          // uint32
+    out.push_str(&format!("{:064x}", bytes.len()));    // string length
+    let mut padded = hex_raw(bytes);
+    while padded.len() % 64 != 0 {
+        padded.push('0');
     }
-    v
+    out.push_str(&padded);
+    out
 }
 
 // ── Tauri seam ──────────────────────────────────────────────────────────
@@ -669,6 +717,25 @@ mod tests {
         assert_eq!(c.mapped.len(), 5);
         assert_eq!(c.structural.len(), 2);
         assert!(c.deployable());
+    }
+
+    /// The `templateId(string,uint32)` encoder, pinned against a value read from
+    /// the LIVE registry on chain 40204. A hand-rolled ABI encoder that is
+    /// subtly wrong returns a plausible id for a row that does not exist, so
+    /// every template would silently look unregistered — the catalog would be
+    /// empty and every clause unmapped, for a reason that is not the real one.
+    #[test]
+    fn the_template_id_encoder_matches_the_contract() {
+        let data = encode_template_id("ThresholdApproval", 1);
+        assert!(data.starts_with("0x2c4d2d89"), "selector");
+        // Head: offset 0x40, then the version.
+        assert!(data.contains(&format!("{:064x}", 0x40)));
+        assert!(data.contains(&format!("{:064x}", 1)));
+        // Tail: length 17, then "ThresholdApproval" padded to 32 bytes.
+        assert!(data.contains(&format!("{:064x}", "ThresholdApproval".len())));
+        assert!(data.ends_with(&"5468726573686f6c64417070726f76616c000000000000000000000000000000".to_string()));
+        // Total: selector + 4 words.
+        assert_eq!(data.len(), 2 + 8 + 64 * 4);
     }
 
     #[test]
