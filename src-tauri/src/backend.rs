@@ -97,7 +97,7 @@ fn decision_index(id: &str) -> Result<usize, String> {
 /// Done by hand, like `clock_utc`, rather than pulling a date crate in for two
 /// formats. Civil-from-days is Howard Hinnant's algorithm; the round-trip test
 /// pins it against known instants rather than trusting the arithmetic.
-fn iso_utc(ms: i64) -> String {
+pub(crate) fn iso_utc(ms: i64) -> String {
     let secs = ms.div_euclid(1000);
     let days = secs.div_euclid(86_400);
     let tod = secs.rem_euclid(86_400);

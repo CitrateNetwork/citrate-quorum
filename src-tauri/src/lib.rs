@@ -32,6 +32,7 @@ mod anchor;
 mod backend;
 mod chain;
 mod ingest;
+mod interview;
 mod rooms;
 mod store;
 mod wallet_setup;
@@ -151,6 +152,7 @@ pub fn run() {
             quorum_skeleton_status,
             // governance authoring pipeline (QRM-S7).
             ingest::governance_ingest,
+            interview::governance_interview,
             // config — persisted app config (shared kit surface).
             config::config_read,
             config::config_write,

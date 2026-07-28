@@ -39,6 +39,7 @@ import {
   type DecisionDetail,
   type GateDecision,
   type IngestResult,
+  type InterviewState,
   type Agent,
   type GovernedAction,
   type Grant,
@@ -64,6 +65,7 @@ import {
 } from "../types";
 import {
   governanceIngest,
+  governanceInterview,
   actionApprove,
   agentsKnown,
   grantIssue,
@@ -576,7 +578,19 @@ export function createTauriBridge(): BridgeContract {
           refused: r.refused.map((x) => ({ name: x.name, why: x.why })),
         };
       },
-      interview: na("governance.interview"),
+      // LIVE (QRM-S7.2): the interview state machine. A value read from an
+      // ingested document arrives as `proposal`, NOT as an answer — the topic
+      // stays outstanding until a human confirms or overrides it, and the
+      // record says which of those happened.
+      interview: async (specId, answer): Promise<InterviewState> => {
+        const r = await governanceInterview(specId, answer);
+        return {
+          specId: r.spec_id,
+          turns: r.turns.map((t) => ({ q: t.q, a: t.a })),
+          pending: r.pending,
+          outstanding: r.outstanding,
+        };
+      },
       deployIntent: na("governance.deployIntent"),
       deployComplete: na("governance.deployComplete"),
       bind: na("governance.bind"),

@@ -699,3 +699,14 @@ export const governanceIngest = (paths: string[], specId?: string) =>
     files: { name: string; size: string; status: string; class: string; note: string; prov: string }[];
     refused: { name: string; why: string }[];
   }>("governance_ingest", { paths, specId });
+
+/** QRM-S7.2 — stage 2. Omit `answer` to read; `__confirm__` confirms a proposal. */
+export const governanceInterview = (specId: string, answer: string | undefined) =>
+  invoke<{
+    spec_id: string;
+    turns: { q: string; a: string; by: string; at: string; source: string }[];
+    pending: string | null;
+    outstanding: string[];
+    complete: boolean;
+    proposal: { text: string; from: string } | null;
+  }>("governance_interview", { specId, answer });
