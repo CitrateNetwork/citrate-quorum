@@ -13,7 +13,7 @@
 //! because nothing here knows what to do with the second half and guessing would
 //! produce a protocol that silently ignores it.
 //!
-//! # Three outcomes, and why the third is not a loophole
+//! # Four outcomes, and why two of them are not loopholes
 //!
 //! A clause is one of:
 //!
@@ -22,13 +22,20 @@
 //! 3. **structural** — it describes the BINDING rather than a protocol's
 //!    parameters. "This policy governs repo.write" is not a template parameter;
 //!    it is which action class the protocol gets bound to (S7.7).
+//! 4. **waived** — the human said this topic imposes no rule.
 //!
-//! The third category is the dangerous one, because a dumping ground for
-//! anything awkward would let an undeployable spec look finished. So it is
-//! decided by **topic alone** — a fixed allowlist — never by whether mapping
-//! happened to fail. A `Thresholds` clause that will not type is `unmapped`,
-//! and there is no path that reclassifies it. That rule is what the negative
+//! Categories 3 and 4 are the dangerous ones, because a dumping ground for
+//! anything awkward would let an undeployable spec look finished. So neither is
+//! ever reached by a failed mapping. Structural is decided by **topic alone**;
+//! waived is decided by **the words the human wrote**, matched whole against a
+//! fixed list. A `Thresholds` clause that will not type is `unmapped`, and
+//! there is no path that reclassifies it. That rule is what the negative
 //! controls check.
+//!
+//! Waived exists because the live run found the product contradicting itself:
+//! the interview asks *"What is explicitly excluded from this policy? Write
+//! "none" if nothing is"*, the operator wrote `none`, and the compiler refused
+//! it — so answering a question correctly made the spec undeployable.
 //!
 //! # Only registered bytecode
 //!
@@ -84,6 +91,24 @@ pub struct Unmapped {
     pub why: String,
 }
 
+/// A clause the human explicitly said imposes no rule.
+///
+/// Distinct from [`Unmapped`], which means "this should map and cannot". A
+/// waiver means "there is nothing here to enforce", and it must not block a
+/// deployment — the alternative is what the live run hit: the interview asks
+/// *"What is explicitly excluded from this policy? Write "none" if nothing
+/// is"*, the operator writes exactly that, and the compiler refuses it. The
+/// product asked for an answer it then rejected, and the spec was undeployable
+/// because the operator had answered a question correctly.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Waived {
+    pub clause: String,
+    pub topic: String,
+    /// The words the human used. Kept verbatim — "none" and "no exceptions"
+    /// are the same decision, and a reader should see which was written.
+    pub said: String,
+}
+
 /// A clause that shapes the binding rather than a protocol's parameters.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Structural {
@@ -98,6 +123,7 @@ pub struct Compiled {
     pub mapped: Vec<Mapped>,
     pub unmapped: Vec<Unmapped>,
     pub structural: Vec<Structural>,
+    pub waived: Vec<Waived>,
 }
 
 impl Compiled {
@@ -116,6 +142,21 @@ impl Compiled {
 /// A fixed allowlist, checked BEFORE any mapping is attempted, so a failed
 /// mapping can never be reclassified as structural.
 const STRUCTURAL_TOPICS: &[Topic] = &[Topic::Scope, Topic::Principals];
+
+/// Answers that mean "this topic imposes no rule".
+///
+/// An explicit allowlist, checked against the WHOLE trimmed answer, exactly as
+/// `STRUCTURAL_TOPICS` is checked by topic alone. That is the rule: a waiver is
+/// recognised because of what the human WROTE, never because extracting a
+/// parameter happened to fail. A waiver inferred from a failed parse would be
+/// the dumping ground that makes an undeployable spec look finished — the same
+/// trap the structural allowlist exists to avoid.
+const WAIVERS: &[&str] = &["none", "no exceptions", "nothing", "n/a", "not applicable"];
+
+fn is_waiver(text: &str) -> bool {
+    let t = text.trim().trim_end_matches('.').to_ascii_lowercase();
+    WAIVERS.contains(&t.as_str())
+}
 
 /// The template a topic maps onto, when it maps onto one at all.
 fn template_for(topic: Topic) -> Option<&'static str> {
@@ -150,6 +191,16 @@ pub fn compile(spec: &Spec, catalog: &Catalog) -> Compiled {
                     .next()
                     .cloned()
                     .unwrap_or_default(),
+            });
+            continue;
+        }
+
+        // Before any mapping is attempted, and by the words alone.
+        if let Some(said) = c.params.values().next().filter(|v| is_waiver(v)) {
+            out.waived.push(Waived {
+                clause: c.n.clone(),
+                topic: c.topic.as_str().to_string(),
+                said: said.trim().to_string(),
             });
             continue;
         }
@@ -452,6 +503,14 @@ pub struct CompileResultDto {
     pub mapped: Vec<MappedDto>,
     pub unmapped: Vec<UnmappedDto>,
     pub structural: Vec<StructuralDto>,
+    pub waived: Vec<WaivedDto>,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct WaivedDto {
+    pub clause: String,
+    pub topic: String,
+    pub said: String,
 }
 
 pub fn to_dto(c: &Compiled) -> CompileResultDto {
@@ -482,6 +541,15 @@ pub fn to_dto(c: &Compiled) -> CompileResultDto {
                 clause: s.clause.clone(),
                 kind: s.kind.clone(),
                 value: s.value.clone(),
+            })
+            .collect(),
+        waived: c
+            .waived
+            .iter()
+            .map(|w| WaivedDto {
+                clause: w.clause.clone(),
+                topic: w.topic.clone(),
+                said: w.said.clone(),
             })
             .collect(),
     }

@@ -376,6 +376,24 @@ impl EgressPolicy {
     }
 }
 
+/// The ONE place the evidence store lives, given Tauri's app-data directory.
+///
+/// Every caller must route through this. It exists because they did not, and
+/// the way that failed is the point: `lib.rs` opened the store at
+/// `<app_data>/evidence` while the three QRM-S7 pipeline commands opened
+/// `<app_data>`. Both succeeded — `EvidenceStore::open` creates what is missing —
+/// so there was no error anywhere. The pipeline simply read an empty store,
+/// found no tenant, and reported **"no tenant scope is established"** on a
+/// machine whose `scope.json` was sitting one directory away.
+///
+/// Unit tests cannot catch that class: they build stores at explicit temp paths,
+/// so the two spellings never have to agree. Only running the packaged app
+/// against a real install does, which is where it was found. The source-scan
+/// test below now makes the agreement structural.
+pub fn evidence_dir(app_data: &std::path::Path) -> PathBuf {
+    app_data.join("evidence")
+}
+
 /// A durable, crash-atomic home for one installation's evidence.
 #[derive(Debug, Clone)]
 pub struct EvidenceStore {
@@ -1377,5 +1395,59 @@ mod tests {
     fn an_empty_tenant_has_no_meetings_rather_than_an_error() {
         let root = TempRoot::new();
         assert!(root.store().load_meetings("never-seen").unwrap().is_empty());
+    }
+
+    /// **Every production caller must open the store at the SAME path.**
+    ///
+    /// A source scan, because the property is about agreement between modules
+    /// that never meet in a unit test. `lib.rs` opened `<app_data>/evidence`
+    /// while five QRM-S7 commands opened `<app_data>`; both calls SUCCEED,
+    /// because `open` creates what is missing. The result was a pipeline reading
+    /// a freshly-created empty store and reporting "no tenant scope is
+    /// established" — and SIMULATE replaying an empty corpus and reporting
+    /// zeros, which reads as a narrow corpus rather than a wrong directory.
+    ///
+    /// Nothing failed. That is why this is a scan and not an assertion: there
+    /// was no error to assert on.
+    #[test]
+    fn every_production_call_site_opens_the_same_store() {
+        let files = [
+            ("lib.rs", include_str!("lib.rs")),
+            ("deploy.rs", include_str!("deploy.rs")),
+            ("bind.rs", include_str!("bind.rs")),
+            ("protocols.rs", include_str!("protocols.rs")),
+            ("interview.rs", include_str!("interview.rs")),
+            ("simulate.rs", include_str!("simulate.rs")),
+            ("backend.rs", include_str!("backend.rs")),
+        ];
+        for (name, src) in files {
+            // Production half only: test helpers legitimately open stores at
+            // explicit temp paths, which is the whole reason unit tests could
+            // not see this bug.
+            let prod = src.split("#[cfg(test)]").next().unwrap_or(src);
+            for (i, line) in prod.lines().enumerate() {
+                if !line.contains("EvidenceStore::open(") {
+                    continue;
+                }
+                assert!(
+                    line.contains("evidence_dir("),
+                    "{name}:{} opens the evidence store without store::evidence_dir(): {}\n\
+                     Every caller must resolve the path the same way or they silently \
+                     read different stores.",
+                    i + 1,
+                    line.trim()
+                );
+            }
+        }
+    }
+
+    /// The canonical path is `<app_data>/evidence` — pinned, because changing it
+    /// silently orphans every existing installation's evidence chain.
+    #[test]
+    fn the_evidence_directory_is_pinned() {
+        assert_eq!(
+            evidence_dir(std::path::Path::new("/tmp/appdata")),
+            std::path::Path::new("/tmp/appdata/evidence")
+        );
     }
 }

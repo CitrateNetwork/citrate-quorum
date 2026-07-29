@@ -131,6 +131,21 @@ pub struct Turn {
     pub topic: Topic,
     pub question: String,
     pub answer: Option<Answer>,
+    /// Answers this topic previously carried, oldest first.
+    ///
+    /// A first answer was final until QRM-S7's live run, where the operator
+    /// typed "Elijah Buford - Head of AI" into a question that needs a
+    /// DURATION. The clause could not be typed, the spec became permanently
+    /// undeployable, and there was no way to correct it — the only remaining
+    /// move was to delete state behind the app's back.
+    ///
+    /// Correcting a wrong answer is the most ordinary thing an operator does,
+    /// so it must be possible. It must also not quietly rewrite history: an
+    /// interview is evidence, and "they said X, then said Y" is a different
+    /// fact from "they said Y". So a revision SUPERSEDES — the prior answer
+    /// moves here, with its own author and timestamp intact.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub superseded: Vec<Answer>,
 }
 
 /// The interview for one spec.
@@ -187,6 +202,7 @@ impl Interview {
                     topic: *t,
                     question: t.question().to_string(),
                     answer: None,
+                    superseded: Vec::new(),
                 })
                 .collect(),
             proposals: Vec::new(),
@@ -256,8 +272,10 @@ impl Interview {
             .iter_mut()
             .find(|t| t.topic == topic)
             .ok_or(InterviewError::AlreadyAnswered(topic))?;
-        if turn.answer.is_some() {
-            return Err(InterviewError::AlreadyAnswered(topic));
+        // Supersede rather than refuse. The previous answer is kept, so the
+        // record still shows what was said first and who said it.
+        if let Some(prev) = turn.answer.take() {
+            turn.superseded.push(prev);
         }
         turn.answer = Some(Answer {
             text: text.trim().to_string(),
@@ -271,6 +289,22 @@ impl Interview {
     /// Answer the currently pending topic in the human's own words.
     pub fn answer(&mut self, text: &str, by: &str, at_ms: i64) -> Result<(), InterviewError> {
         let topic = self.pending().ok_or(InterviewError::AlreadyAnswered(Topic::Scope))?;
+        self.record(topic, text, by, at_ms, Source::Human)
+    }
+
+    /// Correct an answer already given, naming the topic explicitly.
+    ///
+    /// Separate from [`answer`] on purpose. `answer` fills the NEXT unanswered
+    /// question and a caller need not know which; revising is a deliberate act
+    /// against a named topic, and conflating the two would let a stray keystroke
+    /// overwrite a considered answer.
+    pub fn revise(
+        &mut self,
+        topic: Topic,
+        text: &str,
+        by: &str,
+        at_ms: i64,
+    ) -> Result<(), InterviewError> {
         self.record(topic, text, by, at_ms, Source::Human)
     }
 
@@ -409,6 +443,9 @@ pub fn governance_interview(
     app: tauri::AppHandle,
     spec_id: String,
     answer: Option<String>,
+    // `revise`: name a topic to correct an answer already given. Omitted,
+    // `answer` fills the next unanswered question, which is the ordinary path.
+    revise: Option<String>,
 ) -> Result<InterviewStateDto, String> {
     use tauri::Manager;
     let root = app
@@ -421,7 +458,7 @@ pub fn governance_interview(
     // tampered renderer could record a decision against a colleague who never
     // saw the question. The operator is whoever this installation is signed in
     // as, and that is the only name this command will write.
-    let store = crate::store::EvidenceStore::open(root.clone())
+    let store = crate::store::EvidenceStore::open(crate::store::evidence_dir(&root))
         .map_err(|e| format!("evidence store: {e}"))?;
     let by = store
         .load_operator()
@@ -435,7 +472,14 @@ pub fn governance_interview(
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
             .unwrap_or_default();
-        let res = if text == "__confirm__" {
+        let res = if let Some(t) = revise.as_deref() {
+            let topic = Topic::ALL
+                .iter()
+                .copied()
+                .find(|x| x.as_str() == t)
+                .ok_or_else(|| format!("{t} is not a topic in this interview"))?;
+            iv.revise(topic, &text, &by, now)
+        } else if text == "__confirm__" {
             iv.confirm_proposal(&by, now)
         } else {
             iv.answer(&text, &by, now)
@@ -455,6 +499,72 @@ mod tests {
 
     fn iv() -> Interview {
         Interview::new("spec-1")
+    }
+
+    /// **A wrong answer must be correctable, and the record must keep both.**
+    ///
+    /// Found in the live run: the operator answered the escalation question
+    /// with a person's name where the template needs a duration. The clause
+    /// could not be typed, the spec was permanently undeployable, and nothing
+    /// could correct it — the only move left was deleting state behind the
+    /// app's back.
+    ///
+    /// Revising must therefore work. It must NOT quietly rewrite history:
+    /// "they said X, then said Y" is a different fact from "they said Y", and
+    /// an interview is evidence.
+    #[test]
+    fn an_answer_can_be_corrected_and_the_first_one_survives() {
+        let mut i = iv();
+        i.answer("repo.write", "larry", NOW).expect("scope");
+        i.answer("Larry V Klosowski", "larry", NOW + 1).expect("principals");
+
+        // Wrong: the escalation template needs a duration, not a person.
+        i.answer("roles", "larry", NOW + 2).expect("roles");
+        i.answer("one approval of record", "larry", NOW + 3).expect("thresholds");
+        i.answer("Elijah Buford - Head of AI", "larry", NOW + 4).expect("escalation");
+
+        let before = i
+            .turns
+            .iter()
+            .find(|t| t.topic == Topic::Escalation)
+            .and_then(|t| t.answer.clone())
+            .expect("answered");
+        assert_eq!(before.text, "Elijah Buford - Head of AI");
+
+        i.revise(Topic::Escalation, "within 24 hours", "larry", NOW + 5)
+            .expect("revision must be allowed");
+
+        let turn = i
+            .turns
+            .iter()
+            .find(|t| t.topic == Topic::Escalation)
+            .expect("turn");
+        assert_eq!(turn.answer.as_ref().expect("answer").text, "within 24 hours");
+        // The first answer is superseded, not erased, and keeps its own author
+        // and timestamp.
+        assert_eq!(turn.superseded.len(), 1);
+        assert_eq!(turn.superseded[0].text, "Elijah Buford - Head of AI");
+        assert_eq!(turn.superseded[0].at_ms, NOW + 4);
+    }
+
+    /// A revision still has to be attributable and non-empty — the same rules
+    /// a first answer obeys. Otherwise "correct it" becomes a way around them.
+    #[test]
+    fn a_revision_obeys_the_rules_a_first_answer_obeys() {
+        let mut i = iv();
+        i.answer("repo.write", "larry", NOW).expect("scope");
+        assert!(matches!(
+            i.revise(Topic::Scope, "", "larry", NOW + 1),
+            Err(InterviewError::Empty)
+        ));
+        assert!(matches!(
+            i.revise(Topic::Scope, "shell.exec", "  ", NOW + 1),
+            Err(InterviewError::Unattributed)
+        ));
+        // Neither failed attempt touched the record.
+        let t = i.turns.iter().find(|t| t.topic == Topic::Scope).expect("turn");
+        assert_eq!(t.answer.as_ref().expect("a").text, "repo.write");
+        assert!(t.superseded.is_empty());
     }
 
     // ── The rule this module exists for ─────────────────────────────
@@ -574,15 +684,32 @@ mod tests {
         assert!(i.outstanding().is_empty());
     }
 
-    /// An answered topic cannot be silently overwritten — changing a recorded
-    /// answer is an amendment, not a re-answer, and it is not this call.
+    /// An answered topic cannot be silently overwritten.
+    ///
+    /// The property is unchanged; where it is enforced moved. `record` used to
+    /// refuse outright, which also made a mistyped answer permanent (see
+    /// `an_answer_can_be_corrected_and_the_first_one_survives`). Overwriting is
+    /// now prevented at the entry point that could actually do it by accident:
+    /// `answer` targets the PENDING topic, so it can never land on one already
+    /// answered. Only the explicit, topic-named `revise` supersedes.
     #[test]
-    fn an_answered_topic_is_not_overwritten() {
+    fn an_answered_topic_is_not_overwritten_by_answer() {
         let mut i = iv();
         i.answer("first", "larry", NOW).expect("answer");
+        // The next `answer` goes to the NEXT question, never back over scope.
+        i.answer("second", "someone-else", NOW + 1).expect("answer");
+        assert_eq!(i.turns[0].answer.as_ref().expect("a").text, "first");
+        assert_eq!(i.turns[0].topic, Topic::Scope);
+        assert_eq!(i.turns[1].answer.as_ref().expect("a").text, "second");
+        assert!(i.turns[0].superseded.is_empty(), "answer must not supersede");
+
+        // With every topic answered there is no pending question, and `answer`
+        // refuses rather than looping back over the first one.
+        for n in 2..Topic::ALL.len() {
+            i.answer("x", "larry", NOW + n as i64).expect("answer");
+        }
         assert_eq!(
-            i.record(Topic::Scope, "second", "someone-else", NOW, Source::Human)
-                .expect_err("refuse"),
+            i.answer("stray", "larry", NOW + 99).expect_err("refuse"),
             InterviewError::AlreadyAnswered(Topic::Scope)
         );
         assert_eq!(i.turns[0].answer.as_ref().expect("a").text, "first");

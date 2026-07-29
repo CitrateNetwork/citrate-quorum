@@ -281,7 +281,7 @@ fn context(app: &tauri::AppHandle) -> Result<BindCtx, String> {
         .to_string();
     let rpc = crate::chain::Rpc::from_book(&book)?;
 
-    let store = crate::store::EvidenceStore::open(root.clone())
+    let store = crate::store::EvidenceStore::open(crate::store::evidence_dir(&root))
         .map_err(|e| format!("evidence store: {e}"))?;
     let tenant = store.load_scope().ok_or("no tenant scope is established")?;
     let tenant_id = crate::chain::tenant_id_of(&tenant);

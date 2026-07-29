@@ -3,7 +3,7 @@
 // (topbar 52px / surface / status rail 30px). The surface area is
 // register-aware: `data-register` flips per the active surface (§2.2), and
 // the ceremony (later) always forces charter. Routes via hash.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BRIDGE_MODE, bridge } from "../bridge";
 import type { Session } from "../bridge";
 import { NAV, NAV_ITEMS, type NavItem } from "./nav";
@@ -32,6 +32,18 @@ export function Shell() {
   const [session, setSession] = useState<Session | null>(null);
   const [hicOpen, setHicOpen] = useState(false);
   const [palOpen, setPalOpen] = useState(false);
+  /**
+   * The surface pane. ONE DOM node for every surface — React swaps the children
+   * and the node keeps its `scrollTop`, so a surface entered after scrolling
+   * another one opens part-way down its own page.
+   *
+   * That is not cosmetic. Settings puts its Tenancy/Identity/… tab bar at the
+   * very top, so arriving from a long scroll on Governance rendered Settings
+   * with its tabs above the viewport and the Identity panel — the only way to
+   * unlock the vault — unreachable. The app looked broken and was one wheel
+   * scroll from fine, which is worse than looking broken.
+   */
+  const pane = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     bridge.session.current().then(setSession);
@@ -56,6 +68,11 @@ export function Shell() {
 
   const active: NavItem =
     NAV_ITEMS.find((i) => i.id === route) ?? NAV_ITEMS[0];
+  // Every surface starts at its own top. Without this the pane keeps the
+  // previous surface's offset (see the `pane` ref).
+  useEffect(() => {
+    if (pane.current) pane.current.scrollTop = 0;
+  }, [active.id]);
   const hicColor = session ? HIC_PILL_COLOR[session.hic.level] : "var(--info)";
   // Visible from every surface, not just the Dashboard: an agent is blocked
   // and it is on you. Clicking goes to the queue, never approves.
@@ -143,7 +160,7 @@ export function Shell() {
         </div>
 
         {/* surface */}
-        <div style={{ minHeight: 0, overflow: "auto", position: "relative" }}>
+        <div ref={pane} style={{ minHeight: 0, overflow: "auto", position: "relative" }}>
           {SURFACES[active.id] ? SURFACES[active.id]({ onGo: go }) : <Placeholder item={active} />}
         </div>
 

@@ -378,7 +378,7 @@ pub fn governance_deploy_intent(
         .ok_or("GovernanceTemplateRegistry is not in the address book")?;
     let rpc = crate::chain::Rpc::from_book(&book)?;
 
-    let store = crate::store::EvidenceStore::open(root.clone())
+    let store = crate::store::EvidenceStore::open(crate::store::evidence_dir(&root))
         .map_err(|e| format!("evidence store: {e}"))?;
     let tenant = store.load_scope().ok_or("no tenant scope is established")?;
 

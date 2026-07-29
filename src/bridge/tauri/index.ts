@@ -656,6 +656,7 @@ export function createTauriBridge(): BridgeContract {
             params: m.params,
           })),
           unmapped: r.unmapped.map((u) => ({ clause: u.clause, why: u.why })),
+          waived: r.waived.map((w) => ({ clause: w.clause, topic: w.topic, said: w.said })),
         };
       },
       // LIVE (QRM-S7.5): replays the tenant's real recorded decisions. Reports
@@ -701,8 +702,8 @@ export function createTauriBridge(): BridgeContract {
       // ingested document arrives as `proposal`, NOT as an answer — the topic
       // stays outstanding until a human confirms or overrides it, and the
       // record says which of those happened.
-      interview: async (specId, answer): Promise<InterviewState> => {
-        const r = await governanceInterview(specId, answer);
+      interview: async (specId, answer, revise): Promise<InterviewState> => {
+        const r = await governanceInterview(specId, answer, revise);
         return {
           specId: r.spec_id,
           turns: r.turns.map((t) => ({ q: t.q, a: t.a })),

@@ -289,7 +289,7 @@ export interface GovernanceDomain {
    * record the answer and advance. One call for both because a resumed
    * interview and a fresh one differ only in how much has been answered.
    */
-  interview(specId: string, answer?: string): Promise<InterviewState>;
+  interview(specId: string, answer?: string, revise?: string): Promise<InterviewState>;
 
   /** Stage 3. The spec: plain-English clauses, Gherkin, and typed params. */
   spec(specId: string): Promise<GovernanceSpec>;

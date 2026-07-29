@@ -117,7 +117,7 @@ pub fn run() {
             // not open is a hard startup failure rather than a silent fall back
             // to memory.
             let app_data = app.path().app_data_dir()?;
-            let store = store::EvidenceStore::open(app_data.join("evidence"))
+            let store = store::EvidenceStore::open(store::evidence_dir(&app_data))
                 .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?;
             let backend = std::sync::Arc::new(std::sync::Mutex::new(
                 backend::QuorumBackend::with_store(store),

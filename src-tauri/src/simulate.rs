@@ -352,7 +352,7 @@ pub fn governance_simulate(
         })
         .collect();
 
-    let store = crate::store::EvidenceStore::open(root)
+    let store = crate::store::EvidenceStore::open(crate::store::evidence_dir(&root))
         .map_err(|e| format!("evidence store: {e}"))?;
     // The tenant scope lives in the backend, never in a caller's argument
     // (the bridge's own rule: no frontend call names a tenant). A command with

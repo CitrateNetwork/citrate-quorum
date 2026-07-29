@@ -827,6 +827,15 @@ export interface CompileResult {
   mapped: { clause: string; templateId: string; params: Record<string, string> }[];
   /** Clauses that mapped to nothing. Surfaced, never improvised. */
   unmapped: { clause: string; why: string }[];
+  /**
+   * Clauses the human explicitly said impose no rule.
+   *
+   * NOT a failed mapping — a waiver is recognised from the words written
+   * ("none", "n/a"), matched whole, never from an extraction that failed. It
+   * does not block a deploy, because the interview asks for exactly this answer
+   * and refusing it made answering correctly fatal to the spec.
+   */
+  waived: { clause: string; topic: string; said: string }[];
 }
 
 export interface DateRange {

@@ -701,7 +701,7 @@ export const governanceIngest = (paths: string[], specId?: string) =>
   }>("governance_ingest", { paths, specId });
 
 /** QRM-S7.2 — stage 2. Omit `answer` to read; `__confirm__` confirms a proposal. */
-export const governanceInterview = (specId: string, answer: string | undefined) =>
+export const governanceInterview = (specId: string, answer?: string, revise?: string) =>
   invoke<{
     spec_id: string;
     turns: { q: string; a: string; by: string; at: string; source: string }[];
@@ -709,7 +709,7 @@ export const governanceInterview = (specId: string, answer: string | undefined) 
     outstanding: string[];
     complete: boolean;
     proposal: { text: string; from: string } | null;
-  }>("governance_interview", { specId, answer });
+  }>("governance_interview", { specId, answer, revise });
 
 /** QRM-S7.3 — stage 3. Drafts from the interview; never answers on its behalf. */
 export const governanceSpec = (specId: string, title?: string, classification?: string) =>
@@ -729,6 +729,7 @@ export const governanceCompile = (specId: string) =>
     mapped: { clause: string; template_id: string; params: Record<string, string> }[];
     unmapped: { clause: string; why: string }[];
     structural: { clause: string; kind: string; value: string }[];
+    waived: { clause: string; topic: string; said: string }[];
   }>("governance_compile", { specId });
 
 /** QRM-S7.5 — stage 5. Replays the tenant's REAL decisions; never a synthetic corpus. */

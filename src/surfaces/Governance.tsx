@@ -27,6 +27,8 @@ import { LoaderMark } from "../components/LoaderMark";
 type Tab = "pipe" | "prot" | "tpl";
 const STEPS = ["Ingest", "Interview", "Spec", "Compile", "Simulate", "Ceremony", "Deploy", "Bind"];
 const CLS_COLOR: Record<string, string> = { Public: "var(--z-silver)", Proprietary: "var(--info)", CUI: "var(--warn)", ITAR: "var(--danger)" };
+/** Turn order is the backend's topic order — `Topic::ALL`, never re-sorted. */
+const TOPIC_OF = ["scope", "principals", "roles", "thresholds", "escalation", "expiry", "exceptions"];
 
 /** A key/value panel. Every value below comes from a bridge result. */
 function Rows({ rows, accent }: { rows: [string, string][]; accent?: string }) {
@@ -67,6 +69,19 @@ export function Governance() {
   const [bindRes, setBindRes] = useState<BindResult | null>(null);
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
+  // Step 1 and 2 had no inputs at all: a drop zone that accepted nothing and a
+  // transcript with no way to add a turn. The pipeline could be READ from the
+  // surface and finished from step 6, but never STARTED — which is the exit
+  // gate ("a doc dump becomes a deployed protocol"), so it had to be built.
+  const [paths, setPaths] = useState("");
+  const [refused, setRefused] = useState<{ name: string; why: string }[]>([]);
+  const [pending, setPending] = useState<string | null>(null);
+  const [outstanding, setOutstanding] = useState<string[]>([]);
+  const [answer, setAnswer] = useState("");
+  // Which already-answered topic is being corrected, and with what.
+  const [revising, setRevising] = useState<string | null>(null);
+  const [revision, setRevision] = useState("");
+  const [operator, setOperator] = useState<string | null>(null);
   const ceremony = useCeremony();
 
   useEffect(() => {
@@ -83,10 +98,16 @@ export function Governance() {
           setIngest(sp.files);
           setClauses(sp.clauses);
         }).catch(() => {});
-        bridge.governance.interview(first.id).then((iv) => setInterview(iv.turns)).catch(() => {});
+        bridge.governance.interview(first.id).then((iv) => {
+          setInterview(iv.turns);
+          setPending(iv.pending);
+          setOutstanding(iv.outstanding);
+        }).catch(() => {});
       })
       .catch(() => {});
-    
+    // Whoever this installation is signed in as. The interview transcript used
+    // to label every answer "R. ORTIZ" regardless.
+    bridge.session.operator().then(setOperator).catch(() => {});
   }, []);
 
   // Honest failure (S2D.4/§5.1): this surface's primary read is governance.protocols().
@@ -95,6 +116,75 @@ export function Governance() {
   const primary = useDomain(() => bridge.governance.protocols(), "governance.protocols()");
   // Derived, not mirrored (see Agents.tsx).
   const protocols = primary.state.status === "ready" ? primary.state.data : [];
+
+  /**
+   * Stage 1. Read the operator's chosen files from disk and classify them.
+   *
+   * A file whose marking cannot be determined comes back in `refused` and is
+   * SHOWN — the marking is what decides which model may read the content, so a
+   * document accepted with an assumed classification is the one failure this
+   * step exists to prevent.
+   */
+  const runIngest = async () => {
+    const list = paths.split("\n").map((s) => s.trim()).filter(Boolean);
+    if (!list.length) return;
+    setErr(""); setBusy("reading and classifying");
+    try {
+      const r = await bridge.governance.ingest(specId ? { paths: list, specId } : { paths: list });
+      setSpecId(r.specId);
+      setIngest(r.files);
+      setRefused(r.refused);
+      const iv = await bridge.governance.interview(r.specId);
+      setInterview(iv.turns); setPending(iv.pending); setOutstanding(iv.outstanding);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy("");
+    }
+  };
+
+  /**
+   * Correct an answer already given.
+   *
+   * The live run needed this: an answer that names a person where the template
+   * needs a duration cannot be typed, so the clause is unmapped and the spec
+   * cannot deploy — permanently, because a first answer used to be final. The
+   * prior answer is superseded, not erased.
+   */
+  const reviseTopic = async (topic: string) => {
+    if (!specId || !revision.trim()) return;
+    setErr("");
+    try {
+      const iv = await bridge.governance.interview(specId, revision.trim(), topic);
+      setInterview(iv.turns); setPending(iv.pending); setOutstanding(iv.outstanding);
+      setRevising(null); setRevision("");
+      const sp = await bridge.governance.spec(specId);
+      setClauses(sp.clauses);
+      // A correction usually exists BECAUSE the compile refused, so re-run it
+      // rather than leaving a stale refusal on screen.
+      if (compiled) setCompiled(await bridge.governance.compile(specId));
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  /** Stage 2. One turn. The backend stamps WHO answered — not this field. */
+  const answerTopic = async () => {
+    if (!specId || !answer.trim()) return;
+    setErr("");
+    try {
+      const iv = await bridge.governance.interview(specId, answer.trim());
+      setInterview(iv.turns); setPending(iv.pending); setOutstanding(iv.outstanding);
+      setAnswer("");
+      // Re-read the spec. The clauses ARE the answers — a spec read once at
+      // mount is a spec from before the interview, which rendered step 3 as an
+      // empty clause table beside a spec that existed and had clauses.
+      const sp = await bridge.governance.spec(specId);
+      setClauses(sp.clauses);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   /** Map the spec onto the audited template set the registry actually holds. */
   const runCompile = async () => {
@@ -255,7 +345,14 @@ export function Governance() {
   if (primary.state.status === "error") {
     return (
       <div style={{ padding: 18 }}>
-        <DomainErrorPlate source="governance.protocols()" error={primary.state.error} onRetry={primary.retry} lands="It lands in QRM-S7 (authoring pipeline), on the contracts from QRM-S6." />
+        {/* No `lands` prop, deliberately. Passing it makes the plate announce
+            "Not wired yet" and explain that "there is nothing real to show" —
+            which was true until S7.8 and is now a false statement about a wired
+            surface. It also buried the actual error: a real install showed this
+            plate saying the surface was unbuilt when what had really happened
+            was `no tenant scope is established`. Without `lands`, the plate says
+            the read failed and shows the reason, which is the useful sentence. */}
+        <DomainErrorPlate source="governance.protocols()" error={primary.state.error} onRetry={primary.retry} />
       </div>
     );
   }
@@ -285,18 +382,49 @@ export function Governance() {
           {step === 1 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               <div style={{ fontFamily: "var(--font-display)", fontWeight: 440, fontSize: 22 }}>A stack of documents becomes law</div>
-              <div style={{ border: "1.5px dashed var(--line-2)", padding: 26, textAlign: "center", color: "var(--tx-3)", fontSize: 13 }}>Drop board resolutions, legal policy, data exports — PDF, DOCX, MD, CSV, email</div>
-              <div className="surface" style={{ display: "flex", flexDirection: "column" }}>
-                {ingest.map((f) => (
-                  <div key={f.name} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", borderBottom: "1px solid var(--line-1)" }}>
-                    <span style={{ fontSize: 13, fontWeight: 500, minWidth: 0, flex: 1 }}>{f.name} <span className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)" }}>{f.size}</span></span>
-                    <span className="mono" style={{ fontSize: 8.5, letterSpacing: ".1em", textTransform: "uppercase", color: CLS_COLOR[f.class], border: `1px solid ${CLS_COLOR[f.class]}`, padding: "1px 6px" }}>{f.class}</span>
-                    <span className="mono" style={{ fontSize: 9.5, color: f.class === "ITAR" ? "var(--danger)" : "var(--tx-3)" }}>{f.note}</span>
-                    <span className="mono" style={{ fontSize: 9, color: "var(--tx-3)" }}>{f.prov}</span>
-                  </div>
-                ))}
+              <span className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)" }}>governance.ingest() — read from this machine, never uploaded</span>
+              {/* A path field, not a drop zone. `governance.ingest` takes absolute
+                  paths and reads them locally; there is no file-dialog plugin in
+                  this app and adding one is a dependency plus a capability grant.
+                  The prototype's "drop your documents here" panel accepted nothing
+                  and called nothing — it was the only thing on this step. */}
+              <textarea
+                value={paths}
+                onChange={(e) => setPaths(e.target.value)}
+                spellCheck={false}
+                placeholder={"/absolute/path/to/policy.md\none path per line — .md .txt .csv .json .yaml and friends"}
+                style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, lineHeight: 1.6, padding: "10px 12px", minHeight: 76, background: "var(--srf-inset)", color: "var(--tx-1)", border: "1px solid var(--line-2)", resize: "vertical" }}
+              />
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <button className="btn btn-primary" onClick={runIngest} disabled={!paths.trim() || busy !== ""}>Ingest</button>
+                {busy && <span className="mono" style={{ fontSize: 10.5, color: "var(--tx-3)" }}>{busy}…</span>}
+                {specId && <span className="mono" style={{ fontSize: 10.5, color: "var(--tx-3)" }}>spec {specId}</span>}
               </div>
-              <div style={{ display: "flex" }}><div style={{ flex: 1 }} /><button className="btn btn-primary" onClick={() => setStep(2)}>Continue to interview</button></div>
+              <Why text={err} />
+
+              {ingest.length > 0 && (
+                <div className="surface" style={{ display: "flex", flexDirection: "column" }}>
+                  {ingest.map((f) => (
+                    <div key={f.name} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", borderBottom: "1px solid var(--line-1)" }}>
+                      <span style={{ fontSize: 13, fontWeight: 500, minWidth: 0, flex: 1 }}>{f.name} <span className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)" }}>{f.size}</span></span>
+                      <span className="mono" style={{ fontSize: 8.5, letterSpacing: ".1em", textTransform: "uppercase", color: CLS_COLOR[f.class], border: `1px solid ${CLS_COLOR[f.class]}`, padding: "1px 6px" }}>{f.class}</span>
+                      <span className="mono" style={{ fontSize: 9.5, color: f.class === "ITAR" ? "var(--danger)" : "var(--tx-3)" }}>{f.note}</span>
+                      <span className="mono" style={{ fontSize: 9, color: "var(--tx-3)" }}>{f.prov}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* A refusal is the product working. An unmarked document has no
+                  classification, and classification is what decides which model
+                  may read it — so it is shown, named, and not quietly dropped. */}
+              {refused.map((r) => (
+                <div key={r.name} style={{ border: "1px solid var(--warn)", background: "var(--warn-bg)", padding: "10px 12px", fontSize: 11.5, lineHeight: 1.55 }}>
+                  <span className="mono" style={{ fontSize: 9, letterSpacing: ".1em", color: "var(--warn)" }}>REFUSED · {r.name} · </span>{r.why}
+                </div>
+              ))}
+
+              <div style={{ display: "flex" }}><div style={{ flex: 1 }} /><button className="btn btn-primary" onClick={() => setStep(2)} disabled={!specId}>Continue to interview</button></div>
             </div>
           )}
 
@@ -308,14 +436,76 @@ export function Governance() {
                   {interview.map((iv, i) => (
                     <div key={i} style={{ display: "flex", flexDirection: "column", gap: 5 }}>
                       <div style={{ display: "flex", gap: 8 }}><span className="mono" style={{ fontSize: 9, color: "var(--info)", border: "1px solid var(--info)", padding: "1px 6px", height: "fit-content", flexShrink: 0 }}>HARNESS</span><span style={{ fontSize: 13, color: "var(--tx-2)" }}>{iv.q}</span></div>
-                      <div style={{ display: "flex", gap: 8 }}><span className="mono" style={{ fontSize: 9, color: "var(--accent-text)", border: "1px solid var(--accent-text)", padding: "1px 6px", height: "fit-content", flexShrink: 0 }}>R. ORTIZ</span><span style={{ fontSize: 13 }}>{iv.a}</span></div>
+                      {/* The answering label was the constant "R. ORTIZ" — a name
+                          from the design prototype's fictional customer, printed
+                          over whoever actually answered. It is the operator this
+                          installation is signed in as, which is also the only
+                          name the backend will record. */}
+                      <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+                        <span className="mono" style={{ fontSize: 9, color: "var(--accent-text)", border: "1px solid var(--accent-text)", padding: "1px 6px", height: "fit-content", flexShrink: 0, textTransform: "uppercase" }}>{operator ?? "operator"}</span>
+                        <span style={{ fontSize: 13, flex: 1 }}>{iv.a}</span>
+                        {iv.a && TOPIC_OF[i] && (
+                          <button className="btn btn-ghost btn-sm" style={{ fontSize: 10 }} onClick={() => { setRevising(TOPIC_OF[i]); setRevision(iv.a); }}>Correct</button>
+                        )}
+                      </div>
+                      {revising === TOPIC_OF[i] && (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingLeft: 8, borderLeft: "2px solid var(--accent)" }}>
+                          <textarea
+                            value={revision}
+                            onChange={(e) => setRevision(e.target.value)}
+                            style={{ fontFamily: "var(--font-sans)", fontSize: 12.5, lineHeight: 1.6, padding: "8px 10px", minHeight: 54, background: "var(--srf-inset)", color: "var(--tx-1)", border: "1px solid var(--line-2)", resize: "vertical" }}
+                          />
+                          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                            <button className="btn btn-primary btn-sm" onClick={() => reviseTopic(TOPIC_OF[i])} disabled={!revision.trim()}>Save correction</button>
+                            <button className="btn btn-ghost btn-sm" onClick={() => { setRevising(null); setRevision(""); }}>Cancel</button>
+                            {/* An interview is evidence. Correcting it is allowed;
+                                pretending the first answer never happened is not. */}
+                            <span className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)" }}>the previous answer is kept, superseded</span>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ))}
+                  {interview.length === 0 && (
+                    <span className="mono" style={{ fontSize: 11, color: "var(--tx-3)" }}>Nothing asked yet. Ingest a document first — the interview is per-spec.</span>
+                  )}
                 </div>
+
+                {pending && (
+                  <div style={{ borderTop: "1px solid var(--line-1)", padding: 14, display: "flex", flexDirection: "column", gap: 8 }}>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <span className="mono" style={{ fontSize: 9, color: "var(--info)", border: "1px solid var(--info)", padding: "1px 6px", height: "fit-content", flexShrink: 0 }}>HARNESS</span>
+                      <span style={{ fontSize: 13, color: "var(--tx-1)" }}>{pending}</span>
+                    </div>
+                    <textarea
+                      value={answer}
+                      onChange={(e) => setAnswer(e.target.value)}
+                      placeholder="in your own words — recorded against your name"
+                      style={{ fontFamily: "var(--font-sans)", fontSize: 12.5, lineHeight: 1.6, padding: "9px 11px", minHeight: 62, background: "var(--srf-inset)", color: "var(--tx-1)", border: "1px solid var(--line-2)", resize: "vertical" }}
+                    />
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <button className="btn btn-primary btn-sm" onClick={answerTopic} disabled={!answer.trim()}>Answer</button>
+                      {/* Skipping is a real outcome, not a failure: an unanswered
+                          topic produces NO clause, so the policy simply does not
+                          cover it. That is honest, and better than an answer
+                          somebody typed to move the wizard along. */}
+                      <button className="btn btn-ghost btn-sm" onClick={() => setStep(3)}>Stop here — the rest goes uncovered</button>
+                      <span className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)" }}>{outstanding.length} topic(s) still unanswered</span>
+                    </div>
+                    <Why text={err} />
+                  </div>
+                )}
+                {!pending && interview.length > 0 && (
+                  <div style={{ borderTop: "1px solid var(--line-1)", padding: 14 }}>
+                    <span className="mono" style={{ fontSize: 10.5, color: "var(--ok)" }}>every topic answered</span>
+                  </div>
+                )}
               </div>
+
               <div className="surface" style={{ display: "flex", flexDirection: "column", height: "fit-content", borderTop: "2px solid var(--line-strong)" }}>
-                <div className="eyebrow" style={{ padding: "10px 14px", borderBottom: "1px solid var(--line-1)" }}>Structured summary — editable, the artifact</div>
+                <div className="eyebrow" style={{ padding: "10px 14px", borderBottom: "1px solid var(--line-1)" }}>Structured summary — your answers, nothing added</div>
                 <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 8 }}>
+                  {summary.length === 0 && <span className="mono" style={{ fontSize: 11, color: "var(--tx-3)" }}>No answers yet.</span>}
                   {summary.map(([k, v]) => (
                     <div key={k} style={{ display: "grid", gridTemplateColumns: "110px 1fr", gap: 8, borderBottom: "1px solid var(--line-1)", paddingBottom: 6 }}>
                       <span className="mono" style={{ fontSize: 9, letterSpacing: ".1em", textTransform: "uppercase", color: "var(--tx-3)" }}>{k}</span>
@@ -323,7 +513,7 @@ export function Governance() {
                     </div>
                   ))}
                 </div>
-                <div style={{ padding: "10px 14px" }}><button className="btn btn-primary btn-sm" onClick={() => setStep(3)} style={{ width: "100%" }}>Draft the spec →</button></div>
+                <div style={{ padding: "10px 14px" }}><button className="btn btn-primary btn-sm" onClick={() => setStep(3)} style={{ width: "100%" }} disabled={!specId}>Draft the spec →</button></div>
               </div>
             </div>
           )}
@@ -381,6 +571,16 @@ export function Governance() {
                       <span className="mono" style={{ fontSize: 10.5, color: "var(--tx-2)" }}>
                         {Object.entries(m.params).map(([k, v]) => `${k} = ${v}`).join(" · ") || "no parameters"}
                       </span>
+                    </div>
+                  ))}
+                  {/* A waiver is shown, not hidden. "This topic imposes no rule"
+                      is a decision a reader should see, and seeing the words the
+                      human wrote is how they tell it from a clause that was
+                      dropped. */}
+                  {compiled.waived.map((w) => (
+                    <div key={w.clause} className="surface" style={{ padding: "10px 14px", display: "flex", gap: 10, alignItems: "baseline" }}>
+                      <span className="mono" style={{ fontSize: 9, letterSpacing: ".1em", textTransform: "uppercase", color: "var(--tx-3)", border: "1px solid var(--line-2)", padding: "1px 6px" }}>waived</span>
+                      <span className="mono" style={{ fontSize: 10.5, color: "var(--tx-2)" }}>clause {w.clause} · {w.topic} — you wrote &ldquo;{w.said}&rdquo;, so no protocol is deployed for it</span>
                     </div>
                   ))}
                   {/* R-A: an unmapped clause is a hard output, never a warning

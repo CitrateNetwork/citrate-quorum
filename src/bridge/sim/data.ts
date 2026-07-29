@@ -368,6 +368,7 @@ export const COMPILE: Omit<CompileResult, "specId"> = {
     { clause: "1", templateId: "ThresholdApproval", params: { threshold: "2", approvers: "3" } },
     { clause: "2", templateId: "ClassificationGate", params: { ceiling: "CUI" } },
   ],
+  waived: [],
   unmapped: [
     { clause: "3", why: "no audited template expresses 'escalate to the audit committee after two rejections'" },
   ],
