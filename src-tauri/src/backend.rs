@@ -1991,6 +1991,20 @@ impl QuorumBackend {
         revoked_by: &str,
         now_ms: i64,
     ) -> Result<bool, String> {
+        // Check the actor BEFORE touching anything. `record_principal_action`
+        // already refuses a blank principal, but it ran at the END — after the
+        // grant was revoked and persisted — so a nameless revocation left the
+        // grant store and the ledger permanently disagreeing, and handed the
+        // caller an `Err` that told the operator nothing had happened.
+        //
+        // Issuing already refused an unnamed actor
+        // (`a_grant_cannot_be_issued_by_nobody`). Revocation is the HIC-1 act and
+        // had no such guard.
+        if revoked_by.trim().is_empty() {
+            return Err(
+                "grant.revoke must name the human who did it — no identity resolved".to_string(),
+            );
+        }
         let mut found = false;
         if let Some(gs) = self
             .grants
@@ -3176,6 +3190,50 @@ mod tests {
             .revoke_grant("bca", "sbt-41", "G-nope", "M. Okonkwo", 3000)
             .unwrap());
         assert_eq!(b.ledger_rows("bca").len(), before);
+    }
+
+    /// The mirror of `a_grant_cannot_be_issued_by_nobody`, which did not exist.
+    ///
+    /// You could not ISSUE authority as nobody, but you could REVOKE it as
+    /// nobody — and revocation is the HIC-1 act. `session.operator()` returns
+    /// `Option<String>`, and the Agents surface turns a `None` into `""`, so a
+    /// fresh install with no operator set reached exactly this.
+    ///
+    /// Worse than an unattributed row: the old order mutated first and recorded
+    /// second, so a blank actor revoked and PERSISTED the grant, then failed on
+    /// the ledger write. The caller saw `Err` and told the operator the
+    /// revocation failed — while the capability was already gone. That is the
+    /// exact inverse of the bug Agents.tsx:126 documents fixing, and it puts the
+    /// grant store and the ledger permanently out of agreement.
+    #[test]
+    fn a_grant_cannot_be_revoked_by_nobody() {
+        let mut b = QuorumBackend::default();
+        b.issue_grant(
+            &grant("sbt-41", &["repo.write"], "CUI", 100, "2"),
+            &t("bca"),
+            1000,
+        )
+        .unwrap();
+        let before = b.ledger_rows("bca").len();
+
+        let err = b
+            .revoke_grant("bca", "sbt-41", "G-1", "  ", 2000)
+            .expect_err("a revocation nobody signed is not evidence of anything");
+        assert!(err.contains("name the human"), "honest error: {err}");
+
+        // FAIL CLOSED, and that is the whole point: the grant must still govern.
+        // If it were revoked-but-unrecorded, the store and the ledger would
+        // disagree forever and the operator would have been told it failed.
+        let live = b.grants_for("bca", "sbt-41");
+        assert!(
+            live.iter().any(|g| g.id == "G-1" && !g.revoked),
+            "the grant must survive a refused revocation"
+        );
+        assert_eq!(
+            b.ledger_rows("bca").len(),
+            before,
+            "a refused revocation writes no ledger row"
+        );
     }
 
     #[test]

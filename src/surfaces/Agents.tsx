@@ -54,6 +54,7 @@ export function Agents() {
   const [operator, setOperator] = useState("");
   const [formOpen, setFormOpen] = useState(false);
   const [formError, setFormError] = useState("");
+  const [actorError, setActorError] = useState("");
   const [form, setForm] = useState({
     id: "",
     agent: "",
@@ -115,8 +116,28 @@ export function Agents() {
     bridge.agents.grants(a.id).then(setGrants).catch(() => {});
   };
 
+  /**
+   * A revocation must name the human who did it. `session.operator()` returns
+   * `string | null`, and a failed read lands here as `""`, so a fresh install
+   * with no operator set reaches this path.
+   *
+   * The backend now refuses a nameless revocation outright, so without this the
+   * operator would read the ceremony, approve it, and only then be told it could
+   * not proceed. Say it before the approval, not after.
+   */
+  const actorMissing = () => {
+    if (operator.trim()) return false;
+    setActorError(
+      "No operator identity is resolved, and a revocation must name the human who " +
+        "did it. Set your name in Settings, then revoke.",
+    );
+    return true;
+  };
+
   const revokeGrant = async (g: Grant) => {
     if (!sel) return;
+    if (actorMissing()) return;
+    setActorError("");
     const r = await ceremony.request({
       kind: "revoke", title: `Revoke grant ${g.id} — ${sel.name}`, origin: "user",
       // Revoking a capability always requires a human at HIC-1 (Rule 5).
@@ -140,6 +161,8 @@ export function Agents() {
 
   const killAll = async () => {
     if (!sel) return;
+    if (actorMissing()) return;
+    setActorError("");
     const r = await ceremony.request({
       kind: "revoke", title: `Revoke ALL grants — ${sel.name}`, origin: "user",
       action: { actionClass: "grant.revoke-all", classification: "Proprietary", agent: "user", mandatoryHic1: true },
@@ -408,6 +431,9 @@ export function Agents() {
                 <div style={{ fontSize: 13.5, fontWeight: 500, color: "var(--danger)" }}>Kill switch</div>
                 <div style={{ fontSize: 11.5, color: "var(--tx-3)", lineHeight: 1.5 }}>Revokes every live grant for this agent. It keeps its identity and its history; it loses every capability. Running actions abort at the next checkpoint (&lt;25s).</div>
               </div>
+              {actorError && (
+                <span className="mono" style={{ fontSize: 10.5, color: "var(--danger)", lineHeight: 1.5 }}>{actorError}</span>
+              )}
               <button className="btn btn-danger" onClick={killAll}>Revoke all — {sel.name}</button>
             </div>
           </div>
