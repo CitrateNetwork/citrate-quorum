@@ -763,7 +763,23 @@ export interface SignatureIntent {
 
 /** A stream subscription: register a listener, get an unsubscribe fn (§6.4). */
 export type Unsubscribe = () => void;
-export type Subscribe<E> = (onEvent: (e: E) => void) => Unsubscribe;
+/**
+ * A push/poll subscription.
+ *
+ * `onHealth` is optional and reports whether the subscription is currently
+ * DELIVERING — `null` while healthy, a reason while not. It exists because a
+ * stream that retries quietly is indistinguishable from a stream with nothing
+ * to say, and a surface showing a live indicator over a silently frozen feed is
+ * making a claim it cannot support. The Ledger states the principle itself: "a
+ * verify affordance that cannot fail is worse than none." A liveness dot that
+ * cannot fail is the same thing.
+ *
+ * Optional so existing callers and adapters are unaffected.
+ */
+export type Subscribe<E> = (
+  onEvent: (e: E) => void,
+  onHealth?: (reason: string | null) => void,
+) => Unsubscribe;
 
 
 // ---- governance authoring pipeline (QRM-S7) --------------------------
