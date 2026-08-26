@@ -53,6 +53,8 @@ interface Tile {
 export function Dashboard({ onGo }: { onGo: (id: string) => void }) {
   const [session, setSession] = useState<Session | null>(null);
   const [ribbon, setRibbon] = useState<Decision[]>([]);
+  /** null while the ribbon is receiving; a reason when it is not. */
+  const [streamDown, setStreamDown] = useState<string | null>(null);
   /** The full ledger read backs the counts; the stream keeps them moving. */
   const ledger = useDomain(() => bridge.ledger.query(), "ledger.query()");
   /**
@@ -96,13 +98,17 @@ export function Dashboard({ onGo }: { onGo: (id: string) => void }) {
     setRibbon(ledger.state.data.slice(0, 8));
     let unsub: (() => void) | undefined;
     try {
-      unsub = bridge.ledger.stream((d) =>
+      unsub = bridge.ledger.stream(
         // Dedupe: a decision can arrive from both the query and the stream, and
         // the same record must never render twice.
-        setRibbon((prev) => (prev.some((p) => p.id === d.id) ? prev : [d, ...prev].slice(0, 8))),
+        (d) => setRibbon((prev) => (prev.some((p) => p.id === d.id) ? prev : [d, ...prev].slice(0, 8))),
+        setStreamDown,
       );
-    } catch {
+    } catch (e) {
       // No stream is survivable — the query above already populated the ribbon.
+      // But "Live decisions" then becomes a claim this panel cannot support.
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- stream() threw before returning, so no callback will ever fire
+      setStreamDown(e instanceof Error ? e.message : String(e));
     }
     return unsub;
   }, [ledger.state]);
@@ -211,7 +217,11 @@ export function Dashboard({ onGo }: { onGo: (id: string) => void }) {
       <div className="surface" style={{ display: "flex", flexDirection: "column" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderBottom: "1px solid var(--line-1)" }}>
           <span className="eyebrow">Live decisions</span>
-          <span style={{ width: 7, height: 7, borderRadius: 999, background: "var(--accent)", animation: "ccPulse 1.6s infinite" }} />
+          {streamDown === null ? (
+            <span style={{ width: 7, height: 7, borderRadius: 999, background: "var(--accent)", animation: "ccPulse 1.6s infinite" }} />
+          ) : (
+            <span className="mono" style={{ fontSize: 9, color: "var(--warn)" }} title={streamDown}>not live — ledger.stream() is failing</span>
+          )}
           <div style={{ flex: 1 }} />
           <a href="#/ledger" onClick={(e) => { e.preventDefault(); onGo("ledger"); }} className="mono" style={{ fontSize: 10, letterSpacing: ".1em", textTransform: "uppercase" }}>Open ledger →</a>
         </div>

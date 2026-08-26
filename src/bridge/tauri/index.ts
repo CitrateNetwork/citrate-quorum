@@ -423,7 +423,10 @@ export function createTauriBridge(): BridgeContract {
         };
       },
       // LIVE: poll the chain, emit rows appended since the last poll.
-      stream: (onEvent: (e: Decision) => void): Unsubscribe => {
+      stream: (
+        onEvent: (e: Decision) => void,
+        onHealth?: (reason: string | null) => void,
+      ): Unsubscribe => {
         let seen = 0;
         let stopped = false;
         const tick = async (): Promise<void> => {
@@ -432,9 +435,17 @@ export function createTauriBridge(): BridgeContract {
             const rows = await ledgerRecords();
             for (let i = seen; i < rows.length; i++) onEvent(rows[i]);
             seen = rows.length;
-          } catch {
+            onHealth?.(null);
+          } catch (e) {
             // A transient backend error (or no tenant scope yet) must not kill
-            // the stream; the next tick retries. Errors surface through query().
+            // the stream; the next tick retries.
+            //
+            // It used to say "errors surface through query()". They do not:
+            // query() is a one-shot useDomain read that only re-runs on an
+            // explicit retry. So a poll that started failing after mount froze
+            // the ribbon while the surface kept pulsing its live indicator.
+            // Report it instead, and let the surface stop claiming liveness.
+            onHealth?.(e instanceof Error ? e.message : String(e));
           }
         };
         void tick();

@@ -4,7 +4,7 @@
 // is silent — the field lands `undefined` and a surface renders a blank where a
 // verdict should be. These pin the mapping, and pin that no call names a tenant
 // (the scope is backend-owned, Rule 6).
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
@@ -637,5 +637,73 @@ describe("tauri adapter — rooms (QRM-S3)", () => {
       classification: "Proprietary",
       agents: ["claude-code", "codex"],
     });
+  });
+});
+
+/**
+ * The ledger ribbon's liveness (QA 2026-08-01).
+ *
+ * The poll swallowed every error and retried, with a comment claiming "errors
+ * surface through query()". They did not: `query()` is a one-shot `useDomain`
+ * read that only re-runs on an explicit retry. So a poll that began failing
+ * AFTER mount froze the ribbon while the surface kept pulsing its live dot —
+ * on the evidence surface, whose whole job is to be trustworthy about what it
+ * knows.
+ *
+ * `Ledger.tsx` already states the principle for its Verify button: "a verify
+ * affordance that cannot fail is worse than none." A liveness indicator that
+ * cannot fail is the same claim.
+ */
+describe("ledger.stream — liveness is reported, not assumed", () => {
+  beforeEach(() => {
+    invoke.mockReset();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("reports healthy (null) after a poll that delivers", async () => {
+    invoke.mockResolvedValue([]);
+    const health: (string | null)[] = [];
+    const stop = createTauriBridge().ledger.stream(() => {}, (r) => health.push(r));
+    await vi.advanceTimersByTimeAsync(0);
+    stop();
+    expect(health).toContain(null);
+  });
+
+  it("reports the REASON when the poll fails — it does not stay silent", async () => {
+    invoke.mockRejectedValue(new Error("no tenant scope"));
+    const health: (string | null)[] = [];
+    const stop = createTauriBridge().ledger.stream(() => {}, (r) => health.push(r));
+    await vi.advanceTimersByTimeAsync(0);
+    stop();
+    expect(health.some((r) => typeof r === "string" && r.includes("no tenant scope"))).toBe(true);
+  });
+
+  it("recovers: a failing poll that starts delivering reports healthy again", async () => {
+    invoke.mockRejectedValueOnce(new Error("transient")).mockResolvedValue([]);
+    const health: (string | null)[] = [];
+    const stop = createTauriBridge().ledger.stream(() => {}, (r) => health.push(r));
+    await vi.advanceTimersByTimeAsync(0);
+    // The next tick succeeds — a retrying stream must be able to say so, or the
+    // surface would latch "not live" forever after one blip.
+    await vi.advanceTimersByTimeAsync(4000);
+    stop();
+    expect(health[0]).toContain("transient");
+    expect(health).toContain(null);
+    stop();
+  });
+
+  it("still delivers rows, and stops on unsubscribe", async () => {
+    invoke.mockResolvedValue([{ id: "D-1" }]);
+    const seen: unknown[] = [];
+    const stop = createTauriBridge().ledger.stream((d) => seen.push(d));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(seen).toHaveLength(1);
+    stop();
+    invoke.mockResolvedValue([{ id: "D-1" }, { id: "D-2" }]);
+    await vi.advanceTimersByTimeAsync(8000);
+    expect(seen, "unsubscribe must stop the poll").toHaveLength(1);
   });
 });

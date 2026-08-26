@@ -97,15 +97,27 @@ export function Ledger() {
   const [corrId, setCorrId] = useState<string>("");
   const [chain, setChain] = useState<LedgerState | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
+  /** null while the ribbon is genuinely receiving; a reason when it is not. */
+  const [streamDown, setStreamDown] = useState<string | null>(null);
 
   useEffect(() => {
     let unsub: (() => void) | undefined;
     try {
-      unsub = bridge.ledger.stream((d) =>
-        setRows((p) => (p.some((r) => r.id === d.id) ? p : [d, ...p].slice(0, 60))),
+      unsub = bridge.ledger.stream(
+        (d) => setRows((p) => (p.some((r) => r.id === d.id) ? p : [d, ...p].slice(0, 60))),
+        setStreamDown,
       );
-    } catch {
-      /* the query below already populated the table */
+    } catch (e) {
+      // The query below already populated the table, but the ribbon is NOT live
+      // and must not pretend to be.
+      //
+      // Synchronous on purpose, and it is the one case that must be: `stream()`
+      // threw before returning, so no callback will ever fire and there is no
+      // later moment to learn this in. The cascading-render the rule guards
+      // against cannot happen — this runs once, on a mount-only effect, and
+      // only when the subscription never started.
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- see above
+      setStreamDown(e instanceof Error ? e.message : String(e));
     }
     return unsub;
   }, []);
@@ -211,7 +223,20 @@ export function Ledger() {
         <div className="surface" style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "9px 14px", borderBottom: "1px solid var(--line-1)" }}>
             <span className="eyebrow">Ribbon — every recorded action</span>
-            <span style={{ width: 7, height: 7, borderRadius: 999, background: "var(--accent)", animation: "ccPulse 1.6s infinite" }} />
+            {/*
+              The dot claims the ribbon is receiving. It used to render
+              unconditionally, so a poll that began failing after mount left it
+              pulsing over a frozen feed. This file already states the principle
+              for Verify — "a verify affordance that cannot fail is worse than
+              none" — and a liveness indicator is no different.
+            */}
+            {streamDown === null ? (
+              <span style={{ width: 7, height: 7, borderRadius: 999, background: "var(--accent)", animation: "ccPulse 1.6s infinite" }} />
+            ) : (
+              <span className="mono" style={{ fontSize: 9, color: "var(--warn)" }} title={streamDown}>
+                not live — ledger.stream() is failing; this ribbon is not updating
+              </span>
+            )}
             <div style={{ flex: 1 }} />
             <label className="mono" style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 9.5, letterSpacing: ".08em", textTransform: "uppercase", color: "var(--warn)", cursor: "pointer" }}>
               <input type="checkbox" checked={ungOnly} onChange={(e) => setUngOnly(e.target.checked)} />Ungoverned only

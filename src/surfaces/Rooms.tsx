@@ -64,6 +64,8 @@ export function Rooms() {
   const [active, setActive] = useState<string | null>(null);
   const [roster, setRoster] = useState<RosterMember[]>([]);
   const [events, setEvents] = useState<RoomEvent[]>([]);
+  /** null while the transcript is draining; a reason when it is not. */
+  const [drainDown, setDrainDown] = useState<string | null>(null);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [draft, setDraft] = useState("");
   const [opening, setOpening] = useState(false);
@@ -101,10 +103,17 @@ export function Rooms() {
       bridge.rooms
         .events(0)
         .then((all) => {
-          if (live) setEvents(all);
+          if (!live) return;
+          setEvents(all);
+          setDrainDown(null);
         })
-        .catch(() => {
-          /* a transient drain failure must not clear the transcript */
+        .catch((e: unknown) => {
+          // A transient drain failure must not CLEAR the transcript — the lines
+          // already decrypted are still true. But it must stop the panel
+          // claiming the transcript is live, because it is not: the relay
+          // connection can be up while the drain fails, and a pulsing dot over a
+          // frozen transcript is the one thing a room must never show.
+          if (live) setDrainDown(e instanceof Error ? e.message : String(e));
         });
     };
     tick();
@@ -301,7 +310,11 @@ export function Rooms() {
                 <div className="surface" style={{ display: "flex", flexDirection: "column", minHeight: 320 }}>
                   <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--line-1)", display: "flex", alignItems: "center", gap: 10 }}>
                     <span className="eyebrow">Transcript</span>
-                    <span style={{ width: 7, height: 7, borderRadius: 999, background: "var(--accent)", animation: "ccPulse 1.6s infinite" }} />
+                    {drainDown === null ? (
+                      <span style={{ width: 7, height: 7, borderRadius: 999, background: "var(--accent)", animation: "ccPulse 1.6s infinite" }} />
+                    ) : (
+                      <span className="mono" style={{ fontSize: 9, color: "var(--warn)" }} title={drainDown}>not live — rooms.events() is failing</span>
+                    )}
                     <div style={{ flex: 1 }} />
                     <span className="mono" style={{ fontSize: 9, color: "var(--tx-3)" }}>decrypted in this process</span>
                   </div>
