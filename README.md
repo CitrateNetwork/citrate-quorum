@@ -17,23 +17,30 @@ tier: T1
 **Tier:** T1 — money, keys, identity, governance, binary distribution. Full audit
 before release.
 
-## Honest current status (2026-07-24)
+## Honest current status (2026-08-01)
 
-**This repo is a scaffold. No application code exists yet.** What is here:
+**QRM-S0 through S7 are merged.** The previous version of this section said "this
+repo is a scaffold, no application code exists yet" and was left untouched from
+2026-07-23 through seven sprints — understating the repo rather than overstating it,
+but wrong either way, and wrong in the one place a newcomer reads first.
 
-| Present | Not present |
+Verified by running the gate, not by reading sprint files: **384 Rust tests, 51
+frontend tests, `scripts/check.sh` 21 pass / 0 fail / 1 skip.**
+
+| Real and exercised | Not yet |
 |---|---|
-| Repo governance (`CLAUDE.md`, `AUDIT_TIER.md`) | The governance surfaces (Rooms, Meetings, Governance, Agents, Ledger, …) |
-| A booting **Tauri app skeleton** consuming `citrate-core-kit` | The design-prototype frontend (arrives QRM-S2D) |
-| The shared **SignatureCeremony** signing surface (from the kit) | quorum's own domains (rooms, meetings, governance, agents, …) |
-| Backend crates: `quorum-tenancy`, `quorum-license`, `quorum-rbac` | Real chain / relay / identity / model wiring |
-| Local check gate + pre-push hook; **unsigned bundles build** (deb/rpm/AppImage) | Hosted CI (Actions down org-wide); **code-signing + auto-updater (QRM-S9, @rule8)** |
+| 14 surfaces (Rooms, Meetings, Governance, Agents, Ledger, Wallet, Node, Calendar, Repos, Journal, Settings, Dashboard, …) | **No release. `version` is `0.0.0`; no tag, no signed installer** (QRM-S9, @rule8) |
+| 9 backend crates: tenancy, license, rbac, session, clearance, audit, policy, meetings, adapter | **Auto-updater inert by design** until S9 |
+| The shared **SignatureCeremony** from `citrate-core-kit` | `citrate-core-kit` is still a **local path dep**, not a pinned git dep (owner infra: deploy key) |
+| The **S7 authoring pipeline**: INGEST → INTERVIEW → DRAFT SPEC → COMPILE → SIMULATE → CEREMONY → DEPLOY → BIND | Template registration needs a real `auditCID`; the registry rejects an empty one by design |
+| Governance contracts live on 40204 and read by the app; the vendored address book is byte-identical to canonical | Hosted CI — Actions is down org-wide, so `scripts/check.sh` is the gate |
 
-The Tauri backend + the shared signing spine are real and tested; the governance
-UI is an honest "under construction" placeholder until the design prototype lands.
-The `citrate-core-kit` dependency is a **local path dep** to the sibling checkout
-for now — production/CI switches to a pinned SSH git dep once a `github-citrate-core`
-alias + deploy key are provisioned (owner infra). Nothing fabricates data (Rule 1).
+**Anchoring is back.** The 2026-07-27 chain handoff listed Quorum anchoring as broken
+and told this team to expect two failing address tests. Both `AnchorRegistry` and
+`MeetingRegistry` were redeployed later that day, the vendored book matches canonical,
+and those tests pass. That handoff is superseded — read its header box, not its §2.
+
+Nothing fabricates data (Rule 1).
 
 ## Canonical truth
 
