@@ -77,6 +77,41 @@ fn charge_for(cost: u64) -> u64 {
     cost.max(1)
 }
 
+/// L-1 of the HIC model (`04_HIC_MODEL §2`): action classes that touch
+/// chain / money / keys / capability-grants / classification / disclosure
+/// **always** require a human signature (HIC-1), no matter what the caller
+/// reports. This lives server-side so the level in force is decided by the
+/// *action*, not by a boolean the governed agent puts on the wire.
+///
+/// QR-B-001: before this table, an L-1 action arriving over the keyless agent
+/// bridge with the (serde-`default`) `mandatory_hic1: false` was evaluated at
+/// HIC-2 and `Allow`ed with no human — and the evidence record stamped HIC-2
+/// too (L-4 records the wrong level). L-1 existed only as `mandatoryHic1: true`
+/// literals in the TSX surfaces, which an agent that does not use the UI never
+/// executes.
+///
+/// The wire `mandatory_hic1` flag remains a RAISE-ONLY hint: a caller may assert
+/// HIC-1 on an action this table does not list, but can never waive it off one
+/// this table does (see `evaluate_and_record`, where the two are OR-ed).
+fn class_is_mandatory_hic1(class: &str) -> bool {
+    // Prefix families whose every member is an L-1 act. `grant.*` covers
+    // issue/revoke of a capability envelope; `classification.*` any marking
+    // change; `disclose.*` any egress of controlled material; `chain.*`/`key.*`/
+    // `protocol.*` any on-chain, custody, or governance-protocol operation.
+    const L1_PREFIXES: &[&str] = &[
+        "grant.",
+        "protocol.",
+        "chain.",
+        "key.",
+        "classification.",
+        "disclose.",
+    ];
+    // Exact classes that are L-1 without their whole prefix family being so.
+    const L1_EXACT: &[&str] = &["meeting.ratify"];
+    let c = class.trim();
+    L1_EXACT.contains(&c) || L1_PREFIXES.iter().any(|p| c.starts_with(p))
+}
+
 /// The chain index behind a `D-…` ledger handle.
 ///
 /// The ribbon numbers records from `D-90001`, so the handle is an offset, not an
@@ -778,12 +813,17 @@ impl QuorumBackend {
         // One number for both the coverage check and the charge, so a grant can
         // never be found to "cover" an action it cannot actually pay for.
         let charge = charge_for(input.cost);
+        // QR-B-001: the L-1 decision is server-side. The wire flag is a raise-only
+        // hint — a caller may assert HIC-1, never waive it off an action class the
+        // server-side table marks L-1 (chain/money/keys/grants/classification/
+        // disclosure). This is the line the keyless agent bridge cannot cross.
+        let mandatory_hic1 = input.mandatory_hic1 || class_is_mandatory_hic1(&input.class);
         let action = Action {
             class: input.class.clone(),
             classification,
             cost: charge,
             hic1_cost_threshold: input.hic1_cost_threshold,
-            mandatory_hic1: input.mandatory_hic1,
+            mandatory_hic1,
         };
         let empty = Vec::new();
         let key = (tenant.as_str().to_string(), input.agent.clone());
@@ -1831,6 +1871,66 @@ impl QuorumBackend {
         })
     }
 
+    /// Record a *delegated* governed action: an agent acting under a principal's
+    /// franchise (a [`VoteAllowance`]), as opposed to [`Self::record_principal_action`]
+    /// where the human acts directly (agent == principal). The record carries the
+    /// delegate agent, the accountable principal, and the authorizing
+    /// allowance/grant id, and lands in the tenant's tamper-evident chain and the
+    /// store exactly like a grant issuance.
+    ///
+    /// CIT-Q-001: `cast_vote` produced ZERO chain entry, so the one governance act
+    /// the HIC model routes through `VoteAllowance` was the only one an auditor
+    /// could not walk back — invisible to `ledger_*` and to the nightly Merkle
+    /// root. `hic` reflects the allowance's bounded autonomy (HIC-2): a cast spends
+    /// a pre-authorized franchise within a cap, it is not a fresh human signature.
+    #[allow(clippy::too_many_arguments)]
+    fn record_delegated_action(
+        &mut self,
+        tenant: &TenantId,
+        agent: &str,
+        principal: &str,
+        authorizing_id: &str,
+        action_class: &str,
+        detail: &str,
+        now_ms: i64,
+    ) -> Result<DecisionDto, String> {
+        self.check_not_degraded()?;
+        if principal.trim().is_empty() {
+            return Err(format!(
+                "{action_class} must name the human behind the delegated authority — no identity resolved"
+            ));
+        }
+        let record = DecisionRecord {
+            agent: agent.to_string(),
+            principal: Some(principal.to_string()),
+            grant_id: Some(authorizing_id.to_string()),
+            action_class: action_class.to_string(),
+            params_hash: [0u8; 32],
+            verdict: Verdict::Approved,
+            hic: HicLevel::Budgeted,
+            model_id: String::new(),
+            correlation_id: detail.to_string(),
+            timestamp_ms: now_ms,
+        };
+        let chain = self.chain_for(tenant);
+        let head = chain.append(record.clone()).map_err(|e| e.to_string())?;
+        let decision_id = (chain.len() - 1) as u64;
+        if let Some(store) = self.store.clone() {
+            store
+                .append_record(tenant.as_str(), &record, head)
+                .map_err(|e| self.degrade(e))?;
+        }
+        Ok(DecisionDto {
+            decision_id,
+            verdict: verdict_str(Verdict::Approved).to_string(),
+            hic: hic_str(HicLevel::Budgeted).to_string(),
+            grant_id: Some(authorizing_id.to_string()),
+            reason: format!("RC-303 {action_class} by {agent} for {principal}"),
+            chain_head: hex_encode(&head),
+            ungoverned: false,
+        })
+    }
+
     /// The grants one agent holds in this tenant, revoked ones included — a
     /// revoked grant is part of the record, not an absence.
     pub fn grants_for(&self, tenant: &str, agent: &str) -> Vec<GrantSummary> {
@@ -2039,7 +2139,19 @@ impl QuorumBackend {
         &mut self,
         input: &AllowanceInput,
         tenant: &TenantId,
+        now_ms: i64,
     ) -> Result<(), String> {
+        // CIT-Q-001: check the accountable human BEFORE mutating, so a nameless
+        // issuance cannot leave the allowance store and the ledger disagreeing
+        // (the same ordering the `revoke_grant` fix established). Issuing a
+        // delegated franchise is a governance act — authority from nowhere is
+        // exactly what an auditor looks for.
+        if input.principal.trim().is_empty() {
+            return Err(
+                "allowance.issue must name the human delegating the franchise — no identity resolved"
+                    .to_string(),
+            );
+        }
         let allowance = VoteAllowance {
             id: input.id.clone(),
             principal: input.principal.clone(),
@@ -2053,7 +2165,16 @@ impl QuorumBackend {
         };
         self.allowances
             .insert((tenant.as_str().to_string(), input.id.clone()), allowance);
-        self.persist_allowances(tenant.as_str())
+        self.persist_allowances(tenant.as_str())?;
+        // The delegation itself lands in the chain, like a grant issuance.
+        self.record_principal_action(
+            tenant,
+            &input.principal,
+            "allowance.issue",
+            &format!("{} → {} (cap {})", input.id, input.agent, input.weight_cap),
+            now_ms,
+        )?;
+        Ok(())
     }
 
     /// Cast a vote by spending against an allowance. Returns the delegation proof
@@ -2074,8 +2195,25 @@ impl QuorumBackend {
         let proof = allowance
             .cast(class, weight, now_ms)
             .map_err(|e| e.to_string())?;
+        // Snapshot the delegation identity before the borrow ends — the record
+        // must name who voted (the agent) under whose authority (the principal).
+        let principal = allowance.principal.clone();
+        let agent = allowance.agent.clone();
         // The spend must outlive the process, or the cap is not a cap.
         self.persist_allowances(tenant.as_str())?;
+        // CIT-Q-001: a cast vote is a governed act and MUST land in the
+        // tamper-evident chain like every grant/ratify, or it is invisible to the
+        // evidence spine and excluded from the nightly Merkle anchor — the one
+        // governance act an auditor could not otherwise walk back.
+        self.record_delegated_action(
+            tenant,
+            &agent,
+            &principal,
+            allowance_id,
+            "vote.cast",
+            &format!("{allowance_id} · {class} · weight {weight} · {proof}"),
+            now_ms,
+        )?;
         Ok(proof)
     }
 
@@ -2085,19 +2223,30 @@ impl QuorumBackend {
         &mut self,
         tenant: &TenantId,
         allowance_id: &str,
+        now_ms: i64,
     ) -> Result<bool, String> {
-        let found = match self
+        let (found, principal) = match self
             .allowances
             .get_mut(&(tenant.as_str().to_string(), allowance_id.to_string()))
         {
             Some(a) => {
                 a.revoke();
-                true
+                (true, a.principal.clone())
             }
-            None => false,
+            None => (false, String::new()),
         };
         if found {
             self.persist_allowances(tenant.as_str())?;
+            // CIT-Q-001 (variant): a franchise revocation is a governance act and
+            // is recorded like a grant revocation, against the principal whose
+            // franchise it was.
+            self.record_principal_action(
+                tenant,
+                &principal,
+                "allowance.revoke",
+                allowance_id,
+                now_ms,
+            )?;
         }
         Ok(found)
     }
@@ -2572,14 +2721,14 @@ pub fn grant_revoke(
 pub fn allowance_issue(backend: Backend<'_>, input: AllowanceInput) -> Result<(), String> {
     let mut b = lock(&backend)?;
     let tenant = b.require_tenant()?;
-    b.issue_allowance(&input, &tenant)
+    b.issue_allowance(&input, &tenant, now_ms())
 }
 
 #[tauri::command]
 pub fn allowance_revoke(backend: Backend<'_>, allowance_id: String) -> Result<bool, String> {
     let mut b = lock(&backend)?;
     let tenant = b.require_tenant()?;
-    b.revoke_allowance(&tenant, &allowance_id)
+    b.revoke_allowance(&tenant, &allowance_id, now_ms())
 }
 
 /// Cast a delegated vote. Returns the delegation proof string on success; a
@@ -2682,6 +2831,57 @@ mod tests {
         assert!(d.grant_id.is_none());
         assert_eq!(b.ledger_ungoverned_count("bca"), 1);
         assert_eq!(b.ledger_rows("bca").len(), 1);
+    }
+
+    // ---- QR-B-001: L-1 is decided server-side, not on the wire -------------
+
+    #[test]
+    fn l1_action_classes_force_hic1_even_when_the_wire_flag_is_false() {
+        // QR-B-001 tripwire. Each of these action classes is L-1 (touches
+        // chain/money/keys/grants/classification/disclosure). An agent under an
+        // ordinary HIC-2 "budgeted autonomy" grant submits the action with
+        // `mandatory_hic1: false` — the serde default that arrives over the keyless
+        // bridge when the field is omitted. RED before the server-side table: the
+        // action was `allow`ed at HIC-2 with no human. GREEN after: it escalates.
+        let l1 = [
+            "grant.issue",
+            "grant.revoke",
+            "protocol.deploy",
+            "chain.write",
+            "key.rotate",
+            "classification.change",
+            "disclose.export",
+            "meeting.ratify",
+        ];
+        for class in l1 {
+            let mut b = QuorumBackend::default();
+            // A live, budgeted, in-ceiling grant that covers the class: the intended
+            // steady state, where without the fix the action is simply allowed.
+            b.issue_grant(&grant("sbt-1", &[class], "ITAR", 1000, "2"), &t("bca"), 0)
+                .unwrap();
+            let mut a = action("sbt-1", class, "Public", 1);
+            a.mandatory_hic1 = false; // the wire default an agent never sets
+            let d = b.evaluate_and_record(&a, &t("bca"), 1000).unwrap();
+            assert_eq!(
+                d.verdict, "require-approval",
+                "{class} is L-1 and must escalate to a human regardless of the wire flag"
+            );
+            assert_eq!(d.hic, "1", "{class} must be stamped HIC-1 in the record");
+        }
+    }
+
+    #[test]
+    fn a_non_l1_action_stays_budgeted_when_the_flag_is_false() {
+        // The other side of QR-B-001: the server-side table must not over-reach.
+        // A plain repo.write under a budgeted grant stays HIC-2 autonomy.
+        let mut b = QuorumBackend::default();
+        b.issue_grant(&grant("sbt-1", &["repo.write"], "CUI", 100, "2"), &t("bca"), 0)
+            .unwrap();
+        let d = b
+            .evaluate_and_record(&action("sbt-1", "repo.write", "Public", 1), &t("bca"), 1000)
+            .unwrap();
+        assert_eq!(d.verdict, "allow");
+        assert_eq!(d.hic, "2");
     }
 
     #[test]
@@ -2941,7 +3141,7 @@ mod tests {
     #[test]
     fn vote_allowance_casts_within_cap_then_fails_closed() {
         let mut b = QuorumBackend::default();
-        b.issue_allowance(&allowance("VA-1"), &t("bca")).unwrap();
+        b.issue_allowance(&allowance("VA-1"), &t("bca"), 1000).unwrap();
         let proof = b.cast_vote(&t("bca"), "VA-1", "standup", 3, 1000).unwrap();
         assert!(proof.contains("R. Ortiz ▸ claude-code"));
         assert!(
@@ -2957,23 +3157,76 @@ mod tests {
                 .is_err(),
             "unknown allowance fails closed"
         );
-        assert!(b.revoke_allowance(&t("bca"), "VA-1").unwrap());
+        assert!(b.revoke_allowance(&t("bca"), "VA-1", 1000).unwrap());
         assert!(
             b.cast_vote(&t("bca"), "VA-1", "standup", 1, 1000).is_err(),
             "revoked allowance fails closed"
         );
     }
 
+    // ---- CIT-Q-001: votes/allowances land in the tamper-evident chain -----
+
+    #[test]
+    fn casting_a_vote_and_its_delegation_land_in_the_evidence_chain() {
+        // CIT-Q-001 tripwire. RED before the fix: `issue_allowance` and
+        // `cast_vote` appended NOTHING to the chain, so `ledger_rows` stayed empty
+        // and the cast was excluded from the Merkle anchor. GREEN after: each act
+        // is a `DecisionRecord` an auditor can walk back, and the chain still
+        // verifies.
+        let mut b = QuorumBackend::default();
+        assert_eq!(b.ledger_rows("bca").len(), 0, "empty to start");
+
+        b.issue_allowance(&allowance("VA-1"), &t("bca"), 1000).unwrap();
+        let rows = b.ledger_rows("bca");
+        assert_eq!(rows.len(), 1, "issuing the franchise is a recorded act");
+        assert_eq!(rows[0].cls, "allowance.issue");
+        assert_eq!(rows[0].principal, "R. Ortiz");
+
+        b.cast_vote(&t("bca"), "VA-1", "standup", 3, 2000).unwrap();
+        let rows = b.ledger_rows("bca");
+        assert_eq!(rows.len(), 2, "the cast appends exactly one row");
+        assert_eq!(rows[1].cls, "vote.cast");
+        assert_eq!(rows[1].agent, "claude-code", "the delegate agent that voted");
+        assert_eq!(rows[1].principal, "R. Ortiz", "under whose authority");
+
+        // A revocation of the franchise is likewise a governance act.
+        assert!(b.revoke_allowance(&t("bca"), "VA-1", 3000).unwrap());
+        let rows = b.ledger_rows("bca");
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[2].cls, "allowance.revoke");
+
+        // The whole chain still recomputes — the append is well-formed.
+        assert!(
+            b.ledger_verify("bca"),
+            "the chain including the vote must verify"
+        );
+    }
+
+    #[test]
+    fn a_failed_cast_records_nothing() {
+        // Fail-closed casts must not leave a phantom row: only a real spend is
+        // evidence. (Guards the CIT-Q-001 fix against over-recording.)
+        let mut b = QuorumBackend::default();
+        b.issue_allowance(&allowance("VA-1"), &t("bca"), 1000).unwrap();
+        assert_eq!(b.ledger_rows("bca").len(), 1); // the issuance only
+        assert!(b.cast_vote(&t("bca"), "VA-1", "treasury", 1, 2000).is_err());
+        assert_eq!(
+            b.ledger_rows("bca").len(),
+            1,
+            "an uncovered-class cast records no vote"
+        );
+    }
+
     #[test]
     fn an_allowance_in_one_tenant_cannot_be_spent_from_another() {
         let mut b = QuorumBackend::default();
-        b.issue_allowance(&allowance("VA-1"), &t("bca")).unwrap();
+        b.issue_allowance(&allowance("VA-1"), &t("bca"), 1000).unwrap();
         assert!(
             b.cast_vote(&t("sea"), "VA-1", "standup", 1, 1000).is_err(),
             "an allowance id must not be spendable outside its own tenant"
         );
         assert!(
-            !b.revoke_allowance(&t("sea"), "VA-1").unwrap(),
+            !b.revoke_allowance(&t("sea"), "VA-1", 1000).unwrap(),
             "nor revocable from another tenant"
         );
         // Still intact and spendable where it actually lives.
@@ -3780,7 +4033,7 @@ mod tests {
         {
             let mut b = root.boot();
             b.set_active_tenant("bca").unwrap();
-            b.issue_allowance(&allowance("VA-1"), &t("bca")).unwrap();
+            b.issue_allowance(&allowance("VA-1"), &t("bca"), 1000).unwrap();
             b.cast_vote(&t("bca"), "VA-1", "standup", 5, 1000).unwrap();
         }
         let mut b = root.boot();

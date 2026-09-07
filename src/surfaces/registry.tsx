@@ -25,7 +25,7 @@ export const SURFACES: Record<string, (p: SurfaceProps) => ReactNode> = {
   rooms: () => <Rooms />,
   agents: () => <Agents />,
   journal: () => <Journal />,
-  calendar: () => <Calendar />,
+  calendar: ({ onGo }) => <Calendar onGo={onGo} />,
   repos: () => <Repos />,
   wallet: () => <Wallet />,
   node: () => <Node />,

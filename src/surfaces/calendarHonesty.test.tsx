@@ -38,7 +38,7 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Calendar } from "./Calendar";
 
-const html = () => renderToStaticMarkup(<Calendar />);
+const html = () => renderToStaticMarkup(<Calendar onGo={() => {}} />);
 
 describe("Calendar honesty — no fabricated incident (Rule 1)", () => {
   it("NEVER renders the invented Outlook sync conflict", () => {
