@@ -215,15 +215,32 @@ impl Response {
 /// socket.
 ///
 /// `now_ms` is injected for the same reason the rest of the backend injects it.
+// One extra parameter (`origin`) past clippy's 7-arg soft limit — the request's
+// already-parsed pieces plus the backend and clock. Grouping them into a struct
+// would obscure a signature whose whole point is that the handler is PURE over
+// exactly these inputs (QR-B-011 added `origin`).
+#[allow(clippy::too_many_arguments)]
 pub fn handle(
     method: &str,
     path: &str,
     bearer: Option<&str>,
+    origin: Option<&str>,
     body: &str,
     token: &BridgeToken,
     backend: &Mutex<QuorumBackend>,
     now_ms: i64,
 ) -> Response {
+    // QR-B-011: a legitimate agent adapter is a CLI process and never sends an
+    // `Origin` header. A browser ALWAYS does. The listener is loopback-only, but
+    // a web page the operator visits can still reach it — the port is guessable by
+    // timing, and `/health`'s distinctive 200 is a presence oracle and a
+    // DNS-rebinding foothold. Refusing any request that carries an Origin closes
+    // the browser off from every route, including /health, at no cost to the
+    // adapters. This runs BEFORE the open /health branch below.
+    if origin.is_some() {
+        return Response::error(403, "cross-origin requests are not accepted");
+    }
+
     // Liveness is open so a supervisor can tell "not up yet" from "wrong
     // token". It reveals nothing but that a process is listening.
     if method == "GET" && path == "/health" {
@@ -395,6 +412,7 @@ fn serve_one(
     let path = parts.next().unwrap_or_default().to_string();
 
     let mut bearer: Option<String> = None;
+    let mut origin: Option<String> = None;
     let mut content_length = 0usize;
     loop {
         let mut line = String::new();
@@ -415,6 +433,10 @@ fn serve_one(
             }
         } else if let Some(v) = lower.strip_prefix("content-length:") {
             content_length = v.trim().parse().unwrap_or(0);
+        } else if let Some(v) = lower.strip_prefix("origin:") {
+            // QR-B-011: a browser sends this; an adapter never does. Its mere
+            // presence is enough to refuse — the value does not matter.
+            origin = Some(v.trim().to_string());
         }
     }
 
@@ -431,6 +453,7 @@ fn serve_one(
         &method,
         &path,
         bearer.as_deref(),
+        origin.as_deref(),
         &body,
         token,
         backend,
@@ -499,16 +522,41 @@ mod tests {
         token: &BridgeToken,
         b: &Mutex<QuorumBackend>,
     ) -> Response {
-        handle("POST", "/intent", bearer, body, token, b, 1000)
+        handle("POST", "/intent", bearer, None, body, token, b, 1000)
     }
 
     #[test]
     fn health_is_open_but_says_nothing() {
         let t = BridgeToken::mint();
         let b = backend_with_grant();
-        let r = handle("GET", "/health", None, "", &t, &b, 1000);
+        let r = handle("GET", "/health", None, None, "", &t, &b, 1000);
         assert_eq!(r.status, 200);
         assert_eq!(r.body, r#"{"ok":true}"#);
+    }
+
+    #[test]
+    fn a_request_carrying_an_origin_is_refused_on_every_route() {
+        // QR-B-011 tripwire. A browser always sends Origin; an adapter never
+        // does. RED before the fix: /health answered a browser-shaped request
+        // (a presence + port oracle, a DNS-rebinding foothold). GREEN: any
+        // Origin is refused on every route, /health included.
+        let t = BridgeToken::mint();
+        let b = backend_with_grant();
+        let evil = Some("https://evil.example");
+        let health = handle("GET", "/health", None, evil, "", &t, &b, 1000);
+        assert_eq!(health.status, 403, "a browser must not confirm liveness");
+        // Origin is refused BEFORE auth, so the bearer value is irrelevant here.
+        let intent = handle(
+            "POST",
+            "/intent",
+            Some("deadbeef"),
+            evil,
+            &intent_json("repo.write", 1),
+            &t,
+            &b,
+            1000,
+        );
+        assert_eq!(intent.status, 403, "a browser must not reach the gate");
     }
 
     #[test]
@@ -553,6 +601,7 @@ mod tests {
             "POST",
             "/intent",
             Some(current(&t).as_str()),
+            None,
             &intent_json("repo.write", 1),
             &t,
             &b,
@@ -659,6 +708,7 @@ mod tests {
                 "GET",
                 &format!("/decision/{id}"),
                 Some(tok.as_str()),
+                None,
                 "",
                 &t,
                 b,
@@ -696,13 +746,14 @@ mod tests {
         let t = BridgeToken::mint();
         let b = backend_with_grant();
         let before = b.lock().unwrap().ledger_rows("bca").len();
-        let r = handle("GET", "/decision/0", None, "", &t, &b, 1000);
+        let r = handle("GET", "/decision/0", None, None, "", &t, &b, 1000);
         assert_eq!(r.status, 401);
         // A nonsense id is a clean 400, not a panic.
         let bad = handle(
             "GET",
             "/decision/abc",
             Some(current(&t).as_str()),
+            None,
             "",
             &t,
             &b,
@@ -714,6 +765,7 @@ mod tests {
             "GET",
             "/decision/99",
             Some(current(&t).as_str()),
+            None,
             "",
             &t,
             &b,
@@ -735,6 +787,7 @@ mod tests {
             "POST",
             "/sign",
             Some(current(&t).as_str()),
+            None,
             "{}",
             &t,
             &b,
