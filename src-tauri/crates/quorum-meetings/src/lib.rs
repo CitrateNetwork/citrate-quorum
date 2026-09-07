@@ -334,8 +334,14 @@ impl Meeting {
     }
 
     /// Is the quorum rule satisfied right now?
+    ///
+    /// QR-B-017: a `min_humans` of zero would make an *empty* meeting quorate
+    /// (`attested_humans() >= 0` is always true). A governance quorum of zero is
+    /// meaningless — the backend refuses it at schedule time — but this is the
+    /// load-bearing predicate, so it holds the invariant directly too: a meeting
+    /// with no required humans, or with nobody attested, is never quorate.
     pub fn is_quorate(&self) -> bool {
-        self.attested_humans() >= self.template.min_humans
+        self.template.min_humans >= 1 && self.attested_humans() >= self.template.min_humans
     }
 
     /// MR-4: the highest classification this room may carry, given who has
@@ -618,6 +624,29 @@ mod tests {
             std_template(),
             Classification::Proprietary,
         )
+    }
+
+    // ---- QR-B-017: a zero-quorum meeting is never quorate -----------
+
+    #[test]
+    fn an_empty_meeting_with_a_zero_quorum_is_not_quorate() {
+        // RED before the fix: `is_quorate()` was `attested_humans() >= 0`, so a
+        // meeting attended by NOBODY was quorate, could close to
+        // AwaitingRatification, and be ratified + registered on chain as a
+        // ratified quorate meeting. GREEN: min_humans < 1 is never quorate.
+        let m = Meeting::schedule(
+            "m-0",
+            "Ghost Meeting",
+            "2026-07-23T09:00:00Z",
+            "citrate",
+            Template::new("Standup", 0),
+            Classification::Proprietary,
+        );
+        assert_eq!(m.attested_humans(), 0);
+        assert!(
+            !m.is_quorate(),
+            "an empty meeting with a zero quorum must NOT be quorate"
+        );
     }
 
     // ---- rule 1: the agenda freezes at open -------------------------

@@ -244,7 +244,9 @@ pub fn run() {
             backend::allowance_issue,
             backend::allowance_revoke,
             backend::vote_cast,
-            backend::session_resolve,
+            // session_resolve REMOVED (QR-B-006): it returned a classification
+            // ceiling from unverified caller inputs and had no call site. Rewire
+            // it behind the authenticated session before re-exposing it.
             // live chain reads (Phase 0) — node posture, the block explorer,
             // this app's own RPC activity, the on-chain tenant tree, and the
             // signing identity's balances. All reads; none of them signs.
@@ -266,6 +268,7 @@ pub fn run() {
             rooms::rooms_say,
             rooms::rooms_events,
             rooms::rooms_leave,
+            rooms::rooms_evict,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -322,6 +325,39 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// QR-B-006: `session_resolve` was a registered Tauri command that computed a
+    /// classification ceiling from unverified caller inputs and had no call site.
+    /// It is removed until it is wired behind the authenticated session. This pins
+    /// its absence from the invoke handler so it cannot quietly return as a
+    /// loaded gun on the IPC surface. Needle assembled from parts so this test's
+    /// own prose cannot self-match.
+    #[test]
+    fn session_resolve_is_not_a_registered_command() {
+        let needle = "backend::session_".to_string() + "resolve";
+        let lib = include_str!("lib.rs");
+        for line in lib.lines() {
+            let t = line.trim_start();
+            if t.starts_with("//") || t.starts_with("///") {
+                continue;
+            }
+            assert!(
+                !t.contains(needle.as_str()),
+                "session_resolve is registered again: `{}` — a command that returns an \
+                 authorization ceiling from caller-supplied inputs must be wired behind the \
+                 authenticated session before it is exposed (QR-B-006)",
+                t.trim()
+            );
+        }
+        // And the command itself must be gone from the backend, not merely
+        // unregistered (an unregistered `#[tauri::command]` is still a footgun).
+        let backend = include_str!("backend.rs");
+        let def = "fn session_".to_string() + "resolve(";
+        assert!(
+            !backend.contains(def.as_str()),
+            "the session_resolve command still exists in backend.rs (QR-B-006)"
+        );
     }
 
     /// QRM-S4: the agent bridge is an INTAKE, not a signing surface. An agent

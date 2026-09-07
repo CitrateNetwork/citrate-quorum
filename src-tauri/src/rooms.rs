@@ -59,10 +59,19 @@
 //! A room carries a classification, and an agent seat may only be admitted when a
 //! LIVE capability grant clears it to at least that level ([`mr4_admits`]). This
 //! is not a preference the operator can wave through: the ceiling comes from the
-//! grants this tenant actually issued, and a revoked or expired grant stops
-//! clearing its agent immediately (CG-2). An agent with no grant at all is
-//! refused with a different sentence than one that is merely under-cleared,
-//! because those are different problems for the operator to fix.
+//! grants this tenant actually issued. An agent with no grant at all is refused
+//! with a different sentence than one that is merely under-cleared, because those
+//! are different problems for the operator to fix.
+//!
+//! MR-4 is checked at ADMISSION (`rooms_open`), before any seat logs in. It is
+//! not re-evaluated on every drain, so revoking an agent's grant does not by
+//! itself evict it from a room it is already in — the kill switch is the
+//! operator's to pull: `rooms_evict` removes one agent (or `rooms_leave` closes
+//! the room), which drops its seat and tears down its relay session and MLS
+//! membership at once (QR-B-020). Wiring `grant_revoke` to trigger that sweep
+//! automatically is tracked as a follow-up; today the eviction is an explicit,
+//! recorded operator act, and seats are process-local, so the exposure window is
+//! bounded by the session either way.
 //!
 //! The monotonic half: a room's classification is fixed when it opens and there
 //! is no path that lowers it. Admitting somebody must never reclassify what has
@@ -310,9 +319,14 @@ fn seat_identity(custody: &CustodyState, seat: &str) -> Result<EthWallet, String
     }
     let wallet = EthWallet::generate();
     let mut secret = wallet.secret_bytes();
+    // `secret_bytes()` now returns a `Zeroizing<[u8; 32]>` (kit hygiene drift);
+    // `custody.put` takes `&mut [u8]`. Slice through the deref so the buffer is
+    // still zeroized on drop. (Adapting to current sibling APIs by hand is exactly
+    // the QR-B-010 supply-chain gap — the path deps are unpinned, so this repo
+    // compiles against whatever sibling is checked out.)
     custody
         .0
-        .put(&slot, &mut secret)
+        .put(&slot, &mut secret[..])
         .map_err(|e| format!("could not seal the room identity for {seat}: {e}"))?;
     Ok(wallet)
 }
@@ -339,6 +353,43 @@ impl Rooms {
     fn room_mut(&mut self, id: &str) -> Option<&mut RoomRecord> {
         self.rooms.iter_mut().find(|r| hex_gid(&r.id) == id)
     }
+
+    /// QR-B-020: drop every AGENT seat no live room references, which closes its
+    /// relay session and MLS membership (the seat owns the `NetSession`; dropping
+    /// it is the eviction). The operator's human seat is a relay login reused
+    /// across rooms and is never pruned. Returns the evicted principals so the
+    /// caller can record the eviction. Called after any room is left or an agent
+    /// is evicted, so a seat can never outlive every room it belonged to — the
+    /// bug the previous `rooms_leave` had, where it retained the room list but
+    /// left `seats` (and thus each agent's authenticated session) fully intact.
+    fn prune_orphan_agent_seats(&mut self) -> Vec<String> {
+        let kinds: HashMap<String, SeatKind> = self
+            .seats
+            .iter()
+            .map(|(k, s)| (k.clone(), s.kind))
+            .collect();
+        let orphans = orphaned_agent_seats(&self.rooms, &kinds);
+        for name in &orphans {
+            self.seats.remove(name);
+        }
+        orphans
+    }
+}
+
+/// The agent seats that belong to no room in `rooms`. Human seats are never
+/// returned. Pure over the room roster and the seat kinds, so the eviction rule
+/// is unit-testable without a live relay (a `Seat` owns a `NetSession`, which
+/// needs one). See [`Rooms::prune_orphan_agent_seats`].
+fn orphaned_agent_seats(
+    rooms: &[RoomRecord],
+    seat_kinds: &HashMap<String, SeatKind>,
+) -> Vec<String> {
+    seat_kinds
+        .iter()
+        .filter(|(_, kind)| **kind == SeatKind::Agent)
+        .map(|(name, _)| name.clone())
+        .filter(|name| !rooms.iter().any(|r| r.seats.iter().any(|s| s == name)))
+        .collect()
 }
 
 fn hex_gid(g: &GroupId) -> String {
@@ -853,8 +904,14 @@ pub async fn rooms_events(
         .collect())
 }
 
-/// Leave every seat and drop the sessions. The room's history goes with it — it
-/// was never written down.
+/// Close a room and drop the agent seats that were only in it. The room's history
+/// goes with it — it was never written down.
+///
+/// QR-B-020: this used to `retain` the room OUT of the room list but leave
+/// `rooms.seats` untouched — so every agent's authenticated relay session and MLS
+/// membership survived a "close", and `rooms_events` kept draining and decrypting
+/// for them. Now every agent seat no remaining room references is dropped, which
+/// tears down its session. The operator's human seat (reused across rooms) stays.
 #[tauri::command]
 pub async fn rooms_leave(state: tauri::State<'_, RoomsState>, room: String) -> Result<(), String> {
     let mut rooms = state.0.lock().await;
@@ -863,7 +920,66 @@ pub async fn rooms_leave(state: tauri::State<'_, RoomsState>, room: String) -> R
     if rooms.rooms.len() == before {
         return Err(format!("no room {room} in this session"));
     }
+    let evicted = rooms.prune_orphan_agent_seats();
     rooms.push_event(&room, "system", "operator", true, "room closed".to_string());
+    for agent in evicted {
+        rooms.push_event(
+            &room,
+            "system",
+            "operator",
+            true,
+            format!("seat evicted: {agent}"),
+        );
+    }
+    Ok(())
+}
+
+/// **The kill switch (QR-B-020 / `04_HIC_MODEL` §5).** Remove one agent from a
+/// room immediately and drop its seat if it now belongs to no room — which tears
+/// down that agent's relay session and MLS membership so it stops receiving and
+/// decrypting the room's traffic at once. Unlike `rooms_leave` it targets a single
+/// agent, so a compromised agent can be pulled without closing the room on
+/// everyone else. The operator's own seat cannot be evicted this way.
+#[tauri::command]
+pub async fn rooms_evict(
+    state: tauri::State<'_, RoomsState>,
+    room: String,
+    agent: String,
+) -> Result<(), String> {
+    let mut rooms = state.0.lock().await;
+    if rooms.seats.get(&agent).map(|s| s.kind) == Some(SeatKind::Human) {
+        return Err(format!(
+            "{agent} is the operator's own seat — evict targets agent seats, not the human"
+        ));
+    }
+    let rec = rooms
+        .rooms
+        .iter_mut()
+        .find(|r| hex_gid(&r.id) == room)
+        .ok_or_else(|| format!("no room {room} in this session"))?;
+    let before = rec.seats.len();
+    rec.seats.retain(|s| s != &agent);
+    if rec.seats.len() == before {
+        return Err(format!("{agent} holds no seat in room {room}"));
+    }
+    let evicted = rooms.prune_orphan_agent_seats();
+    rooms.push_event(
+        &room,
+        "system",
+        "operator",
+        true,
+        format!("agent evicted: {agent}"),
+    );
+    if !evicted.iter().any(|a| a == &agent) {
+        // Still seated in another room — record that the removal was room-scoped.
+        rooms.push_event(
+            &room,
+            "system",
+            "operator",
+            true,
+            format!("{agent} removed from this room; still seated elsewhere"),
+        );
+    }
     Ok(())
 }
 
@@ -871,6 +987,46 @@ pub async fn rooms_leave(state: tauri::State<'_, RoomsState>, room: String) -> R
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    fn room(seats: &[&str]) -> RoomRecord {
+        RoomRecord {
+            id: GroupId([0u8; 32]),
+            name: "r".into(),
+            classification: "CUI".into(),
+            seats: seats.iter().map(|s| s.to_string()).collect(),
+            opened_at_ms: 0,
+        }
+    }
+
+    #[test]
+    fn an_agent_seat_in_no_live_room_is_evicted_but_the_operator_and_shared_agents_stay() {
+        // QR-B-020 tripwire for the eviction rule. After the only room holding
+        // `codex` is closed, `codex`'s seat is orphaned and must be dropped
+        // (tearing down its relay session and MLS membership). RED before the fix:
+        // `rooms_leave` retained the room list but never pruned `seats`, so the
+        // agent's authenticated session survived and `rooms_events` kept draining
+        // and decrypting for it.
+        let kinds: HashMap<String, SeatKind> = [
+            ("operator".to_string(), SeatKind::Human),
+            ("codex".to_string(), SeatKind::Agent),
+            ("claude".to_string(), SeatKind::Agent),
+        ]
+        .into_iter()
+        .collect();
+
+        // `codex` was only ever in the now-closed room; `claude` is still in a
+        // live room. The operator seat is human and is never pruned.
+        let live = vec![room(&["operator", "claude"])];
+        let mut orphans = orphaned_agent_seats(&live, &kinds);
+        orphans.sort();
+        assert_eq!(orphans, vec!["codex".to_string()]);
+
+        // With no live rooms at all, every AGENT seat is orphaned — the operator's
+        // human seat never is.
+        let mut all_agents = orphaned_agent_seats(&[], &kinds);
+        all_agents.sort();
+        assert_eq!(all_agents, vec!["claude".to_string(), "codex".to_string()]);
+    }
 
     #[test]
     fn the_siwe_domain_is_derived_from_the_endpoint_not_configured_twice() {
