@@ -28,12 +28,19 @@
 //! recomputed hash against the stored one, so an edited, reordered, or deleted
 //! record fails the load loudly instead of being served as evidence.
 //!
-//! What this does NOT defend against: someone who rewrites the whole file
-//! consistently, or truncates its tail, since the file attests only to itself.
-//! Only the on-chain Merkle anchor (QRM-S6) closes that, and until it lands the
-//! at-rest guarantee is "detects corruption and naive tampering", not
-//! "tamper-proof". Saying otherwise would be the kind of claim this product
-//! exists to make unnecessary.
+//! Tail truncation and whole-log deletion are a special case the replay cannot
+//! catch on its own — a prefix of a hash chain is itself a valid hash chain. A
+//! monotonically increasing committed-record count is persisted beside the log
+//! (`chain.count`) and checked on load: a chain shorter than the last count, or a
+//! log that has vanished while the count says records existed, fails loudly
+//! instead of reading back as "clean" or "empty" (QR-B-004).
+//!
+//! What this STILL does not defend against: an attacker with write access who
+//! rewrites the whole `chain.jsonl` consistently AND lowers `chain.count` to
+//! match. Only the on-chain Merkle anchor (QRM-S6) closes that last gap, and
+//! until it lands the at-rest guarantee is "detects corruption, naive tampering,
+//! and truncation", not "tamper-proof". Saying otherwise would be the kind of
+//! claim this product exists to make unnecessary.
 //!
 //! ## Durability
 //!
@@ -46,6 +53,29 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+
+/// Tighten a just-created evidence file to owner-only (0600), mirroring
+/// `BridgeToken::write_to` (QR-B-007). The evidence chain, grants, charges,
+/// pending escalations and meetings all name principals, budgets and the
+/// governed-action history — no other local user has business reading them. A
+/// no-op off unix; best-effort (a perms failure must not lose the write itself).
+#[cfg(unix)]
+fn harden_file(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+}
+#[cfg(not(unix))]
+fn harden_file(_path: &Path) {}
+
+/// Tighten an evidence directory to owner-only (0700), so its listing does not
+/// leak tenant existence to other local users (QR-B-007).
+#[cfg(unix)]
+fn harden_dir(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o700));
+}
+#[cfg(not(unix))]
+fn harden_dir(_path: &Path) {}
 
 use quorum_audit::{DecisionRecord, HashChain, HicLevel, Verdict};
 use quorum_meetings::{Attendee, Dissent, Meeting, MeetingState, MinuteDecision, Template};
@@ -162,6 +192,11 @@ pub enum StoreError {
     /// The stored chain did not replay to the hashes it claims. Naming the line
     /// makes it actionable instead of a shrug.
     Corrupt { line: usize, detail: String },
+    /// The chain replayed cleanly but is SHORTER than the record count last
+    /// committed for this tenant — records were removed from the tail (or the
+    /// whole log deleted). A prefix of a hash chain is itself a valid hash chain,
+    /// so this is the one tampering the replay cannot catch on its own (QR-B-004).
+    Truncated { recorded: usize, found: usize },
 }
 
 impl std::fmt::Display for StoreError {
@@ -172,6 +207,11 @@ impl std::fmt::Display for StoreError {
                 f,
                 "evidence chain failed to verify at record {line}: {detail} — \
                  refusing to serve this tenant's ledger"
+            ),
+            Self::Truncated { recorded, found } => write!(
+                f,
+                "evidence chain is truncated: {recorded} record(s) were committed but only \
+                 {found} remain on disk — refusing to serve a ledger records were removed from"
             ),
         }
     }
@@ -404,6 +444,7 @@ impl EvidenceStore {
     /// Open (creating if needed) the store rooted at `root`.
     pub fn open(root: PathBuf) -> Result<Self, StoreError> {
         fs::create_dir_all(&root)?;
+        harden_dir(&root);
         Ok(Self { root })
     }
 
@@ -417,6 +458,12 @@ impl EvidenceStore {
     fn ensure_tenant_dir(&self, tenant: &str) -> Result<PathBuf, StoreError> {
         let dir = self.tenant_dir(tenant);
         fs::create_dir_all(&dir)?;
+        // The parent `tenants/` dir and this tenant dir are owner-only: a
+        // directory listing must not leak which tenants exist (QR-B-007).
+        if let Some(parent) = dir.parent() {
+            harden_dir(parent);
+        }
+        harden_dir(&dir);
         // Record which tenant this hashed directory belongs to, so the store is
         // readable by a human (and by a future migration) without the id table.
         let marker = dir.join("tenant.json");
@@ -492,14 +539,51 @@ impl EvidenceStore {
             chain_hash: hex_encode(&chain_hash),
         };
         let line = serde_json::to_string(&stored).map_err(|e| StoreError::Io(e.to_string()))?;
-        let mut f = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(dir.join("chain.jsonl"))?;
+        let chain_path = dir.join("chain.jsonl");
+        let mut opts = OpenOptions::new();
+        opts.create(true).append(true);
+        // Create owner-only from the first byte, mirroring `BridgeToken::write_to`
+        // (QR-B-007). `.mode()` only applies on creation, so also harden an
+        // already-existing log below.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts.open(&chain_path)?;
+        harden_file(&chain_path);
         f.write_all(line.as_bytes())?;
         f.write_all(b"\n")?;
         f.sync_all()?;
+
+        // QR-B-004: the replay-on-load catches edits, reorders and insertions but
+        // is structurally blind to TRUNCATION — a prefix of a hash chain is itself
+        // a valid hash chain. Persist a monotonically increasing committed-record
+        // count (durably, AFTER the record itself is fsynced, so the count is
+        // never ahead of the log) and refuse on load a chain shorter than it. A
+        // crash between the two leaves the count one behind, which load tolerates;
+        // it never leaves the count ahead of a record that was lost.
+        let count = self.read_record_count(tenant) + 1;
+        self.write_record_count(&dir, count)?;
         Ok(())
+    }
+
+    /// The count file path for a tenant directory.
+    fn count_path(dir: &Path) -> PathBuf {
+        dir.join("chain.count")
+    }
+
+    /// The last committed record count for a tenant, or 0 if none is recorded.
+    fn read_record_count(&self, tenant: &str) -> usize {
+        fs::read_to_string(Self::count_path(&self.tenant_dir(tenant)))
+            .ok()
+            .and_then(|s| s.trim().parse::<usize>().ok())
+            .unwrap_or(0)
+    }
+
+    /// Durably write the committed record count for a tenant (owner-only).
+    fn write_record_count(&self, dir: &Path, count: usize) -> Result<(), StoreError> {
+        write_atomic(&Self::count_path(dir), count.to_string().as_bytes())
     }
 
     /// Rebuild a tenant's chain from disk, re-proving every link on the way.
@@ -508,7 +592,14 @@ impl EvidenceStore {
     pub fn load_chain(&self, tenant: &TenantId) -> Result<HashChain, StoreError> {
         let mut chain = HashChain::new(tenant.clone());
         let path = self.tenant_dir(tenant.as_str()).join("chain.jsonl");
+        // QR-B-004: how many records were committed. Read it BEFORE the log, so a
+        // deleted log (open fails) is still checked against a non-zero count.
+        let recorded = self.read_record_count(tenant.as_str());
         let Ok(file) = File::open(&path) else {
+            if recorded > 0 {
+                // The count says records existed; the log is gone entirely.
+                return Err(StoreError::Truncated { recorded, found: 0 });
+            }
             return Ok(chain); // no log yet
         };
         for (i, line) in BufReader::new(file).lines().enumerate() {
@@ -555,6 +646,14 @@ impl EvidenceStore {
                     ),
                 });
             }
+        }
+        // QR-B-004: a clean replay of a truncated prefix still verifies. Compare
+        // the record count against the last committed count and refuse a short
+        // chain. `len()` counts appended records (genesis is the seed head, not an
+        // entry), so it equals the committed count when the log is intact.
+        let found = chain.len();
+        if recorded > found {
+            return Err(StoreError::Truncated { recorded, found });
         }
         Ok(chain)
     }
@@ -977,10 +1076,14 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), StoreError> {
     let tmp = path.with_extension("tmp");
     {
         let mut f = File::create(&tmp)?;
+        // Owner-only BEFORE any bytes land, so there is no world-readable window
+        // (QR-B-007) — the same discipline `BridgeToken::write_to` uses.
+        harden_file(&tmp);
         f.write_all(bytes)?;
         f.sync_all()?;
     }
     fs::rename(&tmp, path)?;
+    harden_file(path);
     if let Some(dir) = path.parent() {
         // Durability of the rename itself. Best-effort: not every platform
         // permits opening a directory, and failing here would be worse than the
@@ -1104,6 +1207,89 @@ mod tests {
         assert!(
             matches!(store.load_chain(&t("bca")), Err(StoreError::Corrupt { .. })),
             "deleting evidence must not load cleanly"
+        );
+    }
+
+    #[test]
+    fn truncating_the_chain_tail_is_detected_on_load() {
+        // QR-B-004 tripwire. Dropping the LAST record leaves a valid hash-chain
+        // prefix — the replay verifies clean. RED before the fix: load_chain
+        // returned Ok. GREEN: the committed-count file catches the short chain.
+        let root = TempRoot::new();
+        let store = root.store();
+        let mut chain = HashChain::new(t("bca"));
+        append(&store, &mut chain, "bca", rec("grant.issue", 1000));
+        append(&store, &mut chain, "bca", rec("protocol.deploy", 2000));
+        append(&store, &mut chain, "bca", rec("spend", 3000));
+
+        // Drop the last line — the two most incriminating records stay verifiable.
+        let path = store.tenant_dir("bca").join("chain.jsonl");
+        let raw = fs::read_to_string(&path).unwrap();
+        let kept: Vec<&str> = raw.lines().take(2).collect();
+        fs::write(&path, kept.join("\n") + "\n").unwrap();
+
+        match store.load_chain(&t("bca")) {
+            Err(StoreError::Truncated { recorded, found }) => {
+                assert_eq!(recorded, 3);
+                assert_eq!(found, 2);
+            }
+            other => panic!("tail truncation must be caught, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deleting_the_whole_chain_is_detected_on_load() {
+        // QR-B-004: removing the entire log (not just editing it) must not read
+        // back as "a tenant with no evidence".
+        let root = TempRoot::new();
+        let store = root.store();
+        let mut chain = HashChain::new(t("bca"));
+        append(&store, &mut chain, "bca", rec("grant.issue", 1000));
+        append(&store, &mut chain, "bca", rec("spend", 2000));
+
+        let path = store.tenant_dir("bca").join("chain.jsonl");
+        fs::remove_file(&path).unwrap();
+
+        match store.load_chain(&t("bca")) {
+            Err(StoreError::Truncated { recorded, found }) => {
+                assert_eq!(recorded, 2);
+                assert_eq!(found, 0);
+            }
+            other => panic!("a deleted log must not load as empty, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn evidence_files_are_owner_only() {
+        // QR-B-007 tripwire. The bridge token is 0600; the evidence beside it —
+        // the decision chain, grants, the escalation queue — was world-readable
+        // (0644). Every store-created file must be 0600 and every dir 0700.
+        use std::os::unix::fs::PermissionsExt;
+        let root = TempRoot::new();
+        let store = root.store();
+        let mut chain = HashChain::new(t("bca"));
+        append(&store, &mut chain, "bca", rec("grant.issue", 1000));
+        store
+            .save_grants("bca", &[])
+            .expect("grants persist for the perms check");
+
+        let dir = store.tenant_dir("bca");
+        for f in ["chain.jsonl", "chain.count", "grants.json", "tenant.json"] {
+            let p = dir.join(f);
+            let mode = fs::metadata(&p).unwrap().permissions().mode();
+            assert_eq!(
+                mode & 0o077,
+                0,
+                "{f} is group/other-accessible (mode {:o}) — evidence must be owner-only",
+                mode
+            );
+        }
+        let dmode = fs::metadata(&dir).unwrap().permissions().mode();
+        assert_eq!(
+            dmode & 0o077,
+            0,
+            "the tenant dir is group/other-accessible (mode {dmode:o})"
         );
     }
 

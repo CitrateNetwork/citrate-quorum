@@ -14,8 +14,9 @@
 //! - **The budget** — a governed action charges its grant (`max(1, cost)`), and
 //!   `action_reject` refunds exactly that when the human refuses, recording the
 //!   refusal as its own `Rejected` decision.
-//! - **Session resolution** (`session_resolve`) — `quorum_session` /
-//!   `quorum_clearance` producing the fail-closed `EffectiveGrant`.
+//! - **Session resolution** — the pure `quorum_session` / `quorum_clearance`
+//!   `EffectiveGrant` join exists and is tested, but is NOT exposed as a command
+//!   until it is wired behind the authenticated session (QR-B-006).
 //!
 //! The pure state logic lives on [`QuorumBackend`] so it is unit-tested without a
 //! Tauri runtime; the `#[tauri::command]` fns are thin locks over it. Nothing is
@@ -44,7 +45,6 @@ use tauri::State;
 
 use quorum_audit::{DecisionRecord, HashChain, HicLevel, Verdict};
 use quorum_policy::{evaluate, Action, CapabilityGrant, VoteAllowance};
-use quorum_session::{ClearanceInputs, Entitlement};
 use quorum_tenancy::TenantId;
 
 // The string codec (verdict/HIC/classification/hex) lives in `store`, which
@@ -480,12 +480,6 @@ pub struct MeetingDetailDto {
     pub dissent: Vec<DissentDto>,
 }
 
-#[derive(Serialize)]
-pub struct EffectiveGrantDto {
-    pub classification_ceiling: String,
-    pub foreign_national: bool,
-}
-
 // ---- the state ------------------------------------------------------
 
 /// Backend state: per-tenant evidence chains + the live grants and allowances,
@@ -763,6 +757,35 @@ impl QuorumBackend {
 
     pub fn operator(&self) -> Option<String> {
         self.operator.clone()
+    }
+
+    /// QR-B-003 / CIT-Q-002: the accountable human on an HIC-1 approval or a
+    /// ratification is the single most load-bearing field of the evidence — it is
+    /// what an auditor walks the act back to. It used to be free text taken
+    /// straight from the webview and never checked against anything, so a frontend
+    /// defect or a curious operator could mint an `Approved` / `meeting.ratify`
+    /// record naming *any* human with no signature behind it.
+    ///
+    /// Until the approval is bound to a vault signature (the real fix, tracked as
+    /// an owner item — it needs `ceremony::sign_approve` over a `CeremonyId`), the
+    /// interim guard the finding asks for is enforced here: once an operator has
+    /// been established for this installation, an approval/ratification may only be
+    /// attributed to *them*. Attribution is no longer self-asserted. Before an
+    /// operator is named (onboarding has not run), attribution is unconstrained —
+    /// there is nothing yet to bind it to, and the first act cannot forge a name
+    /// the install never established.
+    fn bind_to_operator(&self, who: &str) -> Result<(), String> {
+        if let Some(op) = self.operator.as_deref() {
+            if who.trim() != op.trim() {
+                return Err(format!(
+                    "attribution '{}' does not match the established operator — an HIC-1 \
+                     approval names the accountable human and cannot be self-asserted to \
+                     someone else",
+                    who.trim()
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// The active tenant scope, if one has been established.
@@ -1062,6 +1085,8 @@ impl QuorumBackend {
         if approver.trim().is_empty() {
             return Err("an approval must name the human who gave it".to_string());
         }
+        // QR-B-003 / CIT-Q-002: the approver is not a name the caller may choose.
+        self.bind_to_operator(approver)?;
         let tenant_key = tenant.as_str().to_string();
 
         // Only a live escalation can be approved. Approving something that was
@@ -1181,6 +1206,18 @@ impl QuorumBackend {
             workspace,
         } = input;
         self.check_not_degraded()?;
+        // QR-B-017: a quorum rule of zero humans makes an EMPTY meeting quorate —
+        // `is_quorate()` becomes `attested_humans() >= 0`, always true — so a
+        // meeting attended by nobody could close, ratify, and register on chain as
+        // a ratified quorate meeting. A governance quorum of zero is meaningless;
+        // reject it at the point the rule enters from the wire.
+        if min_humans == 0 {
+            return Err(
+                "a meeting's quorum (min_humans) must be at least 1 — an empty meeting is \
+                 never quorate"
+                    .to_string(),
+            );
+        }
         let class = classification_from_str(classification)
             .ok_or_else(|| format!("unknown classification: {classification}"))?;
         let key = tenant.as_str().to_string();
@@ -1358,6 +1395,10 @@ impl QuorumBackend {
         now_ms: i64,
     ) -> Result<DecisionDto, String> {
         self.check_not_degraded()?;
+        // QR-B-003 / CIT-Q-002: a ratification names the accountable human and is
+        // stamped into the evidence chain; it cannot be attributed to a name the
+        // installation never established.
+        self.bind_to_operator(by)?;
         let key = tenant.as_str().to_string();
         let expect = hex32(expect_hash);
 
@@ -2745,38 +2786,23 @@ pub fn vote_cast(
     b.cast_vote(&tenant, &allowance_id, &proposal_class, weight, now_ms())
 }
 
-/// Resolve a login's [`EffectiveGrant`] from the entitlement (commercial axis)
-/// and the on-chain clearance inputs (enterprise axis). The frontend passes the
-/// entitlement (from the kit's OIDC `AuthStatus`) and the resolved clearance
-/// inputs; the fail-closed least-of-ceilings join is computed here. The live
-/// chain-read variant (`ClearanceReader::resolve`) is wired separately once an
-/// RPC endpoint + the frozen address book are configured — until then an
-/// unreadable chain fails closed to Public, which this honours.
-#[tauri::command]
-pub fn session_resolve(
-    tier: Option<String>,
-    expires_at_ms: Option<i64>,
-    on_chain_clearance: Option<String>,
-    foreign_national: Option<bool>,
-    tenant_ceiling: Option<String>,
-) -> Result<EffectiveGrantDto, String> {
-    let entitlement = Entitlement {
-        tier,
-        expires_at_ms,
-    };
-    let inputs = ClearanceInputs {
-        on_chain_clearance: on_chain_clearance
-            .as_deref()
-            .and_then(classification_from_str),
-        foreign_national,
-        tenant_ceiling: tenant_ceiling.as_deref().and_then(classification_from_str),
-    };
-    let grant = quorum_session::resolve_effective_grant(&entitlement, &inputs, now_ms());
-    Ok(EffectiveGrantDto {
-        classification_ceiling: classification_str(grant.classification_ceiling).to_string(),
-        foreign_national: grant.foreign_national,
-    })
-}
+// QR-B-006: the `session_resolve` Tauri command was REMOVED here.
+//
+// It was registered in the invoke handler but had no call site anywhere in the
+// frontend, and it computed an authorization answer — a classification ceiling —
+// purely from caller-supplied inputs (`tier`, `on_chain_clearance`,
+// `foreign_national`, `tenant_ceiling`), verifying no OIDC token, reading no
+// chain, consulting no tenant node. A registered command that returns an
+// authorization decision derived from unverified arguments is a loaded gun on the
+// IPC surface: a webview compromise could ask for, and be handed, an ITAR ceiling.
+//
+// The pure decision function (`quorum_session::resolve_effective_grant`) stays —
+// it is correct and well tested — but it is no longer exposed as a command until
+// it is wired behind the authenticated session and the on-chain
+// `ClearanceReader::resolve`, so the resolved `EffectiveGrant` is derived from
+// verified identity rather than from what the caller claims. Marking it not-yet-
+// wired, in the honest style the rest of the repo uses, rather than shipping a
+// gate that trusts its own inputs.
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -4215,6 +4241,30 @@ mod tests {
     }
 
     #[test]
+    fn scheduling_a_meeting_with_a_zero_quorum_is_refused() {
+        // QR-B-017 tripwire. RED before: min_humans came straight off the wire
+        // and 0 made an empty meeting quorate. GREEN: the schedule call refuses it.
+        let mut b = QuorumBackend::default();
+        let tenant = t("acme");
+        b.set_active_tenant("acme").expect("scope");
+        let err = b
+            .schedule_meeting(
+                &tenant,
+                ScheduleMeeting {
+                    id: "m-ghost",
+                    name: "Ghost Meeting",
+                    when: "2026-07-23T09:00:00Z",
+                    template: "Standup",
+                    min_humans: 0,
+                    classification: "Proprietary",
+                    workspace: None,
+                },
+            )
+            .expect_err("a zero-human quorum must be refused at schedule time");
+        assert!(err.contains("at least 1"), "got: {err}");
+    }
+
+    #[test]
     fn ratifying_records_a_hic1_decision_naming_the_human() {
         let (mut b, tenant) = backend_with_closed_meeting();
         let hash = b.meeting_content_hash("acme", "m-1").expect("hash");
@@ -4231,6 +4281,53 @@ mod tests {
         let detail = b.meeting_detail("acme", "m-1").expect("detail");
         assert!(detail.ratified);
         assert_eq!(detail.ratified_by.as_deref(), Some("R. Ortiz"));
+    }
+
+    #[test]
+    fn an_approval_cannot_be_attributed_to_a_name_that_is_not_the_operator() {
+        // QR-B-003 / CIT-Q-002 tripwire. RED before the fix: the approver was a
+        // free string never checked against anything, so any name minted an
+        // `Approved` evidence record. GREEN after: once an operator is
+        // established, only they can be named as the accountable human.
+        let mut b = QuorumBackend::default();
+        b.set_operator("R. Ortiz").expect("operator");
+        b.issue_grant(&grant("sbt-41", &["spend"], "CUI", 1000, "2"), &t("bca"), 0)
+            .expect("grant");
+        let d = b
+            .evaluate_and_record(&escalating_action(), &t("bca"), 1000)
+            .expect("evaluate");
+        assert_eq!(d.verdict, "require-approval");
+
+        // An impostor name is refused — attribution is not self-asserted.
+        let err = b
+            .approve_decision(&t("bca"), d.decision_id, "M. Impostor", 2000)
+            .expect_err("a non-operator approver must be refused");
+        assert!(
+            err.contains("does not match the established operator"),
+            "got: {err}"
+        );
+
+        // The genuine operator still approves.
+        b.approve_decision(&t("bca"), d.decision_id, "R. Ortiz", 2000)
+            .expect("the operator approves");
+    }
+
+    #[test]
+    fn a_ratification_cannot_name_a_human_who_is_not_the_operator() {
+        // QR-B-003 / CIT-Q-002 tripwire on the ratify leg.
+        let (mut b, tenant) = backend_with_closed_meeting();
+        b.set_operator("R. Ortiz").expect("operator");
+        let hash = b.meeting_content_hash("acme", "m-1").expect("hash");
+        let err = b
+            .ratify_meeting(&tenant, "m-1", "M. Impostor", &hash, 1_753_460_000)
+            .expect_err("a ratifier who is not the operator must be refused");
+        assert!(
+            err.contains("does not match the established operator"),
+            "got: {err}"
+        );
+        // The operator ratifies.
+        b.ratify_meeting(&tenant, "m-1", "R. Ortiz", &hash, 1_753_460_000)
+            .expect("the operator ratifies");
     }
 
     #[test]

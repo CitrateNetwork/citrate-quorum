@@ -576,27 +576,11 @@ export function voteCast(allowanceId: string, proposalClass: string, weight: num
 
 // ---- session resolution --------------------------------------------
 
-export interface EffectiveGrantResult {
-  classification_ceiling: Classification;
-  foreign_national: boolean;
-}
-/** Resolve the fail-closed least-of-ceilings grant from the commercial tier +
- *  on-chain clearance + tenant classification_max. */
-export function sessionResolve(args: {
-  tier?: string | null;
-  expiresAtMs?: number | null;
-  onChainClearance?: Classification | null;
-  foreignNational?: boolean | null;
-  tenantCeiling?: Classification | null;
-}): Promise<EffectiveGrantResult> {
-  return invoke<EffectiveGrantResult>("session_resolve", {
-    tier: args.tier ?? null,
-    expiresAtMs: args.expiresAtMs ?? null,
-    onChainClearance: args.onChainClearance ?? null,
-    foreignNational: args.foreignNational ?? null,
-    tenantCeiling: args.tenantCeiling ?? null,
-  });
-}
+// sessionResolve / session_resolve REMOVED (QR-B-006): the backend command it
+// wrapped returned a classification ceiling computed purely from these
+// caller-supplied inputs, verified nothing, and had no call site. It is not
+// re-exposed until it is wired behind the authenticated session and the on-chain
+// ClearanceReader, so the resolved grant derives from verified identity.
 
 // ---- rooms (QRM-S3) -------------------------------------------------
 //

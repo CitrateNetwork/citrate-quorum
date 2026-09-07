@@ -119,6 +119,26 @@ run "rbac bindings drift" "chain repo not alongside, or no python runner" \
     "[ -f '$GEN' ] && { [ -d '$ROOT/../citrate-chain/contracts/out' ] || [ -n \"\${CITRATE_CHAIN_DIR:-}\" ]; }" \
     "${PYRUN[@]}" "$GEN" --check
 
+# QR-B-005: this T1 repo's README and CLAUDE.md name `04_HIC_MODEL.md` as the
+# normative, federation-wide control model and `09_DECISIONS_LOCKED.md` as
+# authoritative — both living in citrate-federation's planset, NOT copied here
+# ("Link, don't copy", CLAUDE.md rule 10). If the linked planset is missing, the
+# standard the code claims to enforce is unreachable from the federation's current
+# state, and the graded control model silently becomes whatever the code happens
+# to do. Skips honestly when the federation repo is not checked out alongside (the
+# same discipline as the rbac-drift row); FAILS when it IS present but the
+# canonical documents this repo points at do not resolve.
+FED_PLANSET="$ROOT/../citrate-federation/.agentile/planset/2026-07-22-citrate-quorum"
+run "linked planset resolves" "citrate-federation not checked out alongside" \
+    "[ -d '$ROOT/../citrate-federation' ]" \
+    bash -c '
+      fed="'"$FED_PLANSET"'"
+      miss=0
+      for d in 04_HIC_MODEL.md 09_DECISIONS_LOCKED.md 10_DESIGN_BRIEF.md; do
+        [ -f "$fed/$d" ] || { echo "missing canonical doc this repo links: $fed/$d"; miss=1; }
+      done
+      exit $miss'
+
 # ---- agentile ratchets ----------------------------------------------------
 echo
 echo "agentile ratchets"
