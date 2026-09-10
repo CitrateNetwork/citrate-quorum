@@ -1,87 +1,103 @@
----
-created: 2026-07-22
-branch: main
-author: Claude Opus 4.8 (1M context), directed by @SaulBuilds
-status: active
-repo: citrate-quorum
-tier: T1
----
-
 # citrate-quorum
 
-> **Governance for agents.** A Tauri desktop application where humans in control
-> (HIC) and heterogeneous AI agents hold governed meetings, run the Agentile
-> loop, and deploy plain-English governance protocols as CREATE2 smart contracts
-> on Citrate — with every agent action gated, traced, signed, and anchored.
+> A Tauri desktop app for enterprise agent governance — humans-in-control and AI agents hold auditable meetings, and plain-English governance protocols become on-chain contracts.
 
-**Tier:** T1 — money, keys, identity, governance, binary distribution. Full audit
-before release.
+## What it is
 
-## Honest current status (2026-08-01)
+Citrate Quorum is a governed workspace where humans-in-control (HIC) and heterogeneous AI agents run auditable meetings, execute the "Agentile" loop, and turn plain-English governance protocols into CREATE2 smart contracts deployed on the Citrate chain (**40204**). Every agent action is policy-gated in an adapter before execution, recorded with principal/grant/HIC level, signed only through a single human signature ceremony, and anchored on chain — no agent, sidecar, or remote service ever holds a key.
 
-**QRM-S0 through S7 are merged.** The previous version of this section said "this
-repo is a scaffold, no application code exists yet" and was left untouched from
-2026-07-23 through seven sprints — understating the repo rather than overstating it,
-but wrong either way, and wrong in the one place a newcomer reads first.
+Meetings run as real MLS groups over the server-blind [citrate-comms](https://github.com/CitrateNetwork/citrate-comms) relay, and safety-critical primitives are shared (not forked) from [citrate-core](https://github.com/CitrateNetwork/citrate-core)'s kit. It is multi-tenant from day one and designed to generate SOC 2 Type 2 control evidence in the customer's own environment. Concept overview: https://docs.citrate.ai/apps.
 
-Verified by running the gate, not by reading sprint files: **384 Rust tests, 51
-frontend tests, `scripts/check.sh` 21 pass / 0 fail / 1 skip.**
+## Prerequisites
 
-| Real and exercised | Not yet |
-|---|---|
-| 14 surfaces (Rooms, Meetings, Governance, Agents, Ledger, Wallet, Node, Calendar, Repos, Journal, Settings, Dashboard, …) | **No release. `version` is `0.0.0`; no tag, no signed installer** (QRM-S9, @rule8) |
-| 9 backend crates: tenancy, license, rbac, session, clearance, audit, policy, meetings, adapter | **Auto-updater inert by design** until S9 |
-| The shared **SignatureCeremony** from `citrate-core-kit` | `citrate-core-kit` is still a **local path dep**, not a pinned git dep (owner infra: deploy key) |
-| The **S7 authoring pipeline**: INGEST → INTERVIEW → DRAFT SPEC → COMPILE → SIMULATE → CEREMONY → DEPLOY → BIND | Template registration needs a real `auditCID`; the registry rejects an empty one by design |
-| Governance contracts live on 40204 and read by the app; the vendored address book is byte-identical to canonical | Hosted CI — Actions is down org-wide, so `scripts/check.sh` is the gate |
+```bash
+# Rust stable, rust-version >= 1.80 (rust-toolchain.toml auto-selects stable + rustfmt/clippy)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup component add rustfmt clippy
 
-**Anchoring is back.** The 2026-07-27 chain handoff listed Quorum anchoring as broken
-and told this team to expect two failing address tests. Both `AnchorRegistry` and
-`MeetingRegistry` were redeployed later that day, the vendored book matches canonical,
-and those tests pass. That handoff is superseded — read its header box, not its §2.
+# Node.js 18/20+ and npm (npm is the pinned package manager)
 
-Nothing fabricates data (Rule 1).
+# Linux Tauri v2 system deps:
+sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libgtk-3-dev
+# scripts/run-dev.sh additionally uses: dbus-run-session gnome-keyring-daemon
+```
 
-## Canonical truth
+A full local build needs sibling checkouts of [citrate-core](https://github.com/CitrateNetwork/citrate-core) (`../../citrate-core/kit`) and [citrate-comms](https://github.com/CitrateNetwork/citrate-comms) (`../../citrate-comms`) — both are path dependencies.
 
-The design lives in the **federation planset**, not here:
+## Build from source
 
-`citrate-federation/.agentile/planset/2026-07-22-citrate-quorum/`
+```bash
+git clone https://github.com/CitrateNetwork/citrate-quorum
+cd citrate-quorum
 
-| Doc | What |
-|---|---|
-| `00_OVERVIEW.md` | vision, decisions D1–D8, reuse map |
-| `01_RESEARCH_BASELINE.md` | what already exists across the federation, file-cited |
-| `02_ARCHITECTURE.md` | process topology, rooms, agent adapters, authoring pipeline |
-| `03_GOVERNANCE_CONTRACTS.md` | factory, policy binding, vote allowance, sortition, meetings |
-| `04_HIC_MODEL.md` | **Human In Control** — normative, federation-wide |
-| `05_SCOPE_AND_SPRINTS.md` | QRM-S0…S9, risks R1–R14 |
-| `06_COMPLIANCE_SOC2.md` | control mapping, evidence pack |
-| `07_OPEN_QUESTIONS.md` | the 20 questions (answered) |
-| `08_FEATURES_YOU_DIDNT_ASK_FOR.md` | gaps ranked for triage |
-| **`09_DECISIONS_LOCKED.md`** | **the answers + deltas — authoritative** |
-| `PROMPT_LOG.md` | append-only ledger of the human prompts driving this build |
+npm install
+npm run tauri build            # or: npx tauri build
+```
 
-Read `09` before `00`–`08`; where they conflict, `09` wins.
+Bundles land under `target/release/bundle/<format>/` — Linux `.deb`/`.rpm`/`.AppImage`, Windows NSIS, macOS `.dmg`/`.app` (app identifier `ai.citrate.quorum`). Builds are currently **unsigned** (code-signing/updater deferred).
 
-## Relationship to citrate-core
+The CI gate is a local script (org GitHub Actions are down): `scripts/check.sh` runs cargo fmt/clippy/test/audit + npm typecheck/vitest/build.
 
-Quorum is **not a fork**. The safety-critical code — signature ceremony, key
-custody, OIDC, the sidecar supervisor — is extracted into a shared
-`citrate-core-kit` that both citrate-core and citrate-quorum depend on. Changes
-to that code land **upstream in the kit first**, never in a divergent copy.
-See `.agentile/sprints/active/sprint-qrm-s1/SCOPE.md`.
+```bash
+npm test           # vitest (frontend)
+scripts/check.sh   # full gate: Rust + frontend
+```
 
-## Non-negotiables
+## Run locally
 
-See `CLAUDE.md`. The three that matter most:
+```bash
+npm run tauri dev
+```
 
-1. **Every signature goes through the SignatureCeremony.** No agent, sidecar, or
-   remote service ever holds a key or produces a signature.
-2. **No mocks.** Every surface states what is real.
-3. **The HIC model is enforced in code, not in prompts.** A prompt asking an
-   agent to seek permission is not a control and is never counted as one.
+- Dev server runs on **`http://localhost:1420`** (fixed, `strictPort`; HMR on 1421 with `TAURI_DEV_HOST`).
+- Frontend-only: `npm run dev`. Typecheck: `npm run typecheck`.
+- To run the built release binary against an isolated keyring/dbus session: `scripts/run-dev.sh` (needs `dbus-run-session` + `gnome-keyring-daemon`).
+
+Quorum is a desktop app (no HTTP server of its own). It's up when the window opens and the Node surface shows a live block height from chain 40204.
+
+## Connect it locally
+
+Quorum reads chain state live and holds meetings over the comms relay. By default it points at the public testnet (`rpc.citrate.ai`, `comms.citrate.ai`, `auth.citrate.ai`). To wire it to a **local** stack:
+
+1. **citrate-comms relay (required for meetings)** — meetings are real MLS groups; the app dials the relay over `wss://`. Run a local [citrate-comms](https://github.com/CitrateNetwork/citrate-comms) relay, then point Quorum at it:
+
+   ```bash
+   export QUORUM_RELAY_URL=wss://localhost:8080     # default: wss://comms.citrate.ai
+   ```
+
+   The relay refuses plaintext `ws://`; use `wss://` even locally.
+
+2. **Chain RPC (chain 40204)** — Node status, wallet balances, ledger, meeting anchoring, and governance deploys all read live RPC. The RPC URL comes from the vendored address book, not an env var; override the whole book to point at a local node from [citrate-chain](https://github.com/CitrateNetwork/citrate-chain):
+
+   ```bash
+   export QUORUM_ADDRESS_BOOK=./local-addresses.json   # {"chainId":40204,"rpcUrl":"http://127.0.0.1:8545",...}
+   ```
+
+3. **Identity / auth** — OIDC RP against [citrate-identity](https://github.com/CitrateNetwork/citrate-identity) at `auth.citrate.ai`. (The Tauri CSP `connect-src` allowlist pins `auth/rpc/comms.citrate.ai`; a local dev build must add local hosts to the allowlist.)
+
+4. **Agent core** — the safety spine (signature ceremony, OS-keyring custody, OIDC, sidecar supervisor) is the shared `citrate-core/kit` path dep — no separate service to run; it's linked in.
+
+For the full multi-repo bring-up see `LOCAL_STACK.md` in [citrate-docs](https://github.com/CitrateNetwork/citrate-docs).
+
+## Configuration
+
+No `.env` file — config is `QUORUM_*` env overrides plus a vendored address book (`src-tauri/src/generated/addresses.json`).
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `QUORUM_RELAY_URL` | `wss://comms.citrate.ai` | citrate-comms MLS relay endpoint |
+| `QUORUM_ADDRESS_BOOK` | vendored `addresses.json` | override the canonical chain address book (chain 40204) |
+| `QUORUM_ADDRESS_BOOK_BFR` | vendored `addresses-bfr.json` | override the governance/RBAC book |
+| `QUORUM_AGENT_ID` / `QUORUM_PRINCIPAL` / `QUORUM_CLASSIFICATION` / `QUORUM_MODEL_ID` | per-adapter defaults | agent-adapter sidecar config |
+
+The vendored book pins `chainId: 40204`, `rpcUrl: https://rpc.citrate.ai`, `explorerUrl: https://explorer.citrate.ai`.
+
+## Links
+
+- Docs: https://docs.citrate.ai/apps
+- Depends on: [citrate-core](https://github.com/CitrateNetwork/citrate-core) (safety kit) · [citrate-comms](https://github.com/CitrateNetwork/citrate-comms) (MLS relay) · [citrate-identity](https://github.com/CitrateNetwork/citrate-identity) (OIDC) · [citrate-chain](https://github.com/CitrateNetwork/citrate-chain) (RPC, chain 40204)
+- Contributing (DCO): CONTRIBUTING.md · Security: SECURITY.md · License: LICENSE
 
 ## License
 
-BUSL-1.1 — see `LICENSE`.
+Source-available (BUSL-1.1) — free for personal/non-commercial use; commercial use requires a Citrate membership. This is **not** an open-source license.
