@@ -1,5 +1,7 @@
 # citrate-quorum
 
+*Part of the **[Citrate Network](https://citrate.ai)** — own the means of computation. · [Docs](https://docs.citrate.ai) · [Run a node](https://citrate.ai/download) · [Contribute → free membership](https://github.com/CitrateNetwork/.github/blob/main/CONTRIBUTING.md)*
+
 > A Tauri desktop app for enterprise agent governance — humans-in-control and AI agents hold auditable meetings, and plain-English governance protocols become on-chain contracts.
 
 ## What it is
