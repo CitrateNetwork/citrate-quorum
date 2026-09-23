@@ -36,5 +36,13 @@ jobs:
               echo "::error file=$f::missing YAML frontmatter (created/branch/author/status)"
               fail=1
             fi
-          done < <(find . -name '*.md' -not -path './node_modules/*' -not -path './.git/*')
+          done < <(find . -name '*.md' -not -path './node_modules/*' -not -path './.git/*' \
+                     -not -name 'README.md' -not -name 'CHANGELOG.md' -not -name 'CONTRIBUTING.md' \
+                     -not -name 'CODE_OF_CONDUCT.md' -not -name 'SECURITY.md' \
+                     -not -name 'PATENTS.md' -not -name 'TRADEMARK.md' -not -name 'LICENSE.md')
+          # Rule 12 governs WORKING docs (sprints/journals/design) — they carry
+          # created/branch/author/status provenance. The conventional root docs
+          # (README + the legal/community boilerplate added at open-sourcing) are
+          # not working docs and must NOT carry sprint frontmatter (it renders as
+          # a table on the public repo homepage). They are excluded here.
           exit $fail
