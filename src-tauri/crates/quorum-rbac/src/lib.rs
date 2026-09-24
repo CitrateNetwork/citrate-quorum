@@ -8,7 +8,7 @@
 //! ## Provenance — read before touching `generated/rbac.rs`
 //! The generated module is produced by `scripts/gen_rbac_bindings.py` from the
 //! chain's compiled ABIs. **It is regenerated fresh; it is never copied from
-//! `citrate-boeing-shell/gui/citrate_rbac_bindings`** — that repo is private and
+//! `citrate-defense_prime-shell/gui/citrate_rbac_bindings`** — that repo is private and
 //! customer-specific to a different account (Q2). A CI drift check
 //! (`--check`) fails the build if the committed output diverges from the ABIs.
 //!

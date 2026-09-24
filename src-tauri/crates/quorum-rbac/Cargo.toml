@@ -1,5 +1,5 @@
 # WP-S1.5 — RBAC contract bindings, generated FRESH from citrate-chain ABIs.
-# Never copied from the private citrate-boeing-shell bindings (Q2).
+# Never copied from the private citrate-defense_prime-shell bindings (Q2).
 [package]
 name = "quorum-rbac"
 version = "0.0.0"

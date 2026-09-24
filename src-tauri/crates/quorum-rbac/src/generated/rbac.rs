@@ -3,7 +3,7 @@
 // Regenerate: scripts/gen_rbac_bindings.py   ·   Verify: --check (CI drift).
 //
 // Generated FRESH from chain ABIs, never copied from the private
-// citrate-boeing-shell rbac bindings (Q2 — different account).
+// citrate-defense_prime-shell rbac bindings (Q2 — different account).
 /// Bindings for `TenantHierarchy.sol` — generated, do not edit by hand.
 pub mod tenanthierarchy {
     /// Solidity contract name.

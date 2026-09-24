@@ -9,7 +9,7 @@
 # alloy in a later sprint. Deterministic, network-free, crypto-free.
 #
 # ⚠️ These bindings are generated FRESH from citrate-chain ABIs. They must NEVER
-# be copied from citrate-boeing-shell/gui/citrate_rbac_bindings — that repo is
+# be copied from citrate-defense_prime-shell/gui/citrate_rbac_bindings — that repo is
 # PRIVATE and customer-specific to a different account (Q2). Prior art only.
 #
 # Usage:
@@ -192,7 +192,7 @@ def render() -> str:
         "// Regenerate: scripts/gen_rbac_bindings.py   ·   Verify: --check (CI drift).",
         "//",
         "// Generated FRESH from chain ABIs, never copied from the private",
-        "// citrate-boeing-shell rbac bindings (Q2 — different account).",
+        "// citrate-defense_prime-shell rbac bindings (Q2 — different account).",
         "",
     ]
     body = [gen_contract(c, contracts_dir) for c in CONTRACTS]
