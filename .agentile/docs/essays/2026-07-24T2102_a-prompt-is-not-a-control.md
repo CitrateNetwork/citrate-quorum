@@ -27,7 +27,7 @@ hold keys, and every tool call is gated by code the agent does not run.
 
 An agent in this system cannot sign, because it never possesses anything to sign
 with. The custody vault and every signature live in citrate-quorum, behind the
-SignatureCeremony — the single human-in-the-loop signing path, shared with
+SignatureCeremony — the single HIC signing path, shared with
 citrate-core through `citrate-core-kit`. The gated signers are `pub(crate)` to
 the kit crate, and quorum is *outside* that crate, so quorum code — including any
 agent-facing code — physically cannot name a signer. This is not enforced by a
