@@ -46,3 +46,8 @@ jobs:
           # not working docs and must NOT carry sprint frontmatter (it renders as
           # a table on the public repo homepage). They are excluded here.
           exit $fail
+
+      - name: HIC terminology, never HITL (PBA-L8-018)
+        run: |
+          python3 scripts/check_hic_terminology.py --self-test
+          python3 scripts/check_hic_terminology.py
