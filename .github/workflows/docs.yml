@@ -47,7 +47,17 @@ jobs:
           # a table on the public repo homepage). They are excluded here.
           exit $fail
 
-      - name: HIC terminology, never HITL (PBA-L8-018)
+  hic-terminology:
+    # Own job so a failing frontmatter step cannot skip it (PBA-L8-018).
+    name: HIC terminology guard (PBA-L8-018)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: HIC terminology in docs, UI strings, comments and descriptions
         run: |
           python3 scripts/check_hic_terminology.py --self-test
           python3 scripts/check_hic_terminology.py
