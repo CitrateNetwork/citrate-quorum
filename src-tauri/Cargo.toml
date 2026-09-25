@@ -1,7 +1,7 @@
 # citrate-quorum — the Tauri desktop app (backend). WP-S1.3.
 #
 # Consumes citrate-core-kit (the shared signing/custody/oidc/supervisor spine) so
-# the SignatureCeremony — the single HITL signing path — is ONE implementation
+# the SignatureCeremony, the single HIC signing path, is ONE implementation
 # across the federation, never forked. See EXTRACTION_PLAN.md.
 [package]
 name = "citrate-quorum"

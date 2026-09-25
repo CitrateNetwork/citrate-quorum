@@ -2,7 +2,7 @@
 //!
 //! **Governance for agents.** This skeleton wires the shared safety-critical
 //! spine from [`citrate_core_kit`] — the SignatureCeremony (the single
-//! human-in-the-loop signing path), the OS-keyring custody vault, the OIDC RP,
+//! HIC (Human In Control) signing path), the OS-keyring custody vault, the OIDC RP,
 //! and app config — into a Tauri app, exactly as citrate-core does, so the two
 //! apps run ONE implementation of that code, never a fork.
 //!
@@ -97,7 +97,7 @@ pub fn run() {
             app.manage(state);
             // The shared OIDC auth manager.
             app.manage(oidc::build_auth_state());
-            // The shared SignatureCeremony — the SINGLE HITL signing path. Every
+            // The shared SignatureCeremony, the SINGLE HIC signing path. Every
             // signature intent in quorum (user or, later, agent) routes through
             // this one approval surface; the gated signer is reachable ONLY from
             // its `approve` path and is unreachable from any quorum code.

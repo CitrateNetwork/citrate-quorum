@@ -3,7 +3,7 @@ import markBlack from "../assets/brand/citrate_mark_black.svg";
 // citrate-quorum — the Signature Ceremony (QRM-S2D · gated in QRM-S2)
 //
 // Ported from design/CitrateQuorum.dc.html §CEREMONY. THE single
-// human-in-the-loop signing surface (design brief §3.3). Any surface that
+// HIC (Human In Control) signing surface (design brief §3.3). Any surface that
 // needs a signature calls useCeremony().request(intent) and awaits the
 // outcome — it NEVER performs the action itself and NEVER fabricates a
 // settled state. Charter register, always (signing is a document act).
