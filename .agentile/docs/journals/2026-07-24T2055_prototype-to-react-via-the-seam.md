@@ -34,7 +34,7 @@ lifted almost verbatim into `src/bridge/types.ts` — the design team had, in
 effect, written the interface our Rust would later implement, without calling it
 that.
 
-We ported the Ceremony overlay first, on purpose: it is the single HITL signing
+We ported the Ceremony overlay first, on purpose: it is the single HIC signing
 gate, the highest-risk surface, so it earned the first and most careful pass.
 Every action that signs routes through `useCeremony().request(intent)`. Then the
 demo-beat surfaces (Governance pipeline, Rooms, Meetings, Ledger), then the rest.

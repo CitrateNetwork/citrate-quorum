@@ -44,7 +44,7 @@ surface reaches around the bridge.
   src/bridge/sim` must leave a compiling app — passed: one error at
   `bridge/index.ts`, no surface breaks.
 - **Porting the Ceremony first.** The SignatureCeremony overlay was the highest-
-  risk surface because it is the one HITL gate, so it went first. Everything
+  risk surface because it is the one HIC gate, so it went first. Everything
   that signs (deploy 2-of-3, ratify, grant, revoke, send > 150 → HIC-1, stake)
   routes through `useCeremony().request(intent)` — proven end-to-end on sim
   before the lower-risk surfaces were touched.

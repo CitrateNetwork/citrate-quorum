@@ -22,7 +22,7 @@ Start at `.agentile/AGENT_ENTRY.md`. Canonical truth is the federation planset
    `npm test` counts never decrease. Record the count when it changes.
 
 3. **All signatures via the SignatureCeremony (Rule 3).** The ceremony is the
-   single human-in-the-loop signing path, inherited from `citrate-core-kit`. The
+   single HIC signing path, inherited from `citrate-core-kit`. The
    gated signer is `pub(crate)` and reachable ONLY from
    `SignatureCeremony::approve`; **signing anywhere else is forbidden** and a
    source-scan test asserts it. No `#[tauri::command]` signs or returns key /
