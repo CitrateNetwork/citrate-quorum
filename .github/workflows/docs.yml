@@ -48,8 +48,8 @@ jobs:
           exit $fail
 
   hic-terminology:
-    # Own job so a failing frontmatter step cannot skip it (PBA-L8-018).
-    name: HIC terminology guard (PBA-L8-018)
+    # Own job so a failing frontmatter step cannot skip it.
+    name: HIC terminology guard (public-claims accuracy)
     runs-on: ubuntu-latest
     permissions:
       contents: read
