@@ -60,10 +60,13 @@ use crate::compile::Compiled;
 /// * **A missing artifact stops being a runtime state.** The app either has the
 ///   audited bytes or does not build.
 ///
-/// Vendored and verified by `scripts/vendor-template-artifacts.sh`, which
-/// refuses to write a file whose hash does not match the value read from the
-/// LIVE registry. `template_hashes.rs` records those values, and a test below
-/// asserts each embedded artifact still hashes to its own.
+/// Vendored by `scripts/vendor-template-artifacts.sh`, which by default refuses
+/// to write a file whose hash does not match the value read from the LIVE
+/// registry. With `--from-build` it vendors a clean build of a pinned
+/// citrate-chain revision instead, for templates whose source changed and are
+/// not registered yet; `scripts/verify-template-hashes.sh` proves those bytes
+/// equal a fresh build. `template_hashes.rs` records the values and where they
+/// came from, and a test below asserts each embedded artifact hashes to its own.
 const EMBEDDED: &[(&str, &str)] = &[
     ("ThresholdApproval", include_str!("../artifacts/templates/ThresholdApproval.hex")),
     ("ClassificationGate", include_str!("../artifacts/templates/ClassificationGate.hex")),
@@ -457,10 +460,6 @@ pub fn governance_deploy_intent(
     // until now) predicts, and shows a human, the address of a contract whose
     // constructor reverts on its first require.
     let approver_names = principals_of(&compiled);
-    let approver_ids: Vec<[u8; 32]> = approver_names
-        .iter()
-        .map(|n| crate::ctor::approver_id(n))
-        .collect();
     let ctor_params = crate::ctor::encode(
         template_name,
         &crate::ctor::DeployContext {
@@ -470,7 +469,7 @@ pub fn governance_deploy_intent(
             spec_hash: word_bytes(&spec_hash)?,
             spec_cid: &spec_cid,
             params,
-            approvers: &approver_ids,
+            principals: &approver_names,
             bfr: &bfr,
         },
     )
@@ -1012,13 +1011,13 @@ mod tests {
     /// there costs the operator's trust in the ceremony.
     #[test]
     fn every_embedded_artifact_hashes_to_what_the_registry_pinned() {
-        use crate::template_hashes::REGISTERED_INIT_CODE_HASHES;
+        use crate::template_hashes::PINNED_INIT_CODE_HASHES;
         assert_eq!(
-            REGISTERED_INIT_CODE_HASHES.len(),
+            PINNED_INIT_CODE_HASHES.len(),
             EMBEDDED.len(),
             "the pinned table and the embedded set disagree about how many templates exist"
         );
-        for (name, expected) in REGISTERED_INIT_CODE_HASHES {
+        for (name, expected) in PINNED_INIT_CODE_HASHES {
             let code = creation_code(name)
                 .unwrap_or_else(|e| panic!("{name} is pinned but not embedded: {}", e.why()));
             // keccak over the RAW BYTES, which is what
@@ -1030,8 +1029,30 @@ mod tests {
             assert_eq!(
                 &got.as_str(),
                 expected,
-                "{name}: embedded bytecode does not match the registered initCodeHash"
+                "{name}: embedded bytecode does not match the pinned initCodeHash"
             );
+        }
+    }
+
+    /// The pinned table says where its values came from. A build-sourced table
+    /// must name the chain revision and the toolchain, or
+    /// `scripts/verify-template-hashes.sh` has nothing to rebuild against.
+    #[test]
+    fn the_pinned_hashes_name_their_source() {
+        use crate::template_hashes::{
+            BUILT_FROM_CHAIN_REV, CHAIN_REV, FORGE_VERSION, PINNED_INIT_CODE_HASHES, SOLC_VERSION,
+        };
+        assert_eq!(CHAIN_REV.len(), 40, "CHAIN_REV is a full commit sha");
+        assert!(CHAIN_REV.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(!FORGE_VERSION.is_empty());
+        assert_eq!(SOLC_VERSION, "0.8.36", "citrate-chain CI compiles with solc 0.8.36");
+        // Every build-sourced name is a pinned template, named once.
+        for (i, b) in BUILT_FROM_CHAIN_REV.iter().enumerate() {
+            assert!(
+                PINNED_INIT_CODE_HASHES.iter().any(|(n, _)| n == b),
+                "{b} is marked build-sourced but has no pinned row"
+            );
+            assert!(!BUILT_FROM_CHAIN_REV[i + 1..].contains(b), "{b} listed twice");
         }
     }
 
