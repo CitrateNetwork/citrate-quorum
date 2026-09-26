@@ -119,6 +119,16 @@ run "rbac bindings drift" "chain repo not alongside, or no python runner" \
     "[ -f '$GEN' ] && { [ -d '$ROOT/../citrate-chain/contracts/out' ] || [ -n \"\${CITRATE_CHAIN_DIR:-}\" ]; }" \
     "${PYRUN[@]}" "$GEN" --check
 
+# The embedded template bytecode must be exactly what a fresh build of the
+# pinned citrate-chain revision produces (template_hashes.rs names the rev and
+# toolchain). Skips when no chain checkout at that rev, with its forge output,
+# is alongside; FAILS on any hash that differs.
+TCHAIN="${CITRATE_CHAIN_DIR:-$ROOT/../citrate-chain}"
+TREV="$(sed -n 's/^pub const CHAIN_REV: &str = "\(.*\)";$/\1/p' "$ROOT/src-tauri/src/template_hashes.rs")"
+run "template artifacts = fresh build" "no citrate-chain checkout at the pinned rev with forge output alongside" \
+    "[ -n '$TREV' ] && [ -d '$TCHAIN/contracts/out' ] && [ \"\$(git -C '$TCHAIN' rev-parse HEAD 2>/dev/null)\" = '$TREV' ]" \
+    "$ROOT/scripts/verify-template-hashes.sh" "$TCHAIN"
+
 # QR-B-005: this T1 repo's README and CLAUDE.md name `04_HIC_MODEL.md` as the
 # normative, federation-wide control model and `09_DECISIONS_LOCKED.md` as
 # authoritative — both living in citrate-federation's planset, NOT copied here
