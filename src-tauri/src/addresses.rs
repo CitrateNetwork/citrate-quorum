@@ -28,6 +28,10 @@
 //! rule 8 exists to prevent. A caller names the book it means, and the book says
 //! which file answered.
 //!
+//! Since the r1005 reroll the chain ships only `40204.json` (no address under
+//! two names). `scripts/sync-addresses.sh` then derives the BFR book as a subset
+//! of the main book, so the two lookups stay separate but must agree.
+//!
 //! ## Absent is not zero
 //!
 //! [`AddressBook::get`] returns `None` for a name the book does not carry, and
@@ -210,34 +214,32 @@ mod tests {
         assert!(b.get("ClassificationRegistry").is_some());
     }
 
-    /// The two books MUST stay separate lookups. These three names are in both
-    /// at different addresses, so a merge would silently pick a winner — an
-    /// operator would be reading a contract they never pointed the app at.
+    /// The two books stay separate lookups (a caller names the book it means).
+    /// Before r1005 three names sat in both at DIFFERENT addresses. Since r1005
+    /// the BFR book is derived from the main book, so any shared name must now
+    /// resolve to the SAME address — a disagreement means the books drifted.
     #[test]
-    fn the_two_books_disagree_on_shared_names_which_is_why_they_are_not_merged() {
+    fn the_two_books_agree_on_shared_names_since_r1005() {
         let main = AddressBook::load().unwrap();
         let bfr = AddressBook::load_bfr().unwrap();
-        let mut collisions = 0;
+        let mut shared = 0;
         for name in [
             "ComputeVerifier",
             "ComputeMarketplace",
             "TEEAttestationRegistry",
+            "TenantHierarchy",
+            "ClassificationRegistry",
         ] {
             if let (Some(a), Some(b)) = (main.get(name), bfr.get(name)) {
-                collisions += 1;
-                assert_ne!(
+                shared += 1;
+                assert_eq!(
                     a.to_lowercase(),
                     b.to_lowercase(),
-                    "{name} now agrees across the books; if that is real, say so here \
-                     rather than leaving a stale justification for keeping them apart"
+                    "{name} disagrees across the books; re-run scripts/sync-addresses.sh"
                 );
             }
         }
-        assert!(
-            collisions > 0,
-            "the collision this separation exists for has vanished from the books — \
-             re-check whether two books are still the right shape"
-        );
+        assert_eq!(shared, 5, "every BFR name checked here must be in both books");
     }
 
     #[test]
