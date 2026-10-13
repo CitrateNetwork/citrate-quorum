@@ -27,6 +27,12 @@
 # so one parser reads both and the chain id is explicit in the vendored artifact
 # rather than assumed by the code.
 #
+# r1005 (2026-10) and later: the chain no longer ships bfr-40204.json — the
+# governance/RBAC contracts are in the main 40204.json, which now guarantees no
+# address appears under two names (so the three-name collision is gone). When
+# the BFR file is absent, the BFR book is built as the BFR_NAMES subset of the
+# main book, so callers of load_bfr() keep working and both books agree.
+#
 # Usage: scripts/sync-addresses.sh [path-to-citrate-chain]
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -37,7 +43,7 @@ DST="src-tauri/src/generated/addresses.json"
 DST_BFR="src-tauri/src/generated/addresses-bfr.json"
 
 [ -f "$SRC" ] || { echo "canonical book not found at $SRC" >&2; exit 1; }
-[ -f "$SRC_BFR" ] || { echo "BFR book not found at $SRC_BFR" >&2; exit 1; }
+[ -f "$SRC_BFR" ] || { echo "BFR book not at $SRC_BFR — deriving it from the main book (r1005+)"; SRC_BFR=""; }
 mkdir -p "$(dirname "$DST")"
 cp "$SRC" "$DST"
 echo "vendored $SRC -> $DST"
@@ -51,16 +57,38 @@ print(f"  chainId {d['chainId']}  contracts {len(c)}")
 for n in ("MeetingRegistry", "AnchorRegistry"):
     print(f"  {n}: {c.get(n, '— ABSENT (anchoring will report unavailable)')}")
 
-flat = json.load(open(bfr_src))
-book = {
-    "chainId": d["chainId"],
-    "rpcUrl": d.get("rpcUrl"),
-    "comment": (
+# The governance/RBAC set (names as they appear in the main book since r1005).
+BFR_NAMES = [
+    "TenantHierarchy", "ClassificationRegistry", "RoleEscalation", "MultiSigEnvelope",
+    "AgentDecisionRegistryV2", "ContradictionLedger", "PartProvenanceRegistry",
+    "SupplierRegistry", "MoqRegistry", "DefensePrimeFLScopeIndex", "ComputeVerifier",
+    "ComputeMarketplace", "TEEAttestationRegistry", "AppRegistry", "CrossOrgIndex",
+    "AuditBundleRegistry", "DefensePrimeComplianceRegistry", "RoleGrantTenantIndex",
+    "EntityRegistry", "TinaWorkpaperRegistry", "CrossOrgEnvelope", "TripwireRegistry",
+    "SponsorEvidenceRegistry", "ReleaseManifestRegistry",
+]
+if bfr_src:
+    flat = json.load(open(bfr_src))
+    comment = (
         "Governance/RBAC book (BFR), vendored from contracts/addresses/bfr-40204.json "
         "by scripts/sync-addresses.sh. chainId/rpcUrl come from the main 40204 book. "
         "Kept separate from the main book: three names collide across the two at "
         "different addresses."
-    ),
+    )
+else:
+    missing = [n for n in BFR_NAMES if n not in c]
+    if missing:
+        sys.exit(f"main book is missing BFR contracts: {missing}")
+    flat = {n: c[n] for n in BFR_NAMES}
+    comment = (
+        "Governance/RBAC book (BFR), derived by scripts/sync-addresses.sh as a subset "
+        "of the main 40204 book (r1005+: the chain no longer ships bfr-40204.json and "
+        "no address appears under two names, so both books agree)."
+    )
+book = {
+    "chainId": d["chainId"],
+    "rpcUrl": d.get("rpcUrl"),
+    "comment": comment,
     "contracts": flat,
 }
 with open(bfr_dst, "w") as f:
