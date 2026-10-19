@@ -14,7 +14,7 @@
 #
 # WHAT IS ACCEPTED, AND WHY
 #
-# All six come from `libcrux`, pulled by `hpke-rs 0.6.1`, pulled by
+# All eight come from `libcrux`, pulled by `hpke-rs 0.6.1`, pulled by
 # `openmls_rust_crypto 0.5.1`. We got here on purpose: OpenMLS 0.6 pinned
 # `hpke-rs 0.2.0`, which carried FOUR advisories including RUSTSEC-2026-0071 —
 # 9.3 critical, nonce reuse in HPKE context, under the primitive MLS uses to seal
@@ -31,7 +31,7 @@
 # aarch64. That is an improvement, not a resolution, and nothing here should be
 # read as "the MLS stack is clean".
 #
-# Full analysis, including which of these are actually LINKED by the app (two are
+# Full analysis, including which of these are actually LINKED by the app (four are
 # in the lockfile but not in the built binary's graph):
 # .agentile/docs/audits/2026-07-26_hpke-rs-advisories-in-the-mls-stack.md
 #
@@ -49,4 +49,10 @@ ignore = [
     "RUSTSEC-2026-0209", # AES-GCM did not enforce AAD length limits (no fix published)
     "RUSTSEC-2026-0211", # non-constant-time auth tag check in AES-GCM decryption (no fix)
     "RUSTSEC-2026-0124", # potential panic on overlong ciphertext buffer
+    # libcrux-kem 0.0.7 — fixed in >= 0.0.10, which hpke-rs 0.6.1 will not take.
+    # Lockfile-only like the two above: hpke-rs's optional libcrux backend; NOT in
+    # the built graph for any target (`cargo tree --target all -i libcrux-kem` is
+    # empty). Both are panics on short hybrid-KEM seeds/keys; MLS here uses X25519.
+    "RUSTSEC-2026-0330", # hybrid encapsulation from seed panics on short seed
+    "RUSTSEC-2026-0331", # panic on decoding short hybrid keys
 ]
