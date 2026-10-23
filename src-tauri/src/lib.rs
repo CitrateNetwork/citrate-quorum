@@ -89,7 +89,10 @@ pub fn run() {
             // The shared custody vault (real OS keyring + app-data envelope),
             // seeded with the persisted autolock — identical wiring to core.
             let handle = app.handle();
-            let autolock = config::config_read(handle.clone())
+            // `setup` is synchronous and runs once before the event loop, so it
+            // takes the kit's blocking body directly; the async `config_read`
+            // command is for the invoke surface (no nested `block_on` here).
+            let autolock = config::config_read_sync(handle.clone())
                 .map(|c| c.autolock)
                 .unwrap_or_else(|_| config::AppConfig::default().autolock);
             let state = custody::build_custody_state(handle, autolock)
