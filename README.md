@@ -1,3 +1,12 @@
+---
+created: 2026-07-22
+branch: main
+author: Claude Opus 4.8 (1M context), directed by @SaulBuilds
+status: active
+repo: citrate-quorum
+tier: T1
+---
+
 # citrate-quorum
 
 *Part of the **[Citrate Network](https://citrate.ai)** — own the means of computation. · [Docs](https://docs.citrate.ai) · [Run a node](https://citrate.ai/download) · [Contribute → free membership](https://github.com/CitrateNetwork/.github/blob/main/CONTRIBUTING.md)*

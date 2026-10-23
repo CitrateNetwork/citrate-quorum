@@ -55,11 +55,17 @@ echo
 
 # ---- docs -----------------------------------------------------------------
 echo "docs"
+# The root PATENTS.md and TRADEMARK.md are the federation's umbrella legal notices,
+# copied byte-for-byte from citrate-labs (the canonical copy) into every repo, and no
+# copy carries frontmatter. Adding it here would fork the legal text from its single
+# source, so exactly these two root paths are exempt. Every other markdown file,
+# including README.md, still needs frontmatter.
 run "frontmatter" "no markdown files" \
     "find . -name '*.md' -not -path './node_modules/*' -not -path './.git/*' | grep -q ." \
     bash -c '
       fail=0
       while IFS= read -r f; do
+        case "$f" in ./PATENTS.md|./TRADEMARK.md) continue ;; esac
         [ "$(head -c 4 "$f")" = "---" ] || { echo "missing YAML frontmatter: $f"; fail=1; }
       done < <(find . -name "*.md" -not -path "./node_modules/*" -not -path "./.git/*")
       exit $fail'
