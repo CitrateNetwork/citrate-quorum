@@ -16,8 +16,8 @@ This fails the gate when any of the following is true:
    someone's reasoning.
 3. **The documented blocker lifted.** Every ignore here exists because
    `hpke-rs 0.6.x` will not take a fixed `libcrux`. The moment the lockfile
-   carries `hpke-rs >= 0.7`, these are fixable and the ignore is no longer
-   honest.
+   carries `hpke-rs >= 0.7` (the openmls 0.9 / openmls_rust_crypto 0.6
+   migration), these start to be fixable and every ignore must be re-decided.
 
 Run by `scripts/check.sh`. Exits non-zero with the reason.
 """
@@ -27,6 +27,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 from datetime import date
 from pathlib import Path
 
@@ -36,7 +37,7 @@ AUDIT_TOML = ROOT / ".cargo/audit.toml"
 # The condition that makes every ignore in this file unnecessary. Encoded, not
 # just described, so it cannot quietly become untrue.
 BLOCKER_CRATE = "hpke-rs"
-BLOCKER_FIXED_AT = (0, 7, 0)
+BLOCKER_FIXED_AT = (0, 7, 0)  # openmls 0.9 / openmls_rust_crypto 0.6 migration (hpke-rs 0.7+)
 
 
 def fail(msg: str) -> None:
@@ -98,13 +99,20 @@ def main() -> None:
         fail("these advisories are ignored but no longer reported — delete them from "
              f".cargo/audit.toml: {', '.join(stale)}")
 
-    # Has the blocker lifted?
-    for pkg in report.get("lockfile", {}).get("dependencies", []) or []:
-        if pkg.get("name") == BLOCKER_CRATE:
-            if version_tuple(pkg.get("version", "0")) >= BLOCKER_FIXED_AT:
-                fail(f"{BLOCKER_CRATE} is now {pkg['version']} — the blocker these "
-                     f"ignores rest on has LIFTED. The libcrux advisories should be "
-                     f"fixable; re-check and remove the ignores.")
+    # Has the blocker lifted? Read Cargo.lock itself: cargo audit's JSON `lockfile`
+    # section carries only a dependency count, so a loop over its "dependencies"
+    # never ran and this check could not fire.
+    lock = tomllib.loads((ROOT / "Cargo.lock").read_text())
+    blocker_versions = [p["version"] for p in lock.get("package", [])
+                        if p.get("name") == BLOCKER_CRATE]
+    if not blocker_versions:
+        fail(f"{BLOCKER_CRATE} is not in Cargo.lock — the blocker these ignores rest "
+             f"on no longer describes this graph; re-check every ignore.")
+    for v in blocker_versions:
+        if version_tuple(v) >= BLOCKER_FIXED_AT:
+            fail(f"{BLOCKER_CRATE} is now {v} — the blocker these "
+                 f"ignores rest on has LIFTED. The libcrux advisories should be "
+                 f"fixable; re-check and remove the ignores.")
 
     print(f"  {len(ignored)} accepted, expires {expiry}, blocker still in place")
 
