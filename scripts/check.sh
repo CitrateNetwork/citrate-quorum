@@ -99,6 +99,14 @@ run "cargo audit"  "no Cargo.toml yet, or cargo-audit not installed" \
 run "audit ignores are honest" "no cargo-audit, or no python runner" \
     "command -v cargo-audit && command -v ${PYRUN[0]:-python3}" \
     "${PYRUN[@]:-python3}" "$ROOT/scripts/check_audit_ignores.py"
+# `cargo audit` only knows what the RustSec DB knows. Floors cover patched
+# releases the DB does not list yet, so the lockfile cannot drift back below them.
+run "dependency floors" "no python runner" \
+    "command -v ${PYRUN[0]:-python3}" \
+    "${PYRUN[@]:-python3}" "$ROOT/scripts/check_dep_floors.py"
+run "dependency floors (self-test)" "no python runner" \
+    "command -v ${PYRUN[0]:-python3}" \
+    "${PYRUN[@]:-python3}" -m unittest discover -s "$ROOT/scripts/tests"
 
 # ---- node -----------------------------------------------------------------
 echo
