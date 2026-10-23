@@ -16,8 +16,8 @@ This fails the gate when any of the following is true:
    someone's reasoning.
 3. **The documented blocker lifted.** Every ignore here exists because
    `hpke-rs 0.6.x` will not take a fixed `libcrux`. The moment the lockfile
-   carries `hpke-rs >= 0.8` (via openmls_rust_crypto), these are fixable and the ignore is no longer
-   honest.
+   carries `hpke-rs >= 0.7` (the openmls 0.9 / openmls_rust_crypto 0.6
+   migration), these start to be fixable and every ignore must be re-decided.
 
 Run by `scripts/check.sh`. Exits non-zero with the reason.
 """
@@ -36,7 +36,7 @@ AUDIT_TOML = ROOT / ".cargo/audit.toml"
 # The condition that makes every ignore in this file unnecessary. Encoded, not
 # just described, so it cannot quietly become untrue.
 BLOCKER_CRATE = "hpke-rs"
-BLOCKER_FIXED_AT = (0, 8, 0)  # hpke-rs >= 0.8 (via openmls_rust_crypto)
+BLOCKER_FIXED_AT = (0, 7, 0)  # openmls 0.9 / openmls_rust_crypto 0.6 migration (hpke-rs 0.7+)
 
 
 def fail(msg: str) -> None:

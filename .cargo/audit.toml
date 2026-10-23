@@ -9,8 +9,8 @@
 #   * the expiry below passes (forcing a fresh decision, not a renewal by
 #     default),
 #   * an ignored advisory stops being reported (the ignore is stale — delete it),
-#   * or the upstream blocker lifts (hpke-rs >= 0.8 in the lock), which is the
-#     exact condition that makes these fixable.
+#   * or the upstream blocker lifts (hpke-rs >= 0.7 in the lock), the first
+#     point at which any of these becomes fixable.
 #
 # WHAT IS ACCEPTED, AND WHY
 #
@@ -23,14 +23,21 @@
 #
 # It cannot be raised from here. Cargo treats `0.0.x` releases as mutually
 # incompatible, so adding a newer libcrux to any manifest simply puts BOTH in the
-# graph — verified, not assumed. The fix needs `hpke-rs >= 0.8` (via
-# openmls_rust_crypto): only hpke-rs-libcrux 0.8.0 takes the fixed libcrux-kem
-# 0.0.10, and no published openmls_rust_crypto accepts hpke-rs 0.8 yet
-# (0.5.1 requires `^0.6`; 0.6.0 requires `^0.7`, which still pins
-# libcrux-kem 0.0.9).
+# graph — verified, not assumed.
+#
+# BLOCKER: openmls 0.9 / openmls_rust_crypto 0.6 migration (hpke-rs 0.7+).
+# openmls_rust_crypto 0.5.1 requires hpke-rs `^0.6`. hpke-rs 0.7 brings
+# libcrux-sha3 0.0.10 and libcrux-secrets 0.0.6 (fixes 0207, 0208, 0212).
+# libcrux-kem 0.0.10 (fixes 0330, 0331) arrives only with hpke-rs 0.8, which no
+# published openmls_rust_crypto accepts yet. libcrux-aesgcm (0209, 0211) has no
+# fixed release.
+#
+# CIPHERSUITE. comms and quorum use MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519
+# through openmls_rust_crypto 0.5.1. hpke-rs's SHAKE path serves only the
+# X-Wing / ML-KEM KEMs, which that ciphersuite does not select.
 #
 # Severity has genuinely come down: a critical confidentiality break was traded
-# for high-severity panics, a SHAKE correctness bug, and a constant-time swap on
+# for high-severity panics, a SHAKE correctness bug, and a select/swap result bug on
 # aarch64. That is an improvement, not a resolution, and nothing here should be
 # read as "the MLS stack is clean".
 #
@@ -43,22 +50,21 @@
 #
 # Renewed 2026-10-22 by owner decision, time-boxed to 2026-11-09. The first
 # acceptance ran to 2026-10-26. libcrux-kem (0330, 0331) was added at the same
-# time, with the same blocker.
+# time. Reachability of 0207, 0208 and 0212 was confirmed by a private
+# assessment on 2026-10-22.
 
 [advisories]
 ignore = [
-    # libcrux-sha3 0.0.8 — fixed in >= 0.0.10, which hpke-rs 0.6.1 will not take.
-    "RUSTSEC-2026-0207", # incorrect incremental portable SHAKE on multiple squeezes
-    "RUSTSEC-2026-0208", # potential panic in AVX2 SHAKE-256
-    # libcrux-secrets 0.0.5 — fixed in >= 0.0.6. aarch64 is our dev box AND the DGX.
-    "RUSTSEC-2026-0212", # possibly non-constant-time swap/select on aarch64
-    # In the lockfile via hpke-rs's optional libcrux backend; NOT in the app's
-    # linked graph (`cargo tree -p citrate-quorum -i libcrux-aesgcm` is empty).
-    "RUSTSEC-2026-0209", # AES-GCM did not enforce AAD length limits (no fix published)
-    "RUSTSEC-2026-0211", # non-constant-time auth tag check in AES-GCM decryption (no fix)
-    "RUSTSEC-2026-0124", # potential panic on overlong ciphertext buffer
-    # libcrux-kem 0.0.7 — fixed in >= 0.0.10, which only hpke-rs 0.8 takes. Not
-    # compiled: `cargo tree -i libcrux-kem --target all -e normal,build` is empty.
-    "RUSTSEC-2026-0330", # panic in hybrid encapsulate_derand on a seed shorter than 32 bytes
-    "RUSTSEC-2026-0331", # panic decoding hybrid X25519MlKem768/XWing keys from short input
+    # libcrux-sha3 0.0.8 (fixed in 0.0.10, needs hpke-rs 0.7)
+    "RUSTSEC-2026-0207", # linked, not reachable: incremental SHAKE is used only by the X-Wing/ML-KEM KEMs, not this ciphersuite
+    "RUSTSEC-2026-0208", # linked, not reachable: AVX2 SHAKE-256 is used only by the X-Wing/ML-KEM KEMs, not this ciphersuite
+    # libcrux-secrets 0.0.5 (fixed in 0.0.6, needs hpke-rs 0.7)
+    "RUSTSEC-2026-0212", # linked, not reachable: aarch64 select/swap may return wrong results; no caller, 0 libcrux_secrets symbols in the aarch64 daemon binary
+    # libcrux-aesgcm 0.0.7 (no fixed release) and libcrux-chacha20poly1305 (fixed in 0.0.8)
+    "RUSTSEC-2026-0209", # not compiled: AES-GCM AAD length not bounded; hpke-rs's optional libcrux backend is off
+    "RUSTSEC-2026-0211", # not compiled: AES-GCM tag comparison not constant-time; hpke-rs's optional libcrux backend is off
+    "RUSTSEC-2026-0124", # not compiled: panic on overlong ciphertext buffer; hpke-rs's optional libcrux backend is off
+    # libcrux-kem 0.0.7 (fixed in 0.0.10, needs hpke-rs 0.8)
+    "RUSTSEC-2026-0330", # not compiled: panic in hybrid encapsulate_derand on a short seed; optional libcrux backend is off
+    "RUSTSEC-2026-0331", # not compiled: panic decoding short hybrid X25519MlKem768/XWing keys; optional libcrux backend is off
 ]
