@@ -1183,28 +1183,54 @@ pub struct WalletSummary {
 /// and is named in `notes` rather than guessed at.
 const BOOKED_TOKENS: [&str; 1] = ["WrappedSALT"];
 
+/// The Wallet surface: public address, live balances, and where the key lives.
+///
+/// The kit's keyring probe is async (it runs on the blocking pool, off the UI
+/// thread), so this command is async too: it awaits that probe, then runs the
+/// remaining blocking work — the vault read and the RPC balance reads — through
+/// the kit's [`citrate_core_kit::blocking::off_main`], never on the main thread
+/// and never via a nested `block_on`.
 #[tauri::command]
-pub fn wallet_summary(
-    custody: tauri::State<'_, citrate_core_kit::custody::CustodyState>,
+pub async fn wallet_summary(app: tauri::AppHandle) -> Result<WalletSummary, String> {
+    let keyring = key_store_label(citrate_core_kit::custody::custody_keyring_status().await);
+    citrate_core_kit::blocking::off_main(move || {
+        use tauri::Manager;
+        let custody = app.state::<citrate_core_kit::custody::CustodyState>();
+        let book = AddressBook::load().map_err(|e| e.to_string())?;
+        wallet_summary_from(&custody.0, &book, &keyring)
+    })
+    .await
+}
+
+/// The `key_store` line for the Wallet surface, from the kit's keyring probe.
+///
+/// A probe that could not run is named as such rather than reported as
+/// "available" or "unavailable" — both of those are claims about the keyring.
+pub fn key_store_label(probe: Result<String, String>) -> String {
+    match probe {
+        Ok(status) => format!("citrate-core-kit custody vault · OS keyring {status}"),
+        Err(e) => format!("citrate-core-kit custody vault · OS keyring status unknown ({e})"),
+    }
+}
+
+/// The blocking body of [`wallet_summary`]: everything it reports, from a vault,
+/// a book and an already-resolved keyring line. Split out so the composition is
+/// testable against an in-memory vault and an in-process RPC endpoint.
+pub fn wallet_summary_from(
+    vault: &citrate_core_kit::custody::CustodyVault,
+    book: &AddressBook,
+    key_store: &str,
 ) -> Result<WalletSummary, String> {
     // Public address only. The key never leaves the vault, and no command in
     // this app returns it (rule 3).
-    let wallet = citrate_core_kit::wallet::address(&custody.0).map_err(|e| e.to_string())?;
-    let book = AddressBook::load().map_err(|e| e.to_string())?;
-    let rpc_url = AddressBook::load()
-        .ok()
-        .and_then(|b| b.rpc_url.clone())
-        .unwrap_or_default();
-    let (tokens, notes) = balances(&book, &wallet.address, &BOOKED_TOKENS)?;
+    let wallet = citrate_core_kit::wallet::address(vault).map_err(|e| e.to_string())?;
+    let (tokens, notes) = balances(book, &wallet.address, &BOOKED_TOKENS)?;
 
     Ok(WalletSummary {
         address: wallet.address,
         chain_id: book.chain_id,
-        rpc_url,
-        key_store: format!(
-            "citrate-core-kit custody vault · OS keyring {}",
-            citrate_core_kit::custody::custody_keyring_status()
-        ),
+        rpc_url: book.rpc_url.clone().unwrap_or_default(),
+        key_store: key_store.to_string(),
         source: book.describe(),
         tokens,
         notes,
@@ -1520,10 +1546,225 @@ mod tests {
             VECTOR
         );
         // What the on-chain side must NOT be doing: hashing the 20 raw bytes.
-        assert_ne!(clearance_subject("0x00000000000000000000000000000000000000ab"), {
-            let mut raw = [0u8; 20];
-            raw[19] = 0xab;
-            keccak256(&raw)
+        assert_ne!(
+            clearance_subject("0x00000000000000000000000000000000000000ab"),
+            {
+                let mut raw = [0u8; 20];
+                raw[19] = 0xab;
+                keccak256(&raw)
+            }
+        );
+    }
+
+    // ---- wallet_summary (async kit API) ------------------------------------
+
+    /// An in-memory keyring seam for the kit's custody vault: the real vault
+    /// code, the real KDF and envelope, only the OS keyring swapped out.
+    #[derive(Default)]
+    struct MemKeyring(std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>);
+
+    impl citrate_core_kit::custody::Keyring for MemKeyring {
+        fn get(
+            &self,
+            account: &str,
+        ) -> std::result::Result<Option<Vec<u8>>, citrate_core_kit::custody::CustodyError> {
+            Ok(self.0.lock().unwrap().get(account).cloned())
+        }
+        fn set(
+            &self,
+            account: &str,
+            secret: &[u8],
+        ) -> std::result::Result<(), citrate_core_kit::custody::CustodyError> {
+            self.0
+                .lock()
+                .unwrap()
+                .insert(account.to_string(), secret.to_vec());
+            Ok(())
+        }
+        fn delete(
+            &self,
+            account: &str,
+        ) -> std::result::Result<(), citrate_core_kit::custody::CustodyError> {
+            self.0.lock().unwrap().remove(account);
+            Ok(())
+        }
+    }
+
+    /// A one-shot-per-connection JSON-RPC endpoint on loopback. Answers
+    /// `eth_getBalance` with `balance_hex` and every other method with a
+    /// JSON-RPC error, and records the methods it was asked for.
+    fn serve_rpc(
+        balance_hex: &'static str,
+    ) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen_srv = std::sync::Arc::clone(&seen);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { return };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut len = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                        break;
+                    }
+                    let l = line.to_ascii_lowercase();
+                    if let Some(v) = l.strip_prefix("content-length:") {
+                        len = v.trim().parse().unwrap_or(0);
+                    }
+                    if line == "\r\n" {
+                        break;
+                    }
+                }
+                let mut body = vec![0u8; len];
+                if reader.read_exact(&mut body).is_err() {
+                    continue;
+                }
+                let req: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+                let method = req["method"].as_str().unwrap_or("").to_string();
+                seen_srv.lock().unwrap().push(method.clone());
+                let resp = if method == "eth_getBalance" {
+                    json!({"jsonrpc":"2.0","id":req["id"],"result":balance_hex})
+                } else {
+                    json!({"jsonrpc":"2.0","id":req["id"],
+                           "error":{"code":-32601,"message":"method not found"}})
+                };
+                let out = resp.to_string();
+                let mut w = stream;
+                let _ = write!(
+                    w,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    out.len(),
+                    out
+                );
+            }
         });
+        (url, seen)
+    }
+
+    const TEST_MNEMONIC: &str = "test test test test test test test test test test test junk";
+
+    fn vault_with_known_wallet(dir: &std::path::Path) -> citrate_core_kit::custody::CustodyVault {
+        let vault = citrate_core_kit::custody::CustodyVault::new(
+            Box::new(MemKeyring::default()),
+            dir.join("vault.json"),
+            30,
+        );
+        vault
+            .init(&mut b"correct horse battery staple".to_vec())
+            .unwrap();
+        vault
+            .unlock(&mut b"correct horse battery staple".to_vec())
+            .unwrap();
+        citrate_core_kit::wallet::import(&vault, TEST_MNEMONIC).unwrap();
+        vault
+    }
+
+    #[test]
+    fn key_store_names_the_resolved_probe_not_a_future() {
+        assert_eq!(
+            key_store_label(Ok("available".to_string())),
+            "citrate-core-kit custody vault · OS keyring available"
+        );
+        assert_eq!(
+            key_store_label(Ok("unavailable".to_string())),
+            "citrate-core-kit custody vault · OS keyring unavailable"
+        );
+    }
+
+    /// A probe that could not run must not read as either answer: both
+    /// "available" and "unavailable" are claims about the keyring.
+    #[test]
+    fn a_failed_keyring_probe_is_named_not_reported_as_an_answer() {
+        let label = key_store_label(Err("background task failed: cancelled".to_string()));
+        assert!(
+            label.starts_with("citrate-core-kit custody vault · OS keyring status unknown"),
+            "{label}"
+        );
+        assert!(
+            label.contains("background task failed: cancelled"),
+            "{label}"
+        );
+        assert!(!label.ends_with(" available"), "{label}");
+        assert!(!label.ends_with(" unavailable"), "{label}");
+    }
+
+    #[test]
+    fn wallet_summary_reads_the_vault_address_and_a_live_balance() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = vault_with_known_wallet(dir.path());
+        let expected = citrate_core_kit::wallet::address(&vault).unwrap().address;
+        // 1.5 SALT in wei.
+        let (url, seen) = serve_rpc("0x14d1120d7b160000");
+        let book = AddressBook::parse(
+            &format!(r#"{{"chainId":40204,"rpcUrl":"{url}","contracts":{{}}}}"#),
+            "test",
+        )
+        .unwrap();
+        let key_store = key_store_label(Ok("available".to_string()));
+
+        let s = wallet_summary_from(&vault, &book, &key_store).unwrap();
+
+        assert_eq!(s.address, expected);
+        assert_eq!(s.chain_id, book.chain_id);
+        assert_eq!(s.rpc_url, url);
+        assert_eq!(s.key_store, key_store);
+        assert_eq!(s.source, book.describe());
+        assert_eq!(s.tokens.len(), 1, "{:?}", s.tokens);
+        assert!(s.tokens[0].native);
+        assert_eq!(s.tokens[0].symbol, "SALT");
+        assert_eq!(
+            s.tokens[0].balance,
+            format_units(1_500_000_000_000_000_000, 18)
+        );
+        assert!(
+            s.tokens[0].source.contains(&expected),
+            "{}",
+            s.tokens[0].source
+        );
+        // The booked ERC-20 is absent from this book: named, never a zero row.
+        assert!(
+            s.notes
+                .iter()
+                .any(|n| n.contains("WrappedSALT is not in the address book")),
+            "{:?}",
+            s.notes
+        );
+        assert_eq!(seen.lock().unwrap().as_slice(), ["eth_getBalance"]);
+    }
+
+    /// Fail closed: a locked vault yields an error, not an empty or default
+    /// address, and no RPC is attempted on its behalf.
+    #[test]
+    fn a_locked_vault_fails_closed_before_any_rpc() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = vault_with_known_wallet(dir.path());
+        vault.lock();
+        let (url, seen) = serve_rpc("0x0");
+        let book = AddressBook::parse(
+            &format!(r#"{{"chainId":40204,"rpcUrl":"{url}","contracts":{{}}}}"#),
+            "test",
+        )
+        .unwrap();
+        assert!(wallet_summary_from(&vault, &book, "k").is_err());
+        assert!(seen.lock().unwrap().is_empty());
+    }
+
+    /// An unreachable endpoint is an error naming the failure, never a zero
+    /// balance (a zero is a claim about someone's money).
+    #[test]
+    fn an_unreachable_endpoint_fails_the_summary_rather_than_showing_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = vault_with_known_wallet(dir.path());
+        let book = AddressBook::parse(
+            r#"{"chainId":40204,"rpcUrl":"http://127.0.0.1:1","contracts":{}}"#,
+            "test",
+        )
+        .unwrap();
+        let e = wallet_summary_from(&vault, &book, "k").unwrap_err();
+        assert!(e.contains("could not reach"), "{e}");
     }
 }
