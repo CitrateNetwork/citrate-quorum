@@ -9,12 +9,12 @@
 #   * the expiry below passes (forcing a fresh decision, not a renewal by
 #     default),
 #   * an ignored advisory stops being reported (the ignore is stale — delete it),
-#   * or the upstream blocker lifts (hpke-rs >= 0.7 in the lock), which is the
+#   * or the upstream blocker lifts (hpke-rs >= 0.8 in the lock), which is the
 #     exact condition that makes these fixable.
 #
 # WHAT IS ACCEPTED, AND WHY
 #
-# All six come from `libcrux`, pulled by `hpke-rs 0.6.1`, pulled by
+# All eight come from `libcrux`, pulled by `hpke-rs 0.6.1`, pulled by
 # `openmls_rust_crypto 0.5.1`. We got here on purpose: OpenMLS 0.6 pinned
 # `hpke-rs 0.2.0`, which carried FOUR advisories including RUSTSEC-2026-0071 —
 # 9.3 critical, nonce reuse in HPKE context, under the primitive MLS uses to seal
@@ -23,8 +23,11 @@
 #
 # It cannot be raised from here. Cargo treats `0.0.x` releases as mutually
 # incompatible, so adding a newer libcrux to any manifest simply puts BOTH in the
-# graph — verified, not assumed. The fix needs `hpke-rs >= 0.7`, which
-# `openmls_rust_crypto 0.5.1` does not accept (it requires `^0.6`).
+# graph — verified, not assumed. The fix needs `hpke-rs >= 0.8` (via
+# openmls_rust_crypto): only hpke-rs-libcrux 0.8.0 takes the fixed libcrux-kem
+# 0.0.10, and no published openmls_rust_crypto accepts hpke-rs 0.8 yet
+# (0.5.1 requires `^0.6`; 0.6.0 requires `^0.7`, which still pins
+# libcrux-kem 0.0.9).
 #
 # Severity has genuinely come down: a critical confidentiality break was traded
 # for high-severity panics, a SHAKE correctness bug, and a constant-time swap on
@@ -32,10 +35,15 @@
 # read as "the MLS stack is clean".
 #
 # Full analysis, including which of these are actually LINKED by the app (two are
-# in the lockfile but not in the built binary's graph):
+# in the lockfile but not in the built binary's graph; libcrux-kem, added later, is also
+# not compiled):
 # .agentile/docs/audits/2026-07-26_hpke-rs-advisories-in-the-mls-stack.md
 #
-# EXPIRES: 2026-10-26  (three months — re-decide, do not renew by reflex)
+# EXPIRES: 2026-11-09  (start of audit phase A — re-decide, do not renew by reflex)
+#
+# Renewed 2026-10-22 by owner decision, time-boxed to 2026-11-09. The first
+# acceptance ran to 2026-10-26. libcrux-kem (0330, 0331) was added at the same
+# time, with the same blocker.
 
 [advisories]
 ignore = [
@@ -49,4 +57,8 @@ ignore = [
     "RUSTSEC-2026-0209", # AES-GCM did not enforce AAD length limits (no fix published)
     "RUSTSEC-2026-0211", # non-constant-time auth tag check in AES-GCM decryption (no fix)
     "RUSTSEC-2026-0124", # potential panic on overlong ciphertext buffer
+    # libcrux-kem 0.0.7 — fixed in >= 0.0.10, which only hpke-rs 0.8 takes. Not
+    # compiled: `cargo tree -i libcrux-kem --target all -e normal,build` is empty.
+    "RUSTSEC-2026-0330", # panic in hybrid encapsulate_derand on a seed shorter than 32 bytes
+    "RUSTSEC-2026-0331", # panic decoding hybrid X25519MlKem768/XWing keys from short input
 ]
