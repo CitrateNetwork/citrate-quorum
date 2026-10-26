@@ -54,6 +54,10 @@ jobs:
 
       - name: Audit ignores are honest (expiry, staleness, blocker)
         run: python3 scripts/check_audit_ignores.py
+      - name: RUSTSEC-2026-0387 ignore guard (crypto-bigint < 0.7.6 only via elliptic-curve 0.13)
+        run: |
+          python3 scripts/check_crypto_bigint_users.py --self-test
+          python3 scripts/check_crypto_bigint_users.py
 
       - name: Dependency floors
         run: |
