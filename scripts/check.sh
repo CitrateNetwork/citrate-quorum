@@ -105,6 +105,22 @@ run "cargo audit"  "no Cargo.toml yet, or cargo-audit not installed" \
 run "audit ignores are honest" "no cargo-audit, or no python runner" \
     "command -v cargo-audit && command -v ${PYRUN[0]:-python3}" \
     "${PYRUN[@]:-python3}" "$ROOT/scripts/check_audit_ignores.py"
+# The RUSTSEC-2026-0387 ignore rests on a different blocker (elliptic-curve 0.13),
+# so it has its own guard: new users of crypto-bigint < 0.7.6, staleness, expiry.
+run "crypto-bigint ignore guard" "no python runner" \
+    "command -v ${PYRUN[0]:-python3}" \
+    "${PYRUN[@]:-python3}" "$ROOT/scripts/check_crypto_bigint_users.py" --lock "$ROOT/Cargo.lock"
+run "crypto-bigint guard (self-test)" "no python runner" \
+    "command -v ${PYRUN[0]:-python3}" \
+    "${PYRUN[@]:-python3}" "$ROOT/scripts/check_crypto_bigint_users.py" --self-test
+# `cargo audit` only knows what the RustSec DB knows. Floors cover patched
+# releases the DB does not list yet, so the lockfile cannot drift back below them.
+run "dependency floors" "no python runner" \
+    "command -v ${PYRUN[0]:-python3}" \
+    "${PYRUN[@]:-python3}" "$ROOT/scripts/check_dep_floors.py"
+run "dependency floors (self-test)" "no python runner" \
+    "command -v ${PYRUN[0]:-python3}" \
+    "${PYRUN[@]:-python3}" -m unittest discover -s "$ROOT/scripts/tests"
 
 # ---- node -----------------------------------------------------------------
 echo

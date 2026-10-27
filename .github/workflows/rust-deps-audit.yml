@@ -1,0 +1,65 @@
+# created: 2026-10-19 | branch: deps/openmls-0.8.2
+# author: Claude Opus 5.5, directed by @SaulBuilds
+# status: active
+#
+# Dependency-advisory gate for the Rust lockfile, on every PR, push to main and
+# weekly (so a new advisory against an unchanged lockfile still turns it red).
+# Mirrors the `cargo audit` + `audit ignores are honest` + `dependency floors`
+# rows of scripts/check.sh, which stays the source of truth for the full gate.
+#
+# Lockfile-only on purpose: `cargo audit` reads Cargo.lock, so this job needs no
+# sibling citrate-core / citrate-comms checkout for the path dependencies.
+# Accepted advisories live in .cargo/audit.toml with an expiry; floors for
+# patched releases the advisory DB does not list yet live in
+# scripts/check_dep_floors.py. Never add continue-on-error here.
+name: rust-deps-audit
+
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 8 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-deps-audit-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: cargo audit + floors
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+
+      # Unpinned on purpose (as in nist-agent): an old cargo-audit cannot parse
+      # newer RustSec advisory formats, which would silently weaken the gate.
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2
+        with:
+          tool: cargo-audit
+
+      - name: cargo audit (accepted = .cargo/audit.toml)
+        run: cargo audit
+
+      - name: Audit ignores are honest (expiry, staleness, blocker)
+        run: python3 scripts/check_audit_ignores.py
+      - name: RUSTSEC-2026-0387 ignore guard (crypto-bigint < 0.7.6 only via elliptic-curve 0.13)
+        run: |
+          python3 scripts/check_crypto_bigint_users.py --self-test
+          python3 scripts/check_crypto_bigint_users.py
+
+      - name: Dependency floors
+        run: |
+          python3 -m unittest discover -s scripts/tests
+          python3 scripts/check_dep_floors.py
