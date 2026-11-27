@@ -29,7 +29,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: rust-deps-audit-${{ github.event.pull_request.head.ref || github.ref_name }}
+  # Keyed on the PR number, not head.ref: a fork branch named `main` must not
+  # share (and cancel) the group of the push and schedule runs on main.
+  group: rust-deps-audit-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -39,6 +41,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable

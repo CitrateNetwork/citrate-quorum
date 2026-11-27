@@ -40,15 +40,20 @@ ALLOWED_USER_LINE = (0, 13)
 
 
 AUDIT_TOML = Path(__file__).resolve().parent.parent / ".cargo" / "audit.toml"
-# Keys that can drop an advisory from the report without naming its ID.
-FILTERING_KEYS = ("database", "target")
-FILTERING_ADVISORY_KEYS = ("severity_threshold",)
+# Allowlist of config keys known NOT to drop an advisory from the report. Any
+# other key (a `[database]` or `[target]` table, `severity_threshold`, or one a
+# future cargo-audit adds) counts as "could be ignoring" (fail closed).
+SAFE_TOP_KEYS = {"advisories", "output", "yanked"}
+SAFE_ADVISORY_KEYS = {"ignore", "informational_warnings"}
 
 
 def audit_configs() -> list[Path]:
-    """Every audit.toml cargo-audit may read here: the repo's and the user's."""
-    home = os.environ.get("CARGO_HOME") or os.path.join(os.path.expanduser("~"), ".cargo")
-    return [AUDIT_TOML, Path(home) / "audit.toml"]
+    """Every audit.toml cargo-audit may read here: the repo's and the user's
+    ($CARGO_HOME and ~/.cargo, when they differ)."""
+    homes = [Path(os.path.expanduser("~")) / ".cargo"]
+    if os.environ.get("CARGO_HOME"):
+        homes.append(Path(os.environ["CARGO_HOME"]))
+    return [AUDIT_TOML] + [h / "audit.toml" for h in dict.fromkeys(homes)]
 
 
 def is_ignored(audit_text: str | None) -> bool:
@@ -60,12 +65,12 @@ def is_ignored(audit_text: str | None) -> bool:
     except tomllib.TOMLDecodeError:
         # An unparseable config cannot be shown to be free of the ignore.
         return True
-    if any(k in cfg for k in FILTERING_KEYS):
+    if set(cfg) - SAFE_TOP_KEYS:
         return True
     adv = cfg.get("advisories", {})
     if not isinstance(adv, dict):
         return True
-    if any(k in adv for k in FILTERING_ADVISORY_KEYS):
+    if set(adv) - SAFE_ADVISORY_KEYS:
         return True
     ignore = adv.get("ignore", [])
     if not isinstance(ignore, list) or not all(isinstance(i, str) for i in ignore):
@@ -146,6 +151,8 @@ def self_test() -> None:
         ("ignore as a string", f'[advisories]\nignore = "{ADVISORY}"\n', True),
         ("custom advisory database", '[database]\nfetch = false\n', True),
         ("severity threshold", '[advisories]\nseverity_threshold = "high"\n', True),
+        ("unknown future key", '[advisories]\nfilter = ["x"]\n', True),
+        ("output settings only", '[output]\nquiet = true\n', False),
     ]
     for name, text, want in ignore_cases:
         if is_ignored(text) != want:

@@ -113,8 +113,8 @@ run "crypto-bigint guard (self-test)" "no python runner" \
 # releases the DB does not list yet, so the lockfile cannot drift back below them.
 # While cargo audit is red on the nine blocked advisories, a NEW one would not
 # change the result; this names it.
-run "no new advisory" "no cargo-audit, or no python runner" \
-    "command -v cargo-audit && command -v ${PYRUN[0]:-python3}" \
+run "no new advisory" "no Cargo.toml, cargo-audit or python runner" \
+    "$HAS_CARGO && command -v cargo-audit && command -v ${PYRUN[0]:-python3}" \
     "${PYRUN[@]:-python3}" "$ROOT/scripts/check_known_advisories.py" --run-cargo-audit
 run "no new advisory (self-test)" "no python runner" \
     "command -v ${PYRUN[0]:-python3}" \
