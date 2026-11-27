@@ -407,6 +407,9 @@ export function Agents() {
                       <span onClick={() => revokeGrant(g)} className="mono" style={{ fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase", color: "var(--danger)", cursor: "pointer", border: "1px solid var(--danger)", padding: "1px 7px" }}>Revoke</span>
                     </div>
                     <div className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)" }}>scope {g.scope} · budget {g.budget} · expires {g.expiry} · issued by {g.principal}</div>
+                    {g.hicFlag && (
+                      <div className="mono" style={{ fontSize: 9.5, color: "var(--warn)" }}>{g.hicFlag}</div>
+                    )}
                   </div>
                 ))
               )}

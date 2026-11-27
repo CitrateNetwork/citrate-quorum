@@ -57,8 +57,8 @@ use crate::anchor::{self, AnchorState};
 
 use crate::store::{
     classification_from_str, classification_str, grant_hic_str, hex32, hex_encode, hic_str,
-    parse_grant_hic, verdict_str, Charge, EgressPolicy, EvidenceStore, GrantHicFlag,
-    MeetingRecord, PendingApproval, StoreError,
+    parse_grant_hic, verdict_str, Charge, EgressPolicy, EvidenceStore, GrantHicFlag, MeetingRecord,
+    PendingApproval, StoreError,
 };
 
 /// What one governed action costs its grant.
@@ -352,6 +352,10 @@ pub struct GrantSummary {
     pub budget_units: u64,
     pub consumed: u64,
     pub hic: String,
+    /// Set when this grant's stored HIC level was unknown or HIC-X and it was
+    /// loaded at HIC-1 approve-each (L2-WP02): the operator sees why.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hic_flag: Option<String>,
     pub expires_at_ms: i64,
     pub revoked: bool,
 }
@@ -642,13 +646,14 @@ impl QuorumBackend {
             .collect()
     }
 
-    /// The grants of `tenant` that were loaded at HIC-1 because their stored
-    /// HIC level was unknown or HIC-X, one line each (L2-WP02).
-    pub fn grant_load_flags(&self, tenant: &str) -> Vec<String> {
+    /// Why grant `grant_id` of `tenant` was loaded at HIC-1, when its stored
+    /// HIC level was unknown or HIC-X (L2-WP02).
+    fn grant_hic_flag(&self, tenant: &str, grant_id: &str) -> Option<String> {
         self.grant_load_flags
-            .get(tenant)
-            .map(|fs| fs.iter().map(ToString::to_string).collect())
-            .unwrap_or_default()
+            .get(tenant)?
+            .iter()
+            .find(|f| f.grant_id == grant_id)
+            .map(ToString::to_string)
     }
 
     fn tenant_allowances(&self, tenant: &str) -> Vec<VoteAllowance> {
@@ -2007,6 +2012,7 @@ impl QuorumBackend {
                         budget_units: g.budget_units,
                         consumed: g.consumed,
                         hic: grant_hic_str(g.hic).to_string(),
+                        hic_flag: self.grant_hic_flag(tenant, &g.id),
                         expires_at_ms: g.expires_at_ms,
                         revoked: g.revoked,
                     })
@@ -2925,10 +2931,20 @@ mod tests {
         // not become HIC-2. Refused at issue, so no grant and no record exist.
         for bad in ["X", "0", "", "4", "budgeted?"] {
             let mut b = QuorumBackend::default();
-            let r = b.issue_grant(&grant("sbt-1", &["repo.write"], "Public", 10, bad), &t("bca"), 0);
+            let r = b.issue_grant(
+                &grant("sbt-1", &["repo.write"], "Public", 10, bad),
+                &t("bca"),
+                0,
+            );
             assert!(r.is_err(), "issuing at hic {bad:?} must be refused");
-            assert!(b.grants_for("bca", "sbt-1").is_empty(), "hic {bad:?}: no grant may exist");
-            assert!(b.ledger_rows("bca").is_empty(), "hic {bad:?}: no issue record may exist");
+            assert!(
+                b.grants_for("bca", "sbt-1").is_empty(),
+                "hic {bad:?}: no grant may exist"
+            );
+            assert!(
+                b.ledger_rows("bca").is_empty(),
+                "hic {bad:?}: no issue record may exist"
+            );
         }
     }
 
@@ -2936,8 +2952,12 @@ mod tests {
     fn issuing_at_the_three_grant_levels_still_works() {
         for (wire, want) in [("1", "1"), ("2", "2"), ("3", "3")] {
             let mut b = QuorumBackend::default();
-            b.issue_grant(&grant("sbt-1", &["repo.write"], "Public", 10, wire), &t("bca"), 0)
-                .unwrap();
+            b.issue_grant(
+                &grant("sbt-1", &["repo.write"], "Public", 10, wire),
+                &t("bca"),
+                0,
+            )
+            .unwrap();
             let gs = b.grants_for("bca", "sbt-1");
             assert_eq!(gs.len(), 1);
             assert_eq!(gs[0].hic, want);
@@ -4027,9 +4047,13 @@ mod tests {
         {
             let mut b = root.boot();
             b.set_active_tenant("bca").unwrap();
-            b.issue_grant(&grant("sbt-1", &["repo.write"], "Public", 10, "2"), &t("bca"), 0)
-                .unwrap();
-            assert!(b.grant_load_flags("bca").is_empty());
+            b.issue_grant(
+                &grant("sbt-1", &["repo.write"], "Public", 10, "2"),
+                &t("bca"),
+                0,
+            )
+            .unwrap();
+            assert!(b.grants_for("bca", "sbt-1")[0].hic_flag.is_none());
         }
         let store = EvidenceStore::open(root.0.clone()).unwrap();
         let path = store.tenant_dir("bca").join("grants.json");
@@ -4042,10 +4066,15 @@ mod tests {
         b.set_active_tenant("bca").unwrap();
         let gs = b.grants_for("bca", "sbt-1");
         assert_eq!(gs.len(), 1);
-        assert_eq!(gs[0].hic, "1", "HIC-X on disk must load as HIC-1, never HIC-2");
-        let flags = b.grant_load_flags("bca");
-        assert_eq!(flags.len(), 1, "the load must be flagged: {flags:?}");
-        assert!(flags[0].contains("G-1") && flags[0].contains("HIC-1 approve-each"));
+        assert_eq!(
+            gs[0].hic, "1",
+            "HIC-X on disk must load as HIC-1, never HIC-2"
+        );
+        let flag = gs[0].hic_flag.as_deref().unwrap_or_default();
+        assert!(
+            flag.contains("G-1") && flag.contains("HIC-1 approve-each"),
+            "the load must be flagged on the grant the operator sees: {flag:?}"
+        );
         // The action that HIC-2 would have allowed unattended now escalates.
         let d = b
             .evaluate_and_record(&action("sbt-1", "repo.write", "Public", 1), &t("bca"), 1000)

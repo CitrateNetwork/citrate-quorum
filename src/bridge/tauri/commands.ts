@@ -314,6 +314,8 @@ export interface GrantRow {
   budget_units: number;
   consumed: number;
   hic: string;
+  /** Set when the stored HIC level was unknown or HIC-X and the grant was loaded at HIC-1. */
+  hic_flag?: string;
   expires_at_ms: number;
   revoked: boolean;
 }
