@@ -376,7 +376,7 @@ export function Agents() {
                       <select className="input" style={{ width: "100%" }} value={form.hic} onChange={(e) => setForm({ ...form, hic: e.target.value })}>
                         <option value="1">HIC-1 · approve each</option>
                         <option value="2">HIC-2 · budgeted autonomy</option>
-                        <option value="3">HIC-3 · post-hoc review</option>
+                        <option value="3">HIC-3 · sandboxed autonomy (with post-hoc review)</option>
                       </select></div>
                     <div><div className="lbl">Budget (units)</div>
                       <input className="input" style={{ width: "100%" }} type="number" value={form.budget} onChange={(e) => setForm({ ...form, budget: Number(e.target.value) })} /></div>

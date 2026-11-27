@@ -31,7 +31,10 @@ pub enum GrantHic {
     ApproveEach,
     /// HIC-2: budgeted autonomy — act within scope/budget/expiry.
     Budgeted,
-    /// HIC-3: act, with a post-hoc review window.
+    /// HIC-3: sandboxed autonomy (with post-hoc review), per ADR-2026-11-27
+    /// (federation #691). Act without asking inside the containment boundary;
+    /// nothing leaves it until a human reviews it. The variant keeps its name
+    /// and its stored value `"3"`.
     PostHoc,
 }
 

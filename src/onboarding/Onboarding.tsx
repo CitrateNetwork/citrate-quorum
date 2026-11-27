@@ -25,7 +25,7 @@ const RESOLVE_STEPS = [
 const TOUR = [
   { badge: "HIC-1", color: "var(--ok)", title: "Approve each", body: "For anything that touches chain state, money, keys, or a capability grant, a human signs that specific action in a ceremony. No auto-approve, no 'approve latest'. One approval yields exactly one signature." },
   { badge: "HIC-2", color: "var(--info)", title: "Budgeted autonomy", body: "For routine work, agents act unattended inside a bounded envelope — scope, budget, expiry. Every act is recorded; exhausting the budget or leaving scope escalates to HIC-1. This is where most work lives." },
-  { badge: "HIC-3", color: "var(--warn)", title: "Post-hoc review", body: "For bulk mechanical work, agents act with a mandatory review window before effects become final. Fast, still accountable." },
+  { badge: "HIC-3", color: "var(--warn)", title: "Sandboxed autonomy (with post-hoc review)", body: "For agent work in a session worktree, agents act without asking inside a containment boundary: the OS sandbox, the worktree and the egress proxy. Nothing leaves it (merge, push, publish, deploy, send, sign) until a human reviews it. Where the boundary is not enforced, the work runs at HIC-1." },
   { badge: "HIC-X", color: "var(--danger)", title: "Ungoverned is an alert", body: "An action with no live grant behind it is never silently allowed and never silently dropped — it is flagged ungoverned and surfaced. That is the difference between a dashboard and evidence." },
 ];
 

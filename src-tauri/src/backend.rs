@@ -56,9 +56,9 @@ use crate::addresses::AddressBook;
 use crate::anchor::{self, AnchorState};
 
 use crate::store::{
-    classification_from_str, classification_str, grant_hic_from_str, grant_hic_str, hex32,
-    hex_encode, hic_str, verdict_str, Charge, EgressPolicy, EvidenceStore, MeetingRecord,
-    PendingApproval, StoreError,
+    classification_from_str, classification_str, grant_hic_str, hex32, hex_encode, hic_str,
+    parse_grant_hic, verdict_str, Charge, EgressPolicy, EvidenceStore, GrantHicFlag,
+    MeetingRecord, PendingApproval, StoreError,
 };
 
 /// What one governed action costs its grant.
@@ -536,6 +536,10 @@ pub struct QuorumBackend {
     /// Where each tenant's `.agentile` artifacts live — the source for both
     /// generated agendas and standup briefs (WP-S5.7).
     workspaces: HashMap<String, String>,
+    /// Grants whose stored HIC level was not a known grant level, by tenant
+    /// (L2-WP02). Each was loaded at HIC-1 approve-each; this keeps the fact
+    /// that the load was flagged instead of letting the fallback look clean.
+    grant_load_flags: HashMap<String, Vec<GrantHicFlag>>,
 }
 
 impl QuorumBackend {
@@ -574,7 +578,7 @@ impl QuorumBackend {
         if let Some(store) = self.store.clone() {
             let key = id.as_str().to_string();
             let chain = store.load_chain(&id).map_err(|e| e.to_string())?;
-            let grants = store.load_grants(&key).map_err(|e| e.to_string())?;
+            let loaded = store.load_grants_flagged(&key).map_err(|e| e.to_string())?;
             let allowances = store.load_allowances(&key).map_err(|e| e.to_string())?;
             let charges = store.load_charges(&key).map_err(|e| e.to_string())?;
             let pending = store.load_pending(&key).map_err(|e| e.to_string())?;
@@ -590,7 +594,12 @@ impl QuorumBackend {
             self.pending.retain(|(t, _), _| t != &key);
             self.resolved.retain(|(t, _), _| t != &key);
             self.chains.insert(key.clone(), chain);
-            for g in grants {
+            if loaded.flags.is_empty() {
+                self.grant_load_flags.remove(&key);
+            } else {
+                self.grant_load_flags.insert(key.clone(), loaded.flags);
+            }
+            for g in loaded.grants {
                 self.grants
                     .entry((key.clone(), g.agent.clone()))
                     .or_default()
@@ -631,6 +640,15 @@ impl QuorumBackend {
             .filter(|((t, _), _)| t == tenant)
             .flat_map(|(_, gs)| gs.iter().cloned())
             .collect()
+    }
+
+    /// The grants of `tenant` that were loaded at HIC-1 because their stored
+    /// HIC level was unknown or HIC-X, one line each (L2-WP02).
+    pub fn grant_load_flags(&self, tenant: &str) -> Vec<String> {
+        self.grant_load_flags
+            .get(tenant)
+            .map(|fs| fs.iter().map(ToString::to_string).collect())
+            .unwrap_or_default()
     }
 
     fn tenant_allowances(&self, tenant: &str) -> Vec<VoteAllowance> {
@@ -2078,6 +2096,9 @@ impl QuorumBackend {
     ) -> Result<(), String> {
         let ceiling = classification_from_str(&input.classification_ceiling)
             .ok_or_else(|| format!("unknown classification: {}", input.classification_ceiling))?;
+        // A level this build cannot name is refused, never defaulted: HIC-X is
+        // an alert state and an unknown string must not become HIC-2 (L2-WP02).
+        let hic = parse_grant_hic(&input.hic).map_err(|e| e.to_string())?;
         // A duplicate id inside a tenant makes the record ambiguous: two grants
         // answer to one name, `revoke` hits both, and the ledger's `grant_id`
         // no longer identifies which envelope authorised an action.
@@ -2101,7 +2122,7 @@ impl QuorumBackend {
             budget_units: input.budget_units,
             consumed: 0,
             expires_at_ms: input.expires_at_ms,
-            hic: grant_hic_from_str(&input.hic),
+            hic,
             revoked: false,
         };
         self.grants
@@ -3996,6 +4017,41 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn a_stored_grant_at_hic_x_loads_as_approve_each_and_the_load_is_flagged() {
+        // Gherkin (L2-WP02): Given a stored grant with hic "X" / When it is
+        // loaded / Then its level is HIC-1 and the load is flagged.
+        let root = TempRoot::new("l2wp02-hic-x");
+        {
+            let mut b = root.boot();
+            b.set_active_tenant("bca").unwrap();
+            b.issue_grant(&grant("sbt-1", &["repo.write"], "Public", 10, "2"), &t("bca"), 0)
+                .unwrap();
+            assert!(b.grant_load_flags("bca").is_empty());
+        }
+        let store = EvidenceStore::open(root.0.clone()).unwrap();
+        let path = store.tenant_dir("bca").join("grants.json");
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let edited = raw.replace("\"hic\":\"2\"", "\"hic\":\"X\"");
+        assert_ne!(raw, edited);
+        std::fs::write(&path, edited).unwrap();
+
+        let mut b = root.boot();
+        b.set_active_tenant("bca").unwrap();
+        let gs = b.grants_for("bca", "sbt-1");
+        assert_eq!(gs.len(), 1);
+        assert_eq!(gs[0].hic, "1", "HIC-X on disk must load as HIC-1, never HIC-2");
+        let flags = b.grant_load_flags("bca");
+        assert_eq!(flags.len(), 1, "the load must be flagged: {flags:?}");
+        assert!(flags[0].contains("G-1") && flags[0].contains("HIC-1 approve-each"));
+        // The action that HIC-2 would have allowed unattended now escalates.
+        let d = b
+            .evaluate_and_record(&action("sbt-1", "repo.write", "Public", 1), &t("bca"), 1000)
+            .unwrap();
+        assert_eq!(d.verdict, "require-approval");
+        assert_eq!(d.hic, "1");
     }
 
     #[test]
