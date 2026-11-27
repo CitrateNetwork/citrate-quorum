@@ -1833,7 +1833,7 @@ class Component extends DCLogic {
     const TOURS = [
       { badge: 'HIC-0 · 1', color: 'var(--accent-text)', title: 'Humans in control', body: 'Every agent acts under a named human. At HIC-0 it only observes; at HIC-1 every action pauses for that human\u2019s signature. New agents start here — on probation, watched, cheap to stop.' },
       { badge: 'HIC-2', color: 'var(--info)', title: 'Budgeted autonomy', body: 'The working level. A grant gives an agent a bounded envelope — action classes, scope, budget, expiry. Inside it, the agent moves at machine speed. At the edge, it stops and asks. You are at HIC-2 in Line-4 today.' },
-      { badge: 'HIC-3', color: 'var(--warn)', title: 'Post-hoc review', body: 'For mature, low-risk classes only: the agent acts, the record is written, a human reviews on cadence. Amber on every surface — deliberate, never the default.' },
+      { badge: 'HIC-3', color: 'var(--warn)', title: 'Sandboxed autonomy (with post-hoc review)', body: 'The agent acts without asking inside a containment boundary (OS sandbox, session worktree, egress proxy); nothing leaves it until a human reviews it. Where the boundary is not enforced, the work runs at HIC-1. Amber on every surface.' },
       { badge: 'HIC-X', color: 'var(--danger)', title: 'Ungoverned — the red you act on', body: 'An action with no live grant behind it. Maybe benign, never acceptable silently. HIC-X is loud everywhere: the ledger flags it, the dashboard counts it, and it can never be suppressed.' },
     ];
     const t = TOURS[s.tourIdx] || TOURS[0];

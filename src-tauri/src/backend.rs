@@ -646,13 +646,13 @@ impl QuorumBackend {
             .collect()
     }
 
-    /// Why grant `grant_id` of `tenant` was loaded at HIC-1, when its stored
-    /// HIC level was unknown or HIC-X (L2-WP02).
-    fn grant_hic_flag(&self, tenant: &str, grant_id: &str) -> Option<String> {
+    /// Why grant `grant_id` of `agent` in `tenant` was loaded at HIC-1, when
+    /// its stored HIC level was unknown or HIC-X (L2-WP02).
+    fn grant_hic_flag(&self, tenant: &str, agent: &str, grant_id: &str) -> Option<String> {
         self.grant_load_flags
             .get(tenant)?
             .iter()
-            .find(|f| f.grant_id == grant_id)
+            .find(|f| f.grant_id == grant_id && f.agent == agent)
             .map(ToString::to_string)
     }
 
@@ -688,7 +688,11 @@ impl QuorumBackend {
             return Ok(());
         };
         let grants = self.tenant_grants(tenant);
-        let flags = self.grant_load_flags.get(tenant).cloned().unwrap_or_default();
+        let flags = self
+            .grant_load_flags
+            .get(tenant)
+            .cloned()
+            .unwrap_or_default();
         store
             .save_grants_flagged(tenant, &grants, &flags)
             .map_err(|e| self.degrade(e))
@@ -2013,7 +2017,7 @@ impl QuorumBackend {
                         budget_units: g.budget_units,
                         consumed: g.consumed,
                         hic: grant_hic_str(g.hic).to_string(),
-                        hic_flag: self.grant_hic_flag(tenant, &g.id),
+                        hic_flag: self.grant_hic_flag(tenant, &g.agent, &g.id),
                         expires_at_ms: g.expires_at_ms,
                         revoked: g.revoked,
                     })

@@ -231,6 +231,9 @@ pub fn hex32(s: &str) -> [u8; 32] {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrantHicFlag {
     pub grant_id: String,
+    /// The agent the grant belongs to. Ids are unique per tenant only by the
+    /// issue path, so a hand-edited file could repeat one; the pair is the key.
+    pub agent: String,
     pub stored: String,
     pub reason: GrantHicError,
 }
@@ -245,10 +248,14 @@ impl std::fmt::Display for GrantHicFlag {
         if self.stored.chars().count() > FLAG_STORED_MAX_CHARS {
             shown.push('…');
         }
+        let why = match self.reason {
+            GrantHicError::Ungoverned => "HIC-X is an alert state, never a grant level",
+            GrantHicError::Unknown(_) => "not a grant level this build knows",
+        };
         write!(
             f,
-            "grant {:?} was stored at HIC level {:?} ({}); loaded at HIC-1 approve-each",
-            self.grant_id, shown, self.reason
+            "grant {:?} was stored at HIC level {:?} ({why}); loaded at HIC-1 approve-each",
+            self.grant_id, shown
         )
     }
 }
@@ -767,7 +774,7 @@ impl EvidenceStore {
                 hic: grant_hic_str(g.hic).to_string(),
                 hic_unrecognized: flags
                     .iter()
-                    .find(|f| f.grant_id == g.id)
+                    .find(|f| f.grant_id == g.id && f.agent == g.agent)
                     .map(|f| f.stored.clone()),
                 revoked: g.revoked,
             })
@@ -825,6 +832,7 @@ impl EvidenceStore {
                 if let Some((stored, reason)) = flag {
                     flags.push(GrantHicFlag {
                         grant_id: g.id.clone(),
+                        agent: g.agent.clone(),
                         stored,
                         reason,
                     });
@@ -1555,6 +1563,7 @@ mod tests {
             loaded.flags,
             vec![GrantHicFlag {
                 grant_id: "G-raw".into(),
+                agent: "sbt-41".into(),
                 stored: "X".into(),
                 reason: GrantHicError::Ungoverned,
             }]
@@ -1606,6 +1615,40 @@ mod tests {
         let edited = store.load_grants_flagged("bca").unwrap();
         assert_eq!(edited.grants[0].hic, GrantHic::ApproveEach);
         assert_eq!(edited.flags.len(), 1);
+    }
+
+    #[test]
+    fn a_flag_follows_its_agent_when_grant_ids_repeat() {
+        let root = TempRoot::new();
+        let store = root.store();
+        let mk = |agent: &str| CapabilityGrant {
+            id: "G-dup".into(),
+            agent: agent.into(),
+            principal: "R. Ortiz".into(),
+            tenant_scope: "t3:bca".into(),
+            action_classes: vec!["repo.write".into()],
+            classification_ceiling: Classification::Public,
+            budget_units: 10,
+            consumed: 0,
+            expires_at_ms: i64::MAX,
+            hic: GrantHic::ApproveEach,
+            revoked: false,
+        };
+        let flag = GrantHicFlag {
+            grant_id: "G-dup".into(),
+            agent: "sbt-a".into(),
+            stored: "X".into(),
+            reason: GrantHicError::Ungoverned,
+        };
+        store
+            .save_grants_flagged(
+                "bca",
+                &[mk("sbt-a"), mk("sbt-b")],
+                std::slice::from_ref(&flag),
+            )
+            .unwrap();
+        let loaded = store.load_grants_flagged("bca").unwrap();
+        assert_eq!(loaded.flags, vec![flag], "only sbt-a's grant is flagged");
     }
 
     #[test]
