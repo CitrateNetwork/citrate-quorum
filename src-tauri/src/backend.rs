@@ -2896,6 +2896,33 @@ mod tests {
         }
     }
 
+    // ---- L2-WP02: a grant cannot be issued at a level that does not exist --
+
+    #[test]
+    fn issuing_a_grant_at_hic_x_or_an_unknown_level_is_refused() {
+        // HIC-X is an alert state, never a configuration; an unknown level must
+        // not become HIC-2. Refused at issue, so no grant and no record exist.
+        for bad in ["X", "0", "", "4", "budgeted?"] {
+            let mut b = QuorumBackend::default();
+            let r = b.issue_grant(&grant("sbt-1", &["repo.write"], "Public", 10, bad), &t("bca"), 0);
+            assert!(r.is_err(), "issuing at hic {bad:?} must be refused");
+            assert!(b.grants_for("bca", "sbt-1").is_empty(), "hic {bad:?}: no grant may exist");
+            assert!(b.ledger_rows("bca").is_empty(), "hic {bad:?}: no issue record may exist");
+        }
+    }
+
+    #[test]
+    fn issuing_at_the_three_grant_levels_still_works() {
+        for (wire, want) in [("1", "1"), ("2", "2"), ("3", "3")] {
+            let mut b = QuorumBackend::default();
+            b.issue_grant(&grant("sbt-1", &["repo.write"], "Public", 10, wire), &t("bca"), 0)
+                .unwrap();
+            let gs = b.grants_for("bca", "sbt-1");
+            assert_eq!(gs.len(), 1);
+            assert_eq!(gs[0].hic, want);
+        }
+    }
+
     #[test]
     fn a_non_l1_action_stays_budgeted_when_the_flag_is_false() {
         // The other side of QR-B-001: the server-side table must not over-reach.

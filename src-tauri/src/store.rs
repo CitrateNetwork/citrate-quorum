@@ -1328,6 +1328,110 @@ mod tests {
         assert_eq!(store.load_chain(&t(hostile)).unwrap().len(), 1);
     }
 
+    // ---- L2-WP02: an unknown grant HIC level fails closed -----------------
+    //
+    // ADR-2026-11-27 (HIC-3 sandboxed autonomy, federation #691) and owner
+    // decision D-3. A grant level this build cannot name must never widen into
+    // HIC-2 budgeted autonomy; it falls back to HIC-1 approve-each.
+
+    /// Write a grants.json whose only grant carries the raw `hic` string, the
+    /// way a hand-edited, older or newer install could have left it.
+    fn store_with_raw_grant_hic(root: &TempRoot, hic: &str) -> EvidenceStore {
+        let store = root.store();
+        let grant = CapabilityGrant {
+            id: "G-raw".into(),
+            agent: "sbt-41".into(),
+            principal: "R. Ortiz".into(),
+            tenant_scope: "t3:bca".into(),
+            action_classes: vec!["repo.write".into()],
+            classification_ceiling: Classification::Public,
+            budget_units: 10,
+            consumed: 0,
+            expires_at_ms: i64::MAX,
+            hic: GrantHic::ApproveEach,
+            revoked: false,
+        };
+        store.save_grants("bca", &[grant]).unwrap();
+        let path = store.tenant_dir("bca").join("grants.json");
+        let raw = fs::read_to_string(&path).unwrap();
+        let edited = raw.replace("\"hic\":\"1\"", &format!("\"hic\":{}", serde_json::json!(hic)));
+        assert_ne!(raw, edited, "the fixture must actually rewrite the hic field");
+        fs::write(&path, edited).unwrap();
+        store
+    }
+
+    /// Characterization: the values this build writes, and the two legacy
+    /// aliases it has always read, keep their meaning.
+    #[test]
+    fn grant_hic_from_str_current_mapping() {
+        assert_eq!(grant_hic_from_str("1"), GrantHic::ApproveEach);
+        assert_eq!(grant_hic_from_str("2"), GrantHic::Budgeted);
+        assert_eq!(grant_hic_from_str("3"), GrantHic::PostHoc);
+        assert_eq!(grant_hic_from_str("approve-each"), GrantHic::ApproveEach);
+        assert_eq!(grant_hic_from_str("post-hoc"), GrantHic::PostHoc);
+        for h in [GrantHic::ApproveEach, GrantHic::Budgeted, GrantHic::PostHoc] {
+            assert_eq!(grant_hic_from_str(grant_hic_str(h)), h, "{h:?} must round-trip");
+        }
+        assert_eq!(grant_hic_str(GrantHic::ApproveEach), "1");
+        assert_eq!(grant_hic_str(GrantHic::Budgeted), "2");
+        assert_eq!(grant_hic_str(GrantHic::PostHoc), "3");
+    }
+
+    #[test]
+    fn grant_hic_unknown_string_is_approve_each_not_budgeted() {
+        for unknown in ["", "0", "4", "x", "hic-2", "budgeted-ish", " 2", "2 ", "HIC-3", "sandboxed"] {
+            assert_eq!(
+                grant_hic_from_str(unknown),
+                GrantHic::ApproveEach,
+                "{unknown:?} is not a grant level this build knows: it must fail closed to \
+                 HIC-1 approve-each, never widen into HIC-2 budgeted autonomy"
+            );
+        }
+    }
+
+    #[test]
+    fn grant_hic_x_is_refused_as_a_grant_level() {
+        // HIC-X is an alert state, never a configuration (ADR decision 3).
+        assert_eq!(grant_hic_from_str("X"), GrantHic::ApproveEach);
+        // Gherkin: Given a stored grant with hic "X" / When it is loaded /
+        // Then its level is HIC-1.
+        let root = TempRoot::new();
+        let store = store_with_raw_grant_hic(&root, "X");
+        let back = store.load_grants("bca").unwrap();
+        assert_eq!(back.len(), 1, "the grant is kept, at the safest level");
+        assert_eq!(back[0].hic, GrantHic::ApproveEach);
+    }
+
+    #[test]
+    fn a_stored_grant_with_an_unknown_level_loads_as_approve_each() {
+        for raw in ["0", "7", "", "budgeted?"] {
+            let root = TempRoot::new();
+            let store = store_with_raw_grant_hic(&root, raw);
+            let back = store.load_grants("bca").unwrap();
+            assert_eq!(back[0].hic, GrantHic::ApproveEach, "stored hic {raw:?}");
+        }
+    }
+
+    #[test]
+    fn hic3_label_is_sandboxed_autonomy() {
+        // The UI copy names HIC-3 by the ADR, not the superseded 2026-07-22
+        // "Post-hoc review" definition. Read the shipped sources so the copy
+        // cannot drift from the model without this test noticing.
+        const ADR_NAME: &str = "Sandboxed autonomy (with post-hoc review)";
+        let onboarding = include_str!("../../src/onboarding/Onboarding.tsx");
+        let agents = include_str!("../../src/surfaces/Agents.tsx");
+        assert!(
+            onboarding.contains(&format!("title: \"{ADR_NAME}\"")),
+            "the onboarding tour must title HIC-3 {ADR_NAME:?}"
+        );
+        assert!(!onboarding.contains("title: \"Post-hoc review\""));
+        assert!(
+            agents.contains(&format!("HIC-3 · {}", ADR_NAME.to_lowercase())),
+            "the grant form must offer HIC-3 as {ADR_NAME:?}"
+        );
+        assert!(!agents.contains("HIC-3 · post-hoc review<"));
+    }
+
     #[test]
     fn grants_round_trip_with_their_consumed_budget_and_revocation() {
         let root = TempRoot::new();
