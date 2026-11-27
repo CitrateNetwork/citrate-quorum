@@ -688,8 +688,9 @@ impl QuorumBackend {
             return Ok(());
         };
         let grants = self.tenant_grants(tenant);
+        let flags = self.grant_load_flags.get(tenant).cloned().unwrap_or_default();
         store
-            .save_grants(tenant, &grants)
+            .save_grants_flagged(tenant, &grants, &flags)
             .map_err(|e| self.degrade(e))
     }
 
@@ -4081,6 +4082,34 @@ mod tests {
             .unwrap();
         assert_eq!(d.verdict, "require-approval");
         assert_eq!(d.hic, "1");
+        // That evaluation rewrote grants.json. After a restart the grant is
+        // still HIC-1 and the flag is still on it.
+        drop(b);
+        let mut b = root.boot();
+        b.set_active_tenant("bca").unwrap();
+        let gs = b.grants_for("bca", "sbt-1");
+        assert_eq!(gs[0].hic, "1");
+        assert!(
+            gs[0].hic_flag.is_some(),
+            "the flag must survive a rewrite and a restart"
+        );
+    }
+
+    #[test]
+    fn an_hic3_grant_escalates_while_containment_is_not_enforced() {
+        let mut b = QuorumBackend::default();
+        b.issue_grant(
+            &grant("sbt-1", &["repo.write"], "Public", 10, "3"),
+            &t("bca"),
+            0,
+        )
+        .unwrap();
+        let d = b
+            .evaluate_and_record(&action("sbt-1", "repo.write", "Public", 1), &t("bca"), 1000)
+            .unwrap();
+        assert_eq!(d.verdict, "require-approval");
+        assert_eq!(d.hic, "1");
+        assert!(d.reason.starts_with("RC-104"), "{}", d.reason);
     }
 
     #[test]

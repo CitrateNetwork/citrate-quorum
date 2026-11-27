@@ -408,7 +408,7 @@ export function Agents() {
                     </div>
                     <div className="mono" style={{ fontSize: 9.5, color: "var(--tx-3)" }}>scope {g.scope} · budget {g.budget} · expires {g.expiry} · issued by {g.principal}</div>
                     {g.hicFlag && (
-                      <div className="mono" style={{ fontSize: 9.5, color: "var(--warn)" }}>{g.hicFlag}</div>
+                      <div className="mono" style={{ fontSize: 9.5, color: "var(--warn)", wordBreak: "break-all" }}>{g.hicFlag}</div>
                     )}
                   </div>
                 ))

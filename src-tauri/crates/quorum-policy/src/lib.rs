@@ -175,7 +175,18 @@ pub fn evaluate(action: &Action, grants: &[CapabilityGrant], now_ms: i64) -> Dec
 
     let over_ceiling = action.hic1_cost_threshold > 0 && action.cost > action.hic1_cost_threshold;
 
-    if action.mandatory_hic1 || over_ceiling || grant.hic == GrantHic::ApproveEach {
+    // HIC-3 exists only where the containment boundary is enforced (ADR-2026-11-27,
+    // Consequences): the OS sandbox, the session worktree and the egress proxy.
+    // quorum enforces none of them, so an HIC-3 grant runs at HIC-1 here and says
+    // so in its reason code, rather than allowing unattended effects under a
+    // "sandboxed" label (L2-WP02).
+    let hic3_unenforced = grant.hic == GrantHic::PostHoc;
+
+    if action.mandatory_hic1
+        || over_ceiling
+        || grant.hic == GrantHic::ApproveEach
+        || hic3_unenforced
+    {
         return Decision {
             verdict: Verdict::RequireApproval,
             hic: HicLevel::ApproveEach,
@@ -184,6 +195,8 @@ pub fn evaluate(action: &Action, grants: &[CapabilityGrant], now_ms: i64) -> Dec
                 "RC-102 over single-action ceiling → HIC-1"
             } else if action.mandatory_hic1 {
                 "RC-101 chain/money/key/grant action → HIC-1"
+            } else if hic3_unenforced {
+                "RC-104 HIC-3 containment is not enforced in this build → HIC-1"
             } else {
                 "RC-103 grant is HIC-1 approve-each"
             },
@@ -311,6 +324,41 @@ mod tests {
             hic1_cost_threshold: 0,
             mandatory_hic1: false,
         }
+    }
+
+    // ---- L2-WP02: HIC-3 without an enforced boundary is HIC-1 ----------
+
+    #[test]
+    fn hic3_grant_runs_at_hic1_while_containment_is_not_enforced() {
+        // ADR-2026-11-27: where Core cannot enforce the OS sandbox, worktree and
+        // egress proxy, the session is not at HIC-3; it runs at HIC-1 and says so.
+        for class in ["repo.write", "repo.push", "mail.send", "deploy.web"] {
+            let g = grant(
+                &[class],
+                Classification::Cui,
+                100,
+                GrantHic::PostHoc,
+                FUTURE,
+            );
+            let d = evaluate(&action(class, Classification::Public, 1), &[g], NOW);
+            assert_eq!(d.verdict, Verdict::RequireApproval, "{class} at HIC-3");
+            assert_eq!(d.hic, HicLevel::ApproveEach);
+            assert!(d.reason.starts_with("RC-104"), "{class}: {}", d.reason);
+        }
+    }
+
+    #[test]
+    fn hic2_grant_is_unchanged_by_the_hic3_rule() {
+        let g = grant(
+            &["repo.write"],
+            Classification::Cui,
+            100,
+            GrantHic::Budgeted,
+            FUTURE,
+        );
+        let d = evaluate(&action("repo.write", Classification::Public, 1), &[g], NOW);
+        assert_eq!(d.verdict, Verdict::Allow);
+        assert_eq!(d.hic, HicLevel::Budgeted);
     }
 
     // ---- CapabilityGrant invariants ------------------------------------
