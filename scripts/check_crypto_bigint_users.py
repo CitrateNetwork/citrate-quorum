@@ -13,18 +13,42 @@ stops being true:
    delete it, and this check with it);
 3. today is after EXPIRES (decide again; do not renew by reflex).
 
+The guard only has a subject while the ignore exists. When
+`.cargo/audit.toml` does not ignore the advisory (the acceptance was removed
+2026-11-27 by owner decision, not renewed), `cargo audit` itself reports
+RUSTSEC-2026-0387 and fails, so this check passes with a note. Re-adding the
+ignore re-engages every rule above.
+
 Usage: check_crypto_bigint_users.py [--lock Cargo.lock] [--self-test]
 """
 import argparse
+import re
 import sys
 import tomllib
 from datetime import date
+from pathlib import Path
 
 ADVISORY = "RUSTSEC-2026-0387"
 EXPIRES = date(2026, 11, 9)
 FIXED = (0, 7, 6)
 ALLOWED_USER = "elliptic-curve"
 ALLOWED_USER_LINE = (0, 13)
+
+
+AUDIT_TOML = Path(__file__).resolve().parent.parent / ".cargo" / "audit.toml"
+
+
+def is_ignored(audit_text: str | None) -> bool:
+    """True when the audit config text lists ADVISORY in an ignore entry."""
+    if audit_text is None:
+        return False
+    try:
+        cfg = tomllib.loads(audit_text)
+    except tomllib.TOMLDecodeError:
+        # An unparseable config cannot be shown to be free of the ignore:
+        # treat it as present so the guard runs (fail closed).
+        return True
+    return ADVISORY in cfg.get("advisories", {}).get("ignore", [])
 
 
 def vtuple(v: str) -> tuple[int, ...]:
@@ -88,6 +112,16 @@ def self_test() -> None:
                ("rsa", "0.9.8", ["crypto-bigint 0.5.5"])), ok_day, 1),
     ]
     bad = []
+    ignore_cases = [
+        ("no audit.toml", None, False),
+        ("audit.toml without the advisory", '[advisories]\nignore = ["RUSTSEC-2026-0207"]\n', False),
+        ("advisory only in a comment", f'# {ADVISORY} was accepted once\n[advisories]\nignore = []\n', False),
+        ("advisory ignored", f'[advisories]\nignore = ["{ADVISORY}"]\n', True),
+        ("unparseable audit.toml", "[advisories\n", True),
+    ]
+    for name, text, want in ignore_cases:
+        if is_ignored(text) != want:
+            bad.append(f"{name}: expected is_ignored={want}")
     for name, lock, day, want in cases:
         got = len(check(lock, day))
         if got != want:
@@ -95,7 +129,7 @@ def self_test() -> None:
     if bad:
         print("self-test FAILED:", *bad, sep="\n  ")
         sys.exit(1)
-    print(f"self-test: {len(cases)} cases pass")
+    print(f"self-test: {len(cases) + len(ignore_cases)} cases pass")
 
 
 def main() -> None:
@@ -105,6 +139,11 @@ def main() -> None:
     args = ap.parse_args()
     if args.self_test:
         self_test()
+        return
+    audit_text = AUDIT_TOML.read_text() if AUDIT_TOML.exists() else None
+    if not is_ignored(audit_text):
+        print(f"{ADVISORY} is not ignored in .cargo/audit.toml: nothing to guard "
+              f"(cargo audit reports it directly)")
         return
     with open(args.lock, "rb") as f:
         lock = tomllib.load(f)
