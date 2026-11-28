@@ -131,6 +131,8 @@ export interface Grant {
   budget: string;
   expiry: string;
   hic: number;
+  /** Why this grant runs at HIC-1: its stored level was unknown or HIC-X (fails closed). */
+  hicFlag?: string;
   principal: string;
   /** A revoked grant stays in the record — it is history, not an absence. */
   revoked?: boolean;

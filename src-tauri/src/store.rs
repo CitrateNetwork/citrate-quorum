@@ -144,13 +144,54 @@ pub fn classification_str(c: Classification) -> &'static str {
         Classification::Itar => "ITAR",
     }
 }
-pub fn grant_hic_from_str(s: &str) -> GrantHic {
-    match s {
-        "1" | "approve-each" => GrantHic::ApproveEach,
-        "3" | "post-hoc" => GrantHic::PostHoc,
-        _ => GrantHic::Budgeted, // default HIC-2
+/// Why a grant HIC string was not accepted as a grant level.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GrantHicError {
+    /// `"X"` is HIC-X: an alert state Core enters when an agent is outside its
+    /// sandbox or adapter, never a level a grant can carry (ADR-2026-11-27,
+    /// decision 3).
+    Ungoverned,
+    /// Not a grant level this build knows (including `"0"`: HIC-0 observes and
+    /// is not a grant level).
+    Unknown(String),
+}
+
+impl std::fmt::Display for GrantHicError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ungoverned => write!(
+                f,
+                "HIC-X is an alert state, never a grant level; choose HIC-1, HIC-2 or HIC-3"
+            ),
+            Self::Unknown(_) => write!(
+                f,
+                "not a known grant HIC level; choose HIC-1, HIC-2 or HIC-3"
+            ),
+        }
     }
 }
+
+/// Strict parse of a grant HIC level: the three values this build writes plus
+/// the two legacy aliases it has always read. Everything else is an error, so a
+/// caller can refuse it (issuing) or fail closed and flag it (loading).
+pub fn parse_grant_hic(s: &str) -> Result<GrantHic, GrantHicError> {
+    match s {
+        "1" | "approve-each" => Ok(GrantHic::ApproveEach),
+        "2" => Ok(GrantHic::Budgeted),
+        "3" | "post-hoc" => Ok(GrantHic::PostHoc),
+        "X" => Err(GrantHicError::Ungoverned),
+        other => Err(GrantHicError::Unknown(other.to_string())),
+    }
+}
+
+/// Lenient read of a grant HIC level that FAILS CLOSED: anything
+/// [`parse_grant_hic`] rejects becomes HIC-1 approve-each, never HIC-2. Until
+/// L2-WP02 the `_` arm here was `Budgeted`, so an unknown string, `"X"` or
+/// `"0"` silently widened into budgeted autonomy.
+pub(crate) fn grant_hic_from_str(s: &str) -> GrantHic {
+    parse_grant_hic(s).unwrap_or(GrantHic::ApproveEach)
+}
+
 pub fn grant_hic_str(h: GrantHic) -> &'static str {
     match h {
         GrantHic::ApproveEach => "1",
@@ -181,6 +222,49 @@ pub fn hex32(s: &str) -> [u8; 32] {
         i += 2;
     }
     out
+}
+
+// ---- grant load flags ------------------------------------------------
+
+/// A stored grant whose HIC level was not a known grant level. The grant was
+/// loaded at HIC-1 approve-each; this names what was on disk and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrantHicFlag {
+    pub grant_id: String,
+    /// The agent the grant belongs to. Ids are unique per tenant only by the
+    /// issue path, so a hand-edited file could repeat one; the pair is the key.
+    pub agent: String,
+    pub stored: String,
+    pub reason: GrantHicError,
+}
+
+/// How much of a stored value a flag repeats. The value came from disk and may be
+/// arbitrarily long; the flag only has to identify it.
+const FLAG_STORED_MAX_CHARS: usize = 32;
+
+impl std::fmt::Display for GrantHicFlag {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut shown: String = self.stored.chars().take(FLAG_STORED_MAX_CHARS).collect();
+        if self.stored.chars().count() > FLAG_STORED_MAX_CHARS {
+            shown.push('…');
+        }
+        let why = match self.reason {
+            GrantHicError::Ungoverned => "HIC-X is an alert state, never a grant level",
+            GrantHicError::Unknown(_) => "not a grant level this build knows",
+        };
+        write!(
+            f,
+            "grant {:?} was stored at HIC level {:?} ({why}); loaded at HIC-1 approve-each",
+            self.grant_id, shown
+        )
+    }
+}
+
+/// The result of [`EvidenceStore::load_grants_flagged`].
+#[derive(Debug, Default)]
+pub struct LoadedGrants {
+    pub grants: Vec<CapabilityGrant>,
+    pub flags: Vec<GrantHicFlag>,
 }
 
 // ---- errors ----------------------------------------------------------
@@ -252,6 +336,11 @@ struct StoredGrant {
     consumed: u64,
     expires_at_ms: i64,
     hic: String,
+    /// The original value of a level this build did not recognise, kept when
+    /// the grant is rewritten at HIC-1 so the flag survives saves and restarts
+    /// (L2-WP02). Absent for every grant whose level was known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hic_unrecognized: Option<String>,
     revoked: bool,
 }
 
@@ -660,7 +749,15 @@ impl EvidenceStore {
 
     // ---- grants + allowances (mutable sets, rewritten whole) ----------
 
-    pub fn save_grants(&self, tenant: &str, grants: &[CapabilityGrant]) -> Result<(), StoreError> {
+    /// Save grants, carrying forward each flag's original stored value so a
+    /// grant loaded at HIC-1 from an unknown level stays flagged after the
+    /// rewrite and a restart.
+    pub fn save_grants_flagged(
+        &self,
+        tenant: &str,
+        grants: &[CapabilityGrant],
+        flags: &[GrantHicFlag],
+    ) -> Result<(), StoreError> {
         let dir = self.ensure_tenant_dir(tenant)?;
         let stored: Vec<StoredGrant> = grants
             .iter()
@@ -675,6 +772,10 @@ impl EvidenceStore {
                 consumed: g.consumed,
                 expires_at_ms: g.expires_at_ms,
                 hic: grant_hic_str(g.hic).to_string(),
+                hic_unrecognized: flags
+                    .iter()
+                    .find(|f| f.grant_id == g.id && f.agent == g.agent)
+                    .map(|f| f.stored.clone()),
                 revoked: g.revoked,
             })
             .collect();
@@ -682,17 +783,27 @@ impl EvidenceStore {
         write_atomic(&dir.join("grants.json"), &body)
     }
 
-    pub fn load_grants(&self, tenant: &str) -> Result<Vec<CapabilityGrant>, StoreError> {
+    /// Load a tenant's grants and report every grant whose stored HIC level was
+    /// not a known grant level. Such a grant is kept at HIC-1 approve-each (fail
+    /// closed, never HIC-2) and named in [`LoadedGrants::flags`], so the load
+    /// is flagged rather than silently "corrected".
+    pub fn load_grants_flagged(&self, tenant: &str) -> Result<LoadedGrants, StoreError> {
         let path = self.tenant_dir(tenant).join("grants.json");
-        let Ok(raw) = fs::read_to_string(&path) else {
-            return Ok(Vec::new());
+        // Only a missing file means "no grants". Any other read error (a
+        // permission problem, a directory, invalid UTF-8) must not load as empty:
+        // the next save would overwrite revocations and spent budgets.
+        let raw = match fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(LoadedGrants::default()),
+            Err(e) => return Err(StoreError::Io(format!("grants.json: {e}"))),
         };
         let stored: Vec<StoredGrant> =
             serde_json::from_str(&raw).map_err(|e| StoreError::Corrupt {
                 line: 0,
                 detail: format!("grants.json does not parse ({e})"),
             })?;
-        stored
+        let mut flags = Vec::new();
+        let grants = stored
             .into_iter()
             .map(|g| {
                 let ceiling =
@@ -702,6 +813,30 @@ impl EvidenceStore {
                             detail: format!("grant {} has unknown classification", g.id),
                         }
                     })?;
+                // The fail-closed reader decides the level; the strict parse
+                // only decides whether the load is flagged. A grant rewritten
+                // after an earlier flagged load carries its original value in
+                // `hic_unrecognized`: it stays HIC-1 and stays flagged.
+                let (hic, flag) = match g.hic_unrecognized {
+                    Some(orig) => {
+                        let reason = parse_grant_hic(&orig)
+                            .err()
+                            .unwrap_or_else(|| GrantHicError::Unknown(orig.clone()));
+                        (GrantHic::ApproveEach, Some((orig, reason)))
+                    }
+                    None => (
+                        grant_hic_from_str(&g.hic),
+                        parse_grant_hic(&g.hic).err().map(|r| (g.hic.clone(), r)),
+                    ),
+                };
+                if let Some((stored, reason)) = flag {
+                    flags.push(GrantHicFlag {
+                        grant_id: g.id.clone(),
+                        agent: g.agent.clone(),
+                        stored,
+                        reason,
+                    });
+                }
                 Ok(CapabilityGrant {
                     id: g.id,
                     agent: g.agent,
@@ -712,11 +847,12 @@ impl EvidenceStore {
                     budget_units: g.budget_units,
                     consumed: g.consumed,
                     expires_at_ms: g.expires_at_ms,
-                    hic: grant_hic_from_str(&g.hic),
+                    hic,
                     revoked: g.revoked,
                 })
             })
-            .collect()
+            .collect::<Result<Vec<_>, StoreError>>()?;
+        Ok(LoadedGrants { grants, flags })
     }
 
     pub fn save_allowances(
@@ -1271,7 +1407,7 @@ mod tests {
         let mut chain = HashChain::new(t("bca"));
         append(&store, &mut chain, "bca", rec("grant.issue", 1000));
         store
-            .save_grants("bca", &[])
+            .save_grants_flagged("bca", &[], &[])
             .expect("grants persist for the perms check");
 
         let dir = store.tenant_dir("bca");
@@ -1328,6 +1464,270 @@ mod tests {
         assert_eq!(store.load_chain(&t(hostile)).unwrap().len(), 1);
     }
 
+    // ---- L2-WP02: an unknown grant HIC level fails closed -----------------
+    //
+    // ADR-2026-11-27 (HIC-3 sandboxed autonomy, federation #691) and owner
+    // decision D-3. A grant level this build cannot name must never widen into
+    // HIC-2 budgeted autonomy; it falls back to HIC-1 approve-each.
+
+    /// Write a grants.json whose only grant carries the raw `hic` string, the
+    /// way a hand-edited, older or newer install could have left it.
+    fn store_with_raw_grant_hic(root: &TempRoot, hic: &str) -> EvidenceStore {
+        let store = root.store();
+        let grant = CapabilityGrant {
+            id: "G-raw".into(),
+            agent: "sbt-41".into(),
+            principal: "R. Ortiz".into(),
+            tenant_scope: "t3:bca".into(),
+            action_classes: vec!["repo.write".into()],
+            classification_ceiling: Classification::Public,
+            budget_units: 10,
+            consumed: 0,
+            expires_at_ms: i64::MAX,
+            hic: GrantHic::ApproveEach,
+            revoked: false,
+        };
+        store.save_grants_flagged("bca", &[grant], &[]).unwrap();
+        let path = store.tenant_dir("bca").join("grants.json");
+        let raw = fs::read_to_string(&path).unwrap();
+        let field = format!("\"hic\":{}", serde_json::json!(hic));
+        let edited = raw.replace("\"hic\":\"1\"", &field);
+        assert!(
+            edited.contains(&field),
+            "the fixture must write the hic field"
+        );
+        fs::write(&path, edited).unwrap();
+        store
+    }
+
+    /// Characterization: the values this build writes, and the two legacy
+    /// aliases it has always read, keep their meaning.
+    #[test]
+    fn grant_hic_from_str_current_mapping() {
+        assert_eq!(grant_hic_from_str("1"), GrantHic::ApproveEach);
+        assert_eq!(grant_hic_from_str("2"), GrantHic::Budgeted);
+        assert_eq!(grant_hic_from_str("3"), GrantHic::PostHoc);
+        assert_eq!(grant_hic_from_str("approve-each"), GrantHic::ApproveEach);
+        assert_eq!(grant_hic_from_str("post-hoc"), GrantHic::PostHoc);
+        for h in [GrantHic::ApproveEach, GrantHic::Budgeted, GrantHic::PostHoc] {
+            assert_eq!(
+                grant_hic_from_str(grant_hic_str(h)),
+                h,
+                "{h:?} must round-trip"
+            );
+        }
+        assert_eq!(grant_hic_str(GrantHic::ApproveEach), "1");
+        assert_eq!(grant_hic_str(GrantHic::Budgeted), "2");
+        assert_eq!(grant_hic_str(GrantHic::PostHoc), "3");
+    }
+
+    #[test]
+    fn grant_hic_unknown_string_is_approve_each_not_budgeted() {
+        for unknown in [
+            "",
+            "0",
+            "4",
+            "x",
+            "hic-2",
+            "budgeted-ish",
+            " 2",
+            "2 ",
+            "HIC-3",
+            "sandboxed",
+        ] {
+            assert_eq!(
+                grant_hic_from_str(unknown),
+                GrantHic::ApproveEach,
+                "{unknown:?} is not a grant level this build knows: it must fail closed to \
+                 HIC-1 approve-each, never widen into HIC-2 budgeted autonomy"
+            );
+        }
+    }
+
+    #[test]
+    fn grant_hic_x_is_refused_as_a_grant_level() {
+        // HIC-X is an alert state, never a configuration (ADR decision 3).
+        assert_eq!(grant_hic_from_str("X"), GrantHic::ApproveEach);
+        // Gherkin: Given a stored grant with hic "X" / When it is loaded /
+        // Then its level is HIC-1.
+        let root = TempRoot::new();
+        let store = store_with_raw_grant_hic(&root, "X");
+        let back = store.load_grants_flagged("bca").unwrap().grants;
+        assert_eq!(back.len(), 1, "the grant is kept, at the safest level");
+        assert_eq!(back[0].hic, GrantHic::ApproveEach);
+        // ... And the load is flagged, naming the grant and the reason.
+        assert_eq!(parse_grant_hic("X"), Err(GrantHicError::Ungoverned));
+        let loaded = store.load_grants_flagged("bca").unwrap();
+        assert_eq!(loaded.grants[0].hic, GrantHic::ApproveEach);
+        assert_eq!(
+            loaded.flags,
+            vec![GrantHicFlag {
+                grant_id: "G-raw".into(),
+                agent: "sbt-41".into(),
+                stored: "X".into(),
+                reason: GrantHicError::Ungoverned,
+            }]
+        );
+        assert!(loaded.flags[0].to_string().contains("HIC-1 approve-each"));
+    }
+
+    #[test]
+    fn a_stored_grant_with_an_unknown_level_loads_as_approve_each() {
+        for raw in ["0", "7", "", "budgeted?"] {
+            let root = TempRoot::new();
+            let store = store_with_raw_grant_hic(&root, raw);
+            let back = store.load_grants_flagged("bca").unwrap().grants;
+            assert_eq!(back[0].hic, GrantHic::ApproveEach, "stored hic {raw:?}");
+            let loaded = store.load_grants_flagged("bca").unwrap();
+            assert_eq!(loaded.flags.len(), 1, "stored hic {raw:?} must be flagged");
+            assert_eq!(
+                loaded.flags[0].reason,
+                GrantHicError::Unknown(raw.to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn a_flagged_grant_stays_flagged_after_a_rewrite_and_a_reload() {
+        let root = TempRoot::new();
+        let store = store_with_raw_grant_hic(&root, "X");
+        let loaded = store.load_grants_flagged("bca").unwrap();
+        assert_eq!(loaded.flags.len(), 1);
+        // The backend rewrites the whole file on the next mutation.
+        store
+            .save_grants_flagged("bca", &loaded.grants, &loaded.flags)
+            .unwrap();
+        let again = store.load_grants_flagged("bca").unwrap();
+        assert_eq!(again.grants[0].hic, GrantHic::ApproveEach);
+        assert_eq!(
+            again.flags, loaded.flags,
+            "the flag must survive the rewrite"
+        );
+        // A hand edit that puts a known level into the carried field does not
+        // un-flag or widen the grant.
+        let path = store.tenant_dir("bca").join("grants.json");
+        let raw = fs::read_to_string(&path).unwrap();
+        fs::write(
+            &path,
+            raw.replace("\"hic_unrecognized\":\"X\"", "\"hic_unrecognized\":\"2\""),
+        )
+        .unwrap();
+        let edited = store.load_grants_flagged("bca").unwrap();
+        assert_eq!(edited.grants[0].hic, GrantHic::ApproveEach);
+        assert_eq!(edited.flags.len(), 1);
+    }
+
+    #[test]
+    fn a_flag_follows_its_agent_when_grant_ids_repeat() {
+        let root = TempRoot::new();
+        let store = root.store();
+        let mk = |agent: &str| CapabilityGrant {
+            id: "G-dup".into(),
+            agent: agent.into(),
+            principal: "R. Ortiz".into(),
+            tenant_scope: "t3:bca".into(),
+            action_classes: vec!["repo.write".into()],
+            classification_ceiling: Classification::Public,
+            budget_units: 10,
+            consumed: 0,
+            expires_at_ms: i64::MAX,
+            hic: GrantHic::ApproveEach,
+            revoked: false,
+        };
+        let flag = GrantHicFlag {
+            grant_id: "G-dup".into(),
+            agent: "sbt-a".into(),
+            stored: "X".into(),
+            reason: GrantHicError::Ungoverned,
+        };
+        store
+            .save_grants_flagged(
+                "bca",
+                &[mk("sbt-a"), mk("sbt-b")],
+                std::slice::from_ref(&flag),
+            )
+            .unwrap();
+        let loaded = store.load_grants_flagged("bca").unwrap();
+        assert_eq!(loaded.flags, vec![flag], "only sbt-a's grant is flagged");
+    }
+
+    #[test]
+    fn a_known_level_never_writes_the_carried_field() {
+        let root = TempRoot::new();
+        let store = store_with_raw_grant_hic(&root, "2");
+        let loaded = store.load_grants_flagged("bca").unwrap();
+        store
+            .save_grants_flagged("bca", &loaded.grants, &loaded.flags)
+            .unwrap();
+        let raw = fs::read_to_string(store.tenant_dir("bca").join("grants.json")).unwrap();
+        assert!(!raw.contains("hic_unrecognized"), "{raw}");
+    }
+
+    #[test]
+    fn a_long_stored_level_is_truncated_in_the_flag() {
+        let root = TempRoot::new();
+        let long = "Z".repeat(10_000);
+        let store = store_with_raw_grant_hic(&root, &long);
+        let loaded = store.load_grants_flagged("bca").unwrap();
+        let shown = loaded.flags[0].to_string();
+        assert!(shown.len() < 200, "flag is {} bytes", shown.len());
+        assert!(shown.contains('…'));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_grants_file_is_an_error_not_an_empty_set() {
+        let root = TempRoot::new();
+        let store = store_with_raw_grant_hic(&root, "2");
+        let path = store.tenant_dir("bca").join("grants.json");
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap(); // a directory where the file should be
+        assert!(matches!(
+            store.load_grants_flagged("bca"),
+            Err(StoreError::Io(_))
+        ));
+    }
+
+    #[test]
+    fn a_clean_grants_file_loads_with_no_flags() {
+        let root = TempRoot::new();
+        let store = root.store();
+        assert!(
+            store.load_grants_flagged("bca").unwrap().flags.is_empty(),
+            "no file"
+        );
+        for raw in ["1", "2", "3", "approve-each", "post-hoc"] {
+            let root = TempRoot::new();
+            let store = store_with_raw_grant_hic(&root, raw);
+            let loaded = store.load_grants_flagged("bca").unwrap();
+            assert!(
+                loaded.flags.is_empty(),
+                "stored hic {raw:?} is a known level"
+            );
+            assert_eq!(loaded.grants[0].hic, grant_hic_from_str(raw));
+        }
+    }
+
+    #[test]
+    fn hic3_label_is_sandboxed_autonomy() {
+        // The UI copy names HIC-3 by the ADR, not the superseded 2026-07-22
+        // "Post-hoc review" definition. Read the shipped sources so the copy
+        // cannot drift from the model without this test noticing.
+        const ADR_NAME: &str = "Sandboxed autonomy (with post-hoc review)";
+        let onboarding = include_str!("../../src/onboarding/Onboarding.tsx");
+        let agents = include_str!("../../src/surfaces/Agents.tsx");
+        assert!(
+            onboarding.contains(&format!("title: \"{ADR_NAME}\"")),
+            "the onboarding tour must title HIC-3 {ADR_NAME:?}"
+        );
+        assert!(!onboarding.contains("title: \"Post-hoc review\""));
+        assert!(
+            agents.contains(&format!("HIC-3 · {}", ADR_NAME.to_lowercase())),
+            "the grant form must offer HIC-3 as {ADR_NAME:?}"
+        );
+        assert!(!agents.contains("HIC-3 · post-hoc review<"));
+    }
+
     #[test]
     fn grants_round_trip_with_their_consumed_budget_and_revocation() {
         let root = TempRoot::new();
@@ -1345,8 +1745,8 @@ mod tests {
             hic: GrantHic::PostHoc,
             revoked: true,
         }];
-        store.save_grants("bca", &grants).unwrap();
-        let back = store.load_grants("bca").unwrap();
+        store.save_grants_flagged("bca", &grants, &[]).unwrap();
+        let back = store.load_grants_flagged("bca").unwrap().grants;
         assert_eq!(back.len(), 1);
         assert_eq!(back[0].consumed, 37, "spent budget must not reset");
         assert!(back[0].revoked, "a revoked grant must not come back alive");

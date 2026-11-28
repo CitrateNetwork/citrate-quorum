@@ -344,6 +344,7 @@ export function createTauriBridge(): BridgeContract {
               ? "no expiry"
               : new Date(g.expires_at_ms).toISOString().slice(0, 10),
           hic: Number(g.hic),
+          hicFlag: g.hic_flag,
           principal: g.principal,
           revoked: g.revoked,
         })),
