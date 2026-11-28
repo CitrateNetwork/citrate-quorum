@@ -94,13 +94,15 @@ run "cargo audit"  "no Cargo.toml yet, or cargo-audit not installed" \
     "$HAS_CARGO && command -v cargo-audit" cargo audit
 # `cargo audit` exits 0 once an advisory is in `.cargo/audit.toml`, so the ignore
 # file is exactly where a security finding goes to be forgotten. This fails when
-# the acceptance expires, when an ignore goes stale, or when the upstream blocker
-# it rests on lifts — see the file's own header.
+# an acceptance expires, when an ignore goes stale, or when the upstream blocker
+# it rests on lifts. Since 2026-11-27 there is no ignore file (the lapsed
+# acceptance was removed, not renewed), and this passes on that path.
 run "audit ignores are honest" "no cargo-audit, or no python runner" \
     "command -v cargo-audit && command -v ${PYRUN[0]:-python3}" \
     "${PYRUN[@]:-python3}" "$ROOT/scripts/check_audit_ignores.py"
-# The RUSTSEC-2026-0387 ignore rests on a different blocker (elliptic-curve 0.13),
-# so it has its own guard: new users of crypto-bigint < 0.7.6, staleness, expiry.
+# A RUSTSEC-2026-0387 ignore would rest on a different blocker (elliptic-curve
+# 0.13), so it has its own guard: new users of crypto-bigint < 0.7.6, staleness,
+# expiry. It engages only while such an ignore can be in effect.
 run "crypto-bigint ignore guard" "no python runner" \
     "command -v ${PYRUN[0]:-python3}" \
     "${PYRUN[@]:-python3}" "$ROOT/scripts/check_crypto_bigint_users.py" --lock "$ROOT/Cargo.lock"
@@ -109,6 +111,14 @@ run "crypto-bigint guard (self-test)" "no python runner" \
     "${PYRUN[@]:-python3}" "$ROOT/scripts/check_crypto_bigint_users.py" --self-test
 # `cargo audit` only knows what the RustSec DB knows. Floors cover patched
 # releases the DB does not list yet, so the lockfile cannot drift back below them.
+# While cargo audit is red on the blocked advisories, a NEW one would not
+# change the result; this names it.
+run "no new advisory" "no Cargo.toml, cargo-audit or python runner" \
+    "$HAS_CARGO && command -v cargo-audit && command -v ${PYRUN[0]:-python3}" \
+    "${PYRUN[@]:-python3}" "$ROOT/scripts/check_known_advisories.py" --run-cargo-audit
+run "no new advisory (self-test)" "no python runner" \
+    "command -v ${PYRUN[0]:-python3}" \
+    "${PYRUN[@]:-python3}" "$ROOT/scripts/check_known_advisories.py" --self-test
 run "dependency floors" "no python runner" \
     "command -v ${PYRUN[0]:-python3}" \
     "${PYRUN[@]:-python3}" "$ROOT/scripts/check_dep_floors.py"

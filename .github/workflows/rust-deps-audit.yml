@@ -9,9 +9,12 @@
 #
 # Lockfile-only on purpose: `cargo audit` reads Cargo.lock, so this job needs no
 # sibling citrate-core / citrate-comms checkout for the path dependencies.
-# Accepted advisories live in .cargo/audit.toml with an expiry; floors for
-# patched releases the advisory DB does not list yet live in
-# scripts/check_dep_floors.py. Never add continue-on-error here.
+# Accepted advisories, if any, live in .cargo/audit.toml with an expiry (none
+# since 2026-11-27: the lapsed libcrux / crypto-bigint acceptance was removed,
+# not renewed); floors for patched releases the advisory DB does not list yet
+# live in scripts/check_dep_floors.py. Never add continue-on-error here. The
+# steps after `cargo audit` run even when it fails (`!cancelled()`), so a red
+# audit cannot hide a floor regression or a NEW advisory.
 name: rust-deps-audit
 
 on:
@@ -26,7 +29,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: rust-deps-audit-${{ github.event.pull_request.head.ref || github.ref_name }}
+  # Keyed on the PR number, not head.ref: a fork branch named `main` must not
+  # share (and cancel) the group of the push and schedule runs on main.
+  group: rust-deps-audit-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -36,6 +41,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
@@ -49,17 +56,26 @@ jobs:
         with:
           tool: cargo-audit
 
-      - name: cargo audit (accepted = .cargo/audit.toml)
+      - name: cargo audit (accepted, if any = .cargo/audit.toml)
         run: cargo audit
 
+      - name: No NEW advisory beyond the known, blocked set
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/check_known_advisories.py --self-test
+          python3 scripts/check_known_advisories.py --run-cargo-audit
+
       - name: Audit ignores are honest (expiry, staleness, blocker)
+        if: ${{ !cancelled() }}
         run: python3 scripts/check_audit_ignores.py
-      - name: RUSTSEC-2026-0387 ignore guard (crypto-bigint < 0.7.6 only via elliptic-curve 0.13)
+      - name: RUSTSEC-2026-0387 ignore guard (engages only while the ignore can be in effect)
+        if: ${{ !cancelled() }}
         run: |
           python3 scripts/check_crypto_bigint_users.py --self-test
           python3 scripts/check_crypto_bigint_users.py
 
       - name: Dependency floors
+        if: ${{ !cancelled() }}
         run: |
           python3 -m unittest discover -s scripts/tests
           python3 scripts/check_dep_floors.py

@@ -104,7 +104,10 @@ pub fn run() {
             // signature intent in quorum (user or, later, agent) routes through
             // this one approval surface; the gated signer is reachable ONLY from
             // its `approve` path and is unreachable from any quorum code.
-            app.manage(ceremony::build_ceremony_state());
+            // Quorum installs no network gate, so the first-submission record has no
+            // genesis to key its section to: it is kept in memory, as the ceremony state
+            // was before citrate-core #347 split the constructor.
+            app.manage(ceremony::build_ceremony_state_unpersisted());
             // The rooms subsystem. Empty until the operator connects: this app
             // dials the relay when asked to, never at startup, so an installation
             // that never opens a room never touches the network.
