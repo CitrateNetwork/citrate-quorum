@@ -2,15 +2,16 @@
 """Tell a NEW Rust advisory apart from the known, blocked ones.
 
 Since the expired libcrux / crypto-bigint acceptance was removed (owner
-decision 2026-11-27, not renewed), `cargo audit` is red on nine advisories
-that cannot be fixed from this repository until citrate-comms moves to
-openmls 0.9 / openmls_rust_crypto 0.6. While that red lasts, one more advisory
+decision 2026-11-27, not renewed), `cargo audit` is red on advisories that
+cannot be fixed from this repository. citrate-comms moved to openmls 0.9.2 /
+openmls_rust_crypto 0.6 (comms #61), which cleared six of the original nine;
+three remain (see BLOCKED). While that red lasts, one more advisory
 (or one more affected crate under a known ID) would leave the job exactly as
 red as before. This check fails, with its own message, on any reported
 (advisory, crate, version) that is NOT in BLOCKED below.
 
 This is not an acceptance. It suppresses nothing: `cargo audit` still runs
-first and still fails on all nine. When an entry in BLOCKED stops being
+first and still fails on every entry. When an entry in BLOCKED stops being
 reported, this check fails too, so the list can only shrink. It also refuses
 to judge when a user-level audit.toml exists, because cargo-audit would apply
 that file's ignores to the report before this script sees it.
@@ -30,15 +31,12 @@ ROOT = Path(__file__).resolve().parent.parent
 # (advisory, crate, version): each reported today and blocked upstream
 # (PR #21 / L2-WP02a).
 BLOCKED = {
-    ("RUSTSEC-2026-0124", "libcrux-chacha20poly1305", "0.0.7"),  # hpke-rs 0.6.1
-    ("RUSTSEC-2026-0207", "libcrux-sha3", "0.0.8"),
-    ("RUSTSEC-2026-0208", "libcrux-sha3", "0.0.8"),
-    ("RUSTSEC-2026-0209", "libcrux-aesgcm", "0.0.7"),
-    ("RUSTSEC-2026-0211", "libcrux-aesgcm", "0.0.7"),
-    ("RUSTSEC-2026-0212", "libcrux-secrets", "0.0.5"),
-    ("RUSTSEC-2026-0330", "libcrux-kem", "0.0.7"),
-    ("RUSTSEC-2026-0331", "libcrux-kem", "0.0.7"),
-    ("RUSTSEC-2026-0387", "crypto-bigint", "0.5.5"),  # elliptic-curve 0.13
+    # lockfile only: hpke-rs-libcrux 0.7 is not compiled (cargo tree -i libcrux-kem is empty);
+    # clears with openmls_rust_crypto 0.7 / hpke-rs 0.8 (openmls 0.10) in citrate-comms
+    ("RUSTSEC-2026-0330", "libcrux-kem", "0.0.9"),
+    ("RUSTSEC-2026-0331", "libcrux-kem", "0.0.9"),
+    # elliptic-curve 0.13 (k256 / p256 / p384); on the wallet secret-key path, not accepted
+    ("RUSTSEC-2026-0387", "crypto-bigint", "0.5.5"),
 }
 
 

@@ -111,7 +111,7 @@ run "crypto-bigint guard (self-test)" "no python runner" \
     "${PYRUN[@]:-python3}" "$ROOT/scripts/check_crypto_bigint_users.py" --self-test
 # `cargo audit` only knows what the RustSec DB knows. Floors cover patched
 # releases the DB does not list yet, so the lockfile cannot drift back below them.
-# While cargo audit is red on the nine blocked advisories, a NEW one would not
+# While cargo audit is red on the blocked advisories, a NEW one would not
 # change the result; this names it.
 run "no new advisory" "no Cargo.toml, cargo-audit or python runner" \
     "$HAS_CARGO && command -v cargo-audit && command -v ${PYRUN[0]:-python3}" \
